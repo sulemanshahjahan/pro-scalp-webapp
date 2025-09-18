@@ -1,0 +1,22 @@
+{
+  "name": "pro-scalp-webapp",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend",
+    "tests"
+  ],
+  "scripts": {
+    "postinstall": "npm --prefix frontend install && npm --prefix backend install && npm --prefix tests install",
+    "dev": "concurrently -n FRONTEND,BACKEND -c cyan,green \"npm:dev:frontend\" \"npm:dev:backend\"",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "start": "npm --prefix backend run start",
+    "test": "npm --prefix tests test",
+    "t": "npm run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
