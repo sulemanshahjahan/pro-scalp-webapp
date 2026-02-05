@@ -7,7 +7,7 @@
     "tests"
   ],
   "scripts": {
-    "postinstall": "npm --prefix frontend install && npm --prefix backend install && npm --prefix tests install",
+    "install:all": "node \"%npm_execpath%\" --prefix frontend install && node \"%npm_execpath%\" --prefix backend install && node \"%npm_execpath%\" --prefix tests install",
     "dev": "concurrently -n FRONTEND,BACKEND -c cyan,green \"npm:dev:frontend\" \"npm:dev:backend\"",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix backend run dev",

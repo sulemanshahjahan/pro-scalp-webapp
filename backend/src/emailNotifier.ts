@@ -1,11 +1,11 @@
 // src/emailNotifier.ts
-import DatabaseCtor from 'better-sqlite3';
 import { sendMail, isEmailEnabled } from './mailer.js';
 import { subjectFor, htmlFor, textFor } from './emailTemplates.js';
 import { ensureEmailGuardTables, canSendEmail, markEmailSent } from './db/emailGuards.js';
+import type { DbConn } from './db/db.js';
 
 // DB is optional now
-type DB = InstanceType<typeof DatabaseCtor> | undefined | null;
+type DB = DbConn | undefined | null;
 
 // ── Config ─────────────────────────────────────────────────────────────
 const COOLDOWN_MIN = Number(process.env.EMAIL_COOLDOWN_MIN || 15);
@@ -69,8 +69,8 @@ export async function emailNotify(db: DB, signal: any) {
   // If we have a real DB, use DB-based cooldown; otherwise use memory map
   if (db) {
     try {
-      ensureEmailGuardTables(db);
-      const gate = canSendEmail(db as any, key, COOLDOWN_MIN);
+      await ensureEmailGuardTables(db);
+      const gate = await canSendEmail(db as any, key, COOLDOWN_MIN);
       console.log('[email] cooldown (db)', { key, allowed: gate.allowed, cooldownMin: COOLDOWN_MIN });
       if (!gate.allowed) {
         console.log('[email] skip: cooldown active (db)');
@@ -79,7 +79,7 @@ export async function emailNotify(db: DB, signal: any) {
       const subject = subjectFor(signal);
       console.log('[email] sending', { to: recipients, subject });
       await sendMail({ to: recipients, subject, html: htmlFor(signal), text: textFor(signal) });
-      markEmailSent(db as any, key, gate.now);
+      await markEmailSent(db as any, key, gate.now);
       console.log('[email] sent + marked (db)', { key });
       return;
     } catch (e) {

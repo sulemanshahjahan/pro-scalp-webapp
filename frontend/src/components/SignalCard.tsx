@@ -20,6 +20,12 @@ export default function SignalCard({ s }: Props) {
     s.category === 'EARLY_READY' ? 'bg-blue-500/20 text-blue-300' :
     'bg-cyan-500/20 text-cyan-300';
 
+  const btcBearOverride =
+    s?.category === 'READY_TO_BUY' &&
+    (s?.market?.btcBear15m === true) &&
+    Array.isArray(s?.reasons) &&
+    s.reasons.some((r: string) => r.toLowerCase().includes('btc bearish') && r.toLowerCase().includes('override'));
+
   // ---- Thresholds mirror (unchanged) ----
   const T = {
     RSI_MIN: 55,
@@ -69,7 +75,14 @@ export default function SignalCard({ s }: Props) {
     <div className="bg-card rounded-2xl p-4 shadow-lg">
       <div className="flex items-center justify-between mb-2">
         <div className="text-lg font-semibold">{s.symbol}</div>
-        <span className={`text-xs px-2 py-1 rounded ${badgeColor}`}>{badge}</span>
+        <div className="flex items-center gap-2">
+          {btcBearOverride ? (
+            <span className="text-[10px] px-2 py-1 rounded border border-amber-400/30 bg-amber-400/10 text-amber-200">
+              BTC Bear Override
+            </span>
+          ) : null}
+          <span className={`text-xs px-2 py-1 rounded ${badgeColor}`}>{badge}</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm">

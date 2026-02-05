@@ -1,19 +1,16 @@
-import DatabaseCtor from 'better-sqlite3';
+import type { DbConn } from './db.js';
 
-// Use instance type of the constructor as the DB type.
-type DB = InstanceType<typeof DatabaseCtor>;
-
-export function ensureEmailGuardTables(db: DB) {
-  db.prepare(`
+export async function ensureEmailGuardTables(db: DbConn) {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS email_guard (
       key TEXT PRIMARY KEY,
       last_sent_ms INTEGER NOT NULL
     )
-  `).run();
+  `);
 }
 
-export function canSendEmail(db: DB, key: string, cooldownMin: number) {
-  const row = db
+export async function canSendEmail(db: DbConn, key: string, cooldownMin: number) {
+  const row = await db
     .prepare('SELECT last_sent_ms FROM email_guard WHERE key = ?')
     .get(key) as { last_sent_ms: number } | undefined;
 
@@ -24,8 +21,8 @@ export function canSendEmail(db: DB, key: string, cooldownMin: number) {
   return { allowed: now - row.last_sent_ms >= cooldownMs, now };
 }
 
-export function markEmailSent(db: DB, key: string, when: number) {
-  db.prepare(
+export async function markEmailSent(db: DbConn, key: string, when: number) {
+  await db.prepare(
     `INSERT INTO email_guard (key, last_sent_ms) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET last_sent_ms=excluded.last_sent_ms`
   ).run(key, when);

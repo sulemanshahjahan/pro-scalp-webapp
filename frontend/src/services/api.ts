@@ -28,10 +28,25 @@ export async function debugPush(
 type Preset = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE';
 
 export async function scanNow(preset: Preset = 'BALANCED') {
-  const r = await fetch(API(`/api/scan?preset=${encodeURIComponent(preset)}`));
+  const r = await fetch(API(`/api/scan?async=1&preset=${encodeURIComponent(preset)}`));
   return r.json();
 }
 // --------------------------------------------------------------------
+
+export async function getBtcMarket() {
+  const r = await fetch(API('/api/market/btc'), { cache: 'no-store' });
+  return r.json();
+}
+
+export async function getReadyGateDebug(limit = 50) {
+  const r = await fetch(API(`/api/debug/readyGate?limit=${encodeURIComponent(String(limit))}`), { cache: 'no-store' });
+  return r.json();
+}
+
+export async function getSystemHealth() {
+  const r = await fetch(API('/api/system/health'), { cache: 'no-store' });
+  return r.json();
+}
 
 export async function subscribePush(sub: PushSubscription) {
   await fetch(API('/api/subscribe'), {
