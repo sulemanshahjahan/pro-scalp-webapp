@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.cjs",
     "start": "node dist/src/server.js",
     "fake:email": "npm run build && node dist/fakeEmailSignal.js",
     "test:dedupe": "tsx scripts/test-dedupe.ts"
