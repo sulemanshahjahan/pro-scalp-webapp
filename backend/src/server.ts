@@ -589,7 +589,7 @@ app.get('/api/stats/matrix/btc', async (req, res) => {
       btcState,
       horizonMin: Number.isFinite(horizonMin) ? horizonMin : undefined,
     });
-    res.json({ ok: true, ...out });
+    res.json(out);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
