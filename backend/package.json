@@ -11,7 +11,6 @@
     "test:dedupe": "tsx scripts/test-dedupe.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
@@ -20,6 +19,9 @@
     "pg": "^8.13.1",
     "pro-scalp-webapp": "file:..",
     "web-push": "^3.6.7"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^9.6.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
