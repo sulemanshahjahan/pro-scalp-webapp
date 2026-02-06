@@ -517,7 +517,7 @@ app.get('/api/stats', async (req, res) => {
       preset,
       strategyVersion,
     });
-    res.json({ ok: true, ...out });
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
