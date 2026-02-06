@@ -41,7 +41,7 @@ const corsOrigins = (process.env.CORS_ORIGINS || '*')
   .map(s => s.trim())
   .filter(Boolean);
 app.use(cors({
-  origin: (origin, cb) => {
+  origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
     if (!origin) return cb(null, true);
     if (corsOrigins.includes('*') || corsOrigins.includes(origin)) return cb(null, true);
     return cb(new Error('CORS not allowed'));
