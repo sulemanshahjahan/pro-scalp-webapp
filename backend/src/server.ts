@@ -36,7 +36,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(cors());
+const corsOrigins = (process.env.CORS_ORIGINS || '*')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (corsOrigins.includes('*') || corsOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS not allowed'));
+  },
+  credentials: true,
+}));
+app.options('*', cors());
 app.use(express.json());
 
 function parsePreset(v: any): Preset {
