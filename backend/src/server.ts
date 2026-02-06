@@ -687,7 +687,7 @@ app.get('/api/stats/health', async (req, res) => {
     }
     const days = Number((req.query as any)?.days);
     const out = await getStatsHealth({ days: Number.isFinite(days) ? days : undefined });
-    res.json({ ok: true, ...out });
+    res.json(out);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
