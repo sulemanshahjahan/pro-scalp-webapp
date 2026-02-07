@@ -1,4 +1,9 @@
-const API = (path: string) => (import.meta.env.VITE_API_BASE ?? '') + path;
+const rawBase = (import.meta.env.VITE_API_BASE ?? '').trim();
+const fallbackBase = import.meta.env.PROD
+  ? 'https://pro-scalp-backend-production.up.railway.app'
+  : '';
+const base = (rawBase || fallbackBase).replace(/\/+$/, '');
+const API = (path: string) => base + path;
 
 export async function getVapidKey(): Promise<string> {
   const r = await fetch(API('/api/vapidPublicKey'));
