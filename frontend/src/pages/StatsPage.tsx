@@ -109,7 +109,7 @@ function MiniSpark(props: {
 
 export default function StatsPage() {
   const [preset, setPreset] = useState<typeof PRESETS[number]>('ALL');
-  const [horizon, setHorizon] = useState<typeof HORIZONS[number]>(30);
+  const [horizon, setHorizon] = useState<typeof HORIZONS[number]>(15);
   const [datePreset, setDatePreset] = useState<'today' | '24h' | '7d' | 'custom'>('7d');
   const [customStart, setCustomStart] = useState(toDateInputValue(new Date()));
   const [customEnd, setCustomEnd] = useState(toDateInputValue(new Date()));
@@ -819,7 +819,9 @@ export default function StatsPage() {
               ))}
               {!outcomesLoading && outcomesRows.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-3 py-4 text-white/50">No outcomes in range.</td>
+                  <td colSpan={13} className="px-3 py-4 text-white/50">
+                    No outcomes in range.{horizon !== 15 ? ' Try 15m horizon for recent signals.' : ''}
+                  </td>
                 </tr>
               ) : null}
             </tbody>
