@@ -42,8 +42,10 @@ function fmtMs(ms: number | null | undefined) {
   const secs = Math.floor((v % 60000) / 1000);
   return `${mins}m ${secs}s`;
 }
-function dt(ms: number) {
-  try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
+function dt(ms: number | string | null | undefined) {
+  const v = num(ms);
+  if (!Number.isFinite(v) || v <= 0) return '--';
+  try { return new Date(v).toLocaleString(); } catch { return String(ms); }
 }
 function toDateInputValue(d: Date) {
   return d.toLocaleDateString('en-CA');
