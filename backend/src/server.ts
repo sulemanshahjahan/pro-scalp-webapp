@@ -895,7 +895,10 @@ function logRegisteredRoutes() {
 logRegisteredRoutes();
 
 // ✅ Server background loop OFF by default (prevents double-scanning)
-const SERVER_LOOP_ENABLED = (process.env.SERVER_LOOP_ENABLED ?? 'false').toLowerCase() === 'true';
+// Auto-enable on Railway unless explicitly disabled.
+const railwayDetected = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+const serverLoopDefault = railwayDetected ? 'true' : 'false';
+const SERVER_LOOP_ENABLED = (process.env.SERVER_LOOP_ENABLED ?? serverLoopDefault).toLowerCase() === 'true';
 if (SERVER_LOOP_ENABLED) {
   console.log('[scan] server loop enabled');
   startLoop(async (signals) => {
