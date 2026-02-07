@@ -360,7 +360,7 @@ export default function StatsPage() {
 
   const summaryTotals = summary?.totals ?? [];
   const outcomeStats = summary?.outcomes;
-  const totalSignals = summaryTotals.reduce((acc: number, r: any) => acc + (r?.n ?? 0), 0);
+  const totalSignals = summaryTotals.reduce((acc: number, r: any) => acc + (Number(r?.n) || 0), 0);
   const totalOutcomes = (outcomeStats?.completeN ?? 0) + (outcomeStats?.partialN ?? 0) + (outcomeStats?.invalidN ?? 0);
   const completePct = totalOutcomes ? ((outcomeStats?.completeN ?? 0) / totalOutcomes) : 0;
   const currentResolveVersion = summary?.currentResolveVersion ?? null;
