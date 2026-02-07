@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS signals (
   would_be_category TEXT,
   btc_gate TEXT,
   btc_gate_reason TEXT,
+  gate_snapshot_json TEXT,
+  ready_debug_json TEXT,
+  best_debug_json TEXT,
+  blocked_reasons_json TEXT,
+  first_failed_gate TEXT,
+  gate_score INTEGER,
 
   btc_bull INTEGER,
   btc_bear INTEGER,
@@ -167,4 +173,12 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_result ON signal_outcomes(result);
 CREATE INDEX IF NOT EXISTS idx_outcomes_resolve_state_horizon ON signal_outcomes(resolve_version, outcome_state, horizon_min);
 CREATE INDEX IF NOT EXISTS idx_outcomes_resolved_at ON signal_outcomes(resolved_at);
 CREATE INDEX IF NOT EXISTS idx_outcome_skips_signal_horizon ON outcome_skips(signal_id, horizon_min);
+
+-- Backfill columns that were added later (safe if they already exist)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_snapshot_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS ready_debug_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS best_debug_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS blocked_reasons_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS first_failed_gate TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_score INTEGER;
 `;
