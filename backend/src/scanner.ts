@@ -74,9 +74,11 @@ type ScanHealth = {
   errorsOther: number;
   signalsByCategory: Record<string, number>;
   gateStats: ScanGateStats;
+  error?: string;
 };
 
 let lastScanHealth: ScanHealth | null = null;
+let lastSymbols: string[] | null = null;
 export function getLastScanHealth() {
   return lastScanHealth;
 }
@@ -226,6 +228,14 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   const thresholds = thresholdsForPreset(preset);
   const now = Date.now();
 
+  const signalsByCategory: Record<string, number> = {
+    WATCH: 0,
+    EARLY_READY: 0,
+    READY_TO_BUY: 0,
+    BEST_ENTRY: 0,
+  };
+  const gateStats = initGateStats();
+
   let symbols: string[] = [];
   try {
     symbols = await topUSDTByQuoteVolume(MIN_QUOTE_USDT, TOP_N);
@@ -235,9 +245,31 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const extras = shuffle(all.filter(s => !topSet.has(s))).slice(0, EXTRA_USDT_COUNT);
       symbols = symbols.concat(extras);
     }
+    if (symbols.length) lastSymbols = symbols;
   } catch (e) {
-    console.error('[scan] top symbols failed:', e);
-    return [];
+    const msg = String((e as any)?.message || e);
+    console.error('[scan] top symbols failed:', msg);
+    if (lastSymbols?.length) {
+      console.warn('[scan] using cached symbols list after fetch failure');
+      symbols = lastSymbols;
+    } else {
+      const dtMs = Date.now() - t0;
+      lastScanHealth = {
+        preset,
+        startedAt: t0,
+        finishedAt: Date.now(),
+        durationMs: dtMs,
+        processedSymbols: 0,
+        precheckPassed: 0,
+        fetchedOk: 0,
+        errors429: 0,
+        errorsOther: 1,
+        signalsByCategory,
+        gateStats,
+        error: `top symbols failed: ${msg}`,
+      };
+      return [];
+    }
   }
 
   const outs: any[] = [];
@@ -271,14 +303,6 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   let errOther = 0;
   let adaptiveDelayMs = SYMBOL_DELAY_MS;
   let no429Streak = 0;
-  const signalsByCategory: Record<string, number> = {
-    WATCH: 0,
-    EARLY_READY: 0,
-    READY_TO_BUY: 0,
-    BEST_ENTRY: 0,
-  };
-  const gateStats = initGateStats();
-
   for (const sym of symbols) {
     if (isStableVsStable(sym)) continue;
     if (LEVERAGED_SUFFIXES.test(sym)) continue;
