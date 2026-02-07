@@ -1678,13 +1678,13 @@ export async function listStrategyVersions(params: {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
   const rows = await d.prepare(`
-    SELECT strategy_version as version, COUNT(*) as n, MAX(updated_at) as latestAt
+    SELECT strategy_version as "version", COUNT(*) as "n", MAX(updated_at) as "latestAt"
     FROM signals
     WHERE time >= @start AND time <= @end
       AND strategy_version IS NOT NULL
       AND strategy_version != ''
     GROUP BY strategy_version
-    ORDER BY latestAt DESC
+    ORDER BY "latestAt" DESC
   `).all({ start, end }) as Array<{ version: string; n: number; latestAt: number }>;
   const latest = rows[0]?.version ?? null;
   return { start, end, days, latest, versions: rows };
@@ -1800,20 +1800,20 @@ export async function getStatsSummary(params: {
   const agg = await d.prepare(`
     SELECT
       SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%'
-        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN 1 ELSE 0 END) as completeN,
-      SUM(CASE WHEN o.window_status = 'PARTIAL' THEN 1 ELSE 0 END) as partialN,
-      SUM(CASE WHEN o.window_status = 'INVALID' OR o.trade_state = 'INVALIDATED' THEN 1 ELSE 0 END) as invalidN,
-      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1 ELSE 0 END) as winN,
-      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state = 'FAILED_SL' THEN 1 ELSE 0 END) as lossN,
-      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state = 'EXPIRED' THEN 1 ELSE 0 END) as noneN,
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN 1 ELSE 0 END) as "completeN",
+      SUM(CASE WHEN o.window_status = 'PARTIAL' THEN 1 ELSE 0 END) as "partialN",
+      SUM(CASE WHEN o.window_status = 'INVALID' OR o.trade_state = 'INVALIDATED' THEN 1 ELSE 0 END) as "invalidN",
+      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1 ELSE 0 END) as "winN",
+      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state = 'FAILED_SL' THEN 1 ELSE 0 END) as "lossN",
+      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0 AND o.trade_state = 'EXPIRED' THEN 1 ELSE 0 END) as "noneN",
       AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
-        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as avgR,
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as "avgR",
       SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
-        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as netR,
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as "netR",
       AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
-        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.mfe_pct END) as avgMfePct,
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.mfe_pct END) as "avgMfePct",
       AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
-        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.mae_pct END) as avgMaePct
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.mae_pct END) as "avgMaePct"
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
@@ -1821,9 +1821,9 @@ export async function getStatsSummary(params: {
 
   const sampleRows = await d.prepare(`
     SELECT
-      o.r_close as rClose,
-      o.time_to_first_hit_ms as timeToFirstHitMs,
-      o.exit_reason as exitReason
+      o.r_close as "rClose",
+      o.time_to_first_hit_ms as "timeToFirstHitMs",
+      o.exit_reason as "exitReason"
       FROM signal_outcomes o
       JOIN signals s ON s.id = o.signal_id
       WHERE ${whereOutcomes.join(' AND ')}
@@ -1843,12 +1843,12 @@ export async function getStatsSummary(params: {
 
   const signalsPerHour = await d.prepare(`
     SELECT
-      CAST(s.time / 3600000 AS INTEGER) * 3600000 as hourStart,
+      CAST(s.time / 3600000 AS INTEGER) * 3600000 as "hourStart",
       COUNT(*) as n
     FROM signals s
     WHERE ${whereSignals.join(' AND ')}
-    GROUP BY hourStart
-    ORDER BY hourStart
+    GROUP BY "hourStart"
+    ORDER BY "hourStart"
   `).all(bind);
 
     return {
@@ -1909,18 +1909,18 @@ export async function getStatsMatrixBtc(params: {
         WHEN s.btc_bull = 1 THEN 'BULL'
         WHEN s.btc_bear = 1 THEN 'BEAR'
         ELSE 'NEUTRAL'
-      END as btcState,
-      s.category as category,
-      COUNT(*) as n,
-      AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1.0 ELSE 0 END) as winRate,
-      AVG(CASE WHEN o.exit_reason = 'STOP' THEN 1.0 ELSE 0 END) as stopRate,
-      SUM(o.r_close) as netR,
-      AVG(o.r_close) as avgR
+      END as "btcState",
+      s.category as "category",
+      COUNT(*) as "n",
+      AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1.0 ELSE 0 END) as "winRate",
+      AVG(CASE WHEN o.exit_reason = 'STOP' THEN 1.0 ELSE 0 END) as "stopRate",
+      SUM(o.r_close) as "netR",
+      AVG(o.r_close) as "avgR"
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
     WHERE ${where.join(' AND ')}
-    GROUP BY btcState, s.category
-    ORDER BY btcState, s.category
+    GROUP BY "btcState", s.category
+    ORDER BY "btcState", s.category
   `).all(bind);
 
     return { start, end, days, currentResolveVersion: OUTCOME_RESOLVE_VERSION, rows };
@@ -1958,13 +1958,13 @@ export async function getStatsBuckets(params: {
 
   const rows = await d.prepare(`
     SELECT
-      s.deltaVwapPct as deltaVwapPct,
-      s.rsi9 as rsi9,
-      s.atrPct as atrPct,
-      s.volSpike as volSpike,
-      s.rr as rr,
-      o.r_close as rClose,
-      o.trade_state as tradeState
+      s.deltaVwapPct as "deltaVwapPct",
+      s.rsi9 as "rsi9",
+      s.atrPct as "atrPct",
+      s.volSpike as "volSpike",
+      s.rr as "rr",
+      o.r_close as "rClose",
+      o.trade_state as "tradeState"
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
     WHERE ${where.join(' AND ')}
@@ -2172,58 +2172,58 @@ export async function listOutcomes(params: {
 
   const sql = `
     SELECT
-      s.id as signalId,
-      s.symbol, s.category, s.time, s.preset, s.strategy_version as strategyVersion,
-      s.blocked_by_btc as blockedByBtc, s.would_be_category as wouldBeCategory,
-      s.gate_score as gateScore,
-      s.first_failed_gate as firstFailedGate,
-      s.blocked_reasons_json as blockedReasonsJson,
-      s.btc_bull as btcBull, s.btc_bear as btcBear,
-      s.price, s.stop, s.tp1, s.tp2, s.target, s.rr, s.riskPct,
-      o.horizon_min as horizonMin,
-      o.entry_time as entryTime,
-      o.entry_candle_open_time as entryCandleOpenTime,
-      o.entry_rule as entryRule,
-      o.start_time as startTime,
-      o.end_time as endTime,
-      o.interval_min as intervalMin,
-      o.n_candles as nCandles,
-      o.n_candles_expected as nCandlesExpected,
-      o.coverage_pct as coveragePct,
-      o.entry_price as entryPrice,
-      o.open_price as openPrice,
-      o.close_price as closePrice,
-      o.max_high as maxHigh,
-      o.min_low as minLow,
-      o.ret_pct as retPct,
-      o.r_close as rClose,
-      o.r_mfe as rMfe,
-      o.r_mae as rMae,
-      o.r_realized as rRealized,
-      o.hit_sl as hitSL,
-      o.hit_tp1 as hitTP1,
-      o.hit_tp2 as hitTP2,
-      o.tp1_hit_time as tp1HitTime,
-      o.sl_hit_time as slHitTime,
-      o.tp2_hit_time as tp2HitTime,
-      o.time_to_first_hit_ms as timeToFirstHitMs,
-      o.bars_to_exit as barsToExit,
-      o.mfe_pct as mfePct,
-      o.mae_pct as maePct,
-      o.result as result,
-      o.exit_reason as exitReason,
-      o.trade_state as tradeState,
-      o.exit_price as exitPrice,
-      o.exit_time as exitTime,
-      o.window_status as windowStatus,
-      o.outcome_state as outcomeState,
-      o.invalid_levels as invalidLevels,
-      o.invalid_reason as invalidReason,
-      o.ambiguous as ambiguous,
-      o.attempted_at as attemptedAt,
-      o.computed_at as computedAt,
-      o.resolved_at as resolvedAt,
-      o.resolve_version as resolveVersion
+      s.id as "signalId",
+      s.symbol, s.category, s.time, s.preset, s.strategy_version as "strategyVersion",
+      s.blocked_by_btc as "blockedByBtc", s.would_be_category as "wouldBeCategory",
+      s.gate_score as "gateScore",
+      s.first_failed_gate as "firstFailedGate",
+      s.blocked_reasons_json as "blockedReasonsJson",
+      s.btc_bull as "btcBull", s.btc_bear as "btcBear",
+      s.price, s.stop, s.tp1, s.tp2, s.target, s.rr, s.riskPct as "riskPct",
+      o.horizon_min as "horizonMin",
+      o.entry_time as "entryTime",
+      o.entry_candle_open_time as "entryCandleOpenTime",
+      o.entry_rule as "entryRule",
+      o.start_time as "startTime",
+      o.end_time as "endTime",
+      o.interval_min as "intervalMin",
+      o.n_candles as "nCandles",
+      o.n_candles_expected as "nCandlesExpected",
+      o.coverage_pct as "coveragePct",
+      o.entry_price as "entryPrice",
+      o.open_price as "openPrice",
+      o.close_price as "closePrice",
+      o.max_high as "maxHigh",
+      o.min_low as "minLow",
+      o.ret_pct as "retPct",
+      o.r_close as "rClose",
+      o.r_mfe as "rMfe",
+      o.r_mae as "rMae",
+      o.r_realized as "rRealized",
+      o.hit_sl as "hitSL",
+      o.hit_tp1 as "hitTP1",
+      o.hit_tp2 as "hitTP2",
+      o.tp1_hit_time as "tp1HitTime",
+      o.sl_hit_time as "slHitTime",
+      o.tp2_hit_time as "tp2HitTime",
+      o.time_to_first_hit_ms as "timeToFirstHitMs",
+      o.bars_to_exit as "barsToExit",
+      o.mfe_pct as "mfePct",
+      o.mae_pct as "maePct",
+      o.result as "result",
+      o.exit_reason as "exitReason",
+      o.trade_state as "tradeState",
+      o.exit_price as "exitPrice",
+      o.exit_time as "exitTime",
+      o.window_status as "windowStatus",
+      o.outcome_state as "outcomeState",
+      o.invalid_levels as "invalidLevels",
+      o.invalid_reason as "invalidReason",
+      o.ambiguous as "ambiguous",
+      o.attempted_at as "attemptedAt",
+      o.computed_at as "computedAt",
+      o.resolved_at as "resolvedAt",
+      o.resolve_version as "resolveVersion"
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
     WHERE ${where.join(' AND ')}
