@@ -26,7 +26,7 @@ const OUTCOME_MIN_COVERAGE_PCT = Math.min(100, Math.max(50, parseFloat(process.e
 const STRATEGY_VERSION = process.env.STRATEGY_VERSION || 'v1.0.0';
 const ENABLE_TIME_SHIFT = (process.env.MIGRATE_SHIFT_TIME_CLOSE ?? 'false').toLowerCase() === 'true';
 
-const SIGNAL_LOG_CATS = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY,EARLY_READY,WATCH')
+const SIGNAL_LOG_CATS = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY,EARLY_READY')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
