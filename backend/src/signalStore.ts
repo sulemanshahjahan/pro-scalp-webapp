@@ -1843,7 +1843,7 @@ export async function getStatsSummary(params: {
 
   const signalsPerHour = await d.prepare(`
     SELECT
-      CAST(s.time / 3600000 AS INTEGER) * 3600000 as "hourStart",
+      CAST(s.time / 3600000 AS BIGINT) * 3600000 as "hourStart",
       COUNT(*) as n
     FROM signals s
     WHERE ${whereSignals.join(' AND ')}
