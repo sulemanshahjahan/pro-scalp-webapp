@@ -12,6 +12,12 @@ const BUCKET_LABELS: Record<'deltaVwapPct' | 'rsi9' | 'atrPct' | 'volSpike' | 'r
   volSpike: 'Volume Spike',
   rr: 'Risk/Reward',
 };
+const rawApiBase = (import.meta.env.VITE_API_BASE ?? '').trim();
+const fallbackApiBase = import.meta.env.PROD
+  ? 'https://pro-scalp-backend-production.up.railway.app'
+  : '';
+const apiBase = (rawApiBase || fallbackApiBase).replace(/\/+$/, '');
+const API = (path: string) => apiBase + path;
 
 function num(v: unknown): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
@@ -197,10 +203,10 @@ export default function StatsPage() {
     try {
       const qs = buildParams({ includeHorizon: true });
       const [a, b, c, d] = await Promise.all([
-        fetch(`/api/stats/summary?${qs}`).then(r => r.json()),
-        fetch(`/api/stats/matrix/btc?${qs}`).then(r => r.json()),
-        fetch(`/api/stats/buckets?${qs}`).then(r => r.json()),
-        fetch(`/api/stats/invalidReasons?${qs}`).then(r => r.json()),
+        fetch(API(`/api/stats/summary?${qs}`)).then(r => r.json()),
+        fetch(API(`/api/stats/matrix/btc?${qs}`)).then(r => r.json()),
+        fetch(API(`/api/stats/buckets?${qs}`)).then(r => r.json()),
+        fetch(API(`/api/stats/invalidReasons?${qs}`)).then(r => r.json()),
       ]);
       setSummary(a);
       setMatrix(b);
@@ -215,7 +221,7 @@ export default function StatsPage() {
     setOutcomesLoading(true);
     try {
       const qs = buildParams({ includeHorizon: true, includePagination: true, includeSort: true });
-      const resp = await fetch(`/api/outcomes?${qs}`).then(r => r.json());
+      const resp = await fetch(API(`/api/outcomes?${qs}`)).then(r => r.json());
       setOutcomes(resp);
     } finally {
       setOutcomesLoading(false);
@@ -229,7 +235,7 @@ export default function StatsPage() {
       const qs = new URLSearchParams(buildParams({ includeHorizon: true }));
       qs.delete('windowStatus');
       qs.delete('invalidReason');
-      const resp = await fetch(`/api/outcomes/rebuild?${qs.toString()}`, { method: 'POST' }).then(r => r.json());
+      const resp = await fetch(API(`/api/outcomes/rebuild?${qs.toString()}`), { method: 'POST' }).then(r => r.json());
       if (resp?.ok) {
         setRecomputeMsg(`Re-check queued for ${resp.rebuilt ?? 0} rows`);
         await Promise.all([loadTop(), loadOutcomes()]);
@@ -249,7 +255,7 @@ export default function StatsPage() {
     setClearLoading(true);
     setClearMsg('');
     try {
-      const resp = await fetch('/api/signals/clear', { method: 'POST' }).then(r => r.json());
+      const resp = await fetch(API('/api/signals/clear'), { method: 'POST' }).then(r => r.json());
       if (resp?.ok) {
         setClearMsg(`Cleared ${resp.signals ?? 0} signals, ${resp.outcomes ?? 0} outcomes`);
         setSelectedId(null);
@@ -266,12 +272,12 @@ export default function StatsPage() {
   }
 
   async function loadVersions() {
-    const resp = await fetch('/api/stats/versions').then(r => r.json());
+    const resp = await fetch(API('/api/stats/versions')).then(r => r.json());
     if (resp?.ok) setVersions(resp);
   }
 
   async function loadHealth() {
-    const resp = await fetch('/api/system/health').then(r => r.json());
+    const resp = await fetch(API('/api/system/health')).then(r => r.json());
     if (resp?.ok) setHealth(resp);
   }
 
@@ -291,7 +297,7 @@ export default function StatsPage() {
   async function fetchSignal(id: number) {
     const cached = signalCacheRef.current[id];
     if (cached) return cached;
-    const resp = await fetch(`/api/signal/${id}`).then(r => r.json());
+    const resp = await fetch(API(`/api/signal/${id}`)).then(r => r.json());
     if (resp?.ok) {
       signalCacheRef.current[id] = resp.signal;
       return resp.signal;
