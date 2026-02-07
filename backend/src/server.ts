@@ -24,6 +24,7 @@ import {
   listOutcomes,
   listSignals,
   listStrategyVersions,
+  getLoggedCategories,
   recordSignal,
   rebuildOutcomesByFilter,
   updateOutcomesOnce,
@@ -114,6 +115,7 @@ app.get('/api/system/health', async (req, res) => {
     res.json({
       ok: true,
       days: safeDays,
+      categoriesLogged: getLoggedCategories(),
       scan,
       btc: { market, at },
       outcomes: {
