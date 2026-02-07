@@ -494,7 +494,11 @@ export default function StatsPage() {
           <div className="mt-3 space-y-2">
             {(summary?.signalsPerHour ?? []).slice(-12).map((h: any) => (
               <div key={h.hourStart} className="flex items-center gap-3 text-xs">
-                <div className="w-16 text-white/60">{new Date(h.hourStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                <div className="w-16 text-white/60">
+                  {Number.isFinite(num(h.hourStart))
+                    ? new Date(num(h.hourStart)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '--'}
+                </div>
                 <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
                   <div
                     className="h-2 bg-cyan-400/60"
