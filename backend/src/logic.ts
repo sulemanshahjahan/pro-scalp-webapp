@@ -221,13 +221,40 @@ function sessionActiveUTC(now = new Date()): boolean {
 /** ------------------------------------------------------------------- */
 
 /** ------------------------- Main analyzer --------------------------- */
-export function analyzeSymbol(
+export type CandidateDebug = {
+  watchOk: boolean;
+  earlyOk: boolean;
+  watchFlags: {
+    nearVwapWatch: boolean;
+    rsiWatchOk: boolean;
+    emaWatchOk: boolean;
+  };
+  earlyFlags: {
+    sessionOK: boolean;
+    nearVwapWatch: boolean;
+    rsiWatchOk: boolean;
+    emaWatchOk: boolean;
+    atrOkReady: boolean;
+    reclaimOrTap: boolean;
+    priceAboveVwap: boolean;
+  };
+};
+
+export type AnalyzeResult = {
+  signal: Omit<Signal, 'time'> | null;
+  debug: {
+    candidate: CandidateDebug;
+    gateSnapshot: any;
+  };
+};
+
+function analyzeSymbolInternal(
   symbol: string,
   data5: OHLCV[],
   data15: OHLCV[],
   thresholds: Thresholds,
   market?: MarketInfo
-): Omit<Signal, 'time'> | null {
+): AnalyzeResult | null {
   if (data5.length < 210 || data15.length < 210) return null;
 
   // ----- 5m series -----
@@ -572,7 +599,24 @@ export function analyzeSymbol(
     reasons.push(btcBear ? 'BTC bearish (15m)' : 'BTC not supportive (15m)');
   }
 
-  if (!category) return null;
+  const candidateDebug: CandidateDebug = {
+    watchOk,
+    earlyOk,
+    watchFlags: {
+      nearVwapWatch,
+      rsiWatchOk,
+      emaWatchOk,
+    },
+    earlyFlags: {
+      sessionOK,
+      nearVwapWatch,
+      rsiWatchOk,
+      emaWatchOk,
+      atrOkReady,
+      reclaimOrTap: reclaimOk,
+      priceAboveVwap: price >= vwap_i,
+    },
+  };
 
   // Trade plan (spot-friendly)
   let stop: number | null = null;
@@ -726,7 +770,13 @@ export function analyzeSymbol(
       core: bestCore,
     },
   };
-  return {
+  const debug = { candidate: candidateDebug, gateSnapshot };
+
+  if (!category) {
+    return { signal: null, debug };
+  }
+
+  const signal: Omit<Signal, 'time'> = {
     symbol,
     category,
     price,
@@ -765,4 +815,25 @@ export function analyzeSymbol(
     readyDebug,
     bestDebug
   };
+  return { signal, debug };
+}
+
+export function analyzeSymbol(
+  symbol: string,
+  data5: OHLCV[],
+  data15: OHLCV[],
+  thresholds: Thresholds,
+  market?: MarketInfo
+): Omit<Signal, 'time'> | null {
+  return analyzeSymbolInternal(symbol, data5, data15, thresholds, market)?.signal ?? null;
+}
+
+export function analyzeSymbolDetailed(
+  symbol: string,
+  data5: OHLCV[],
+  data15: OHLCV[],
+  thresholds: Thresholds,
+  market?: MarketInfo
+): AnalyzeResult | null {
+  return analyzeSymbolInternal(symbol, data5, data15, thresholds, market);
 }

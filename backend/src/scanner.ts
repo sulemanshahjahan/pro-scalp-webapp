@@ -1,6 +1,6 @@
 import { topUSDTByQuoteVolume, listAllUSDTMarkets, klines } from './binance.js';
 import { tryStartScanRun, finishScanRun, failScanRun, pruneScanRuns } from './scanStore.js';
-import { analyzeSymbol } from './logic.js';
+import { analyzeSymbolDetailed } from './logic.js';
 import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
@@ -72,6 +72,16 @@ type ReadyGateFailures = GateFailures & {
   ready_priceAboveVwap_relaxed_true: number;
 };
 
+type CandidateStats = {
+  candidate_evaluated: number;
+  watch_created: number;
+  early_created: number;
+  watch_first_failed: Record<string, number>;
+  early_first_failed: Record<string, number>;
+  watch_flag_true: Record<string, number>;
+  early_flag_true: Record<string, number>;
+};
+
 type PrecheckStats = {
   skip_stable: number;
   skip_leveraged: number;
@@ -93,6 +103,7 @@ type ScanGateStats = {
   bestCandidates: number;
   ready: ReadyGateFailures;
   best: GateFailures;
+  candidate: CandidateStats;
   precheck: PrecheckStats;
 };
 
@@ -180,12 +191,25 @@ function initPrecheckStats(): PrecheckStats {
   };
 }
 
+function initCandidateStats(): CandidateStats {
+  return {
+    candidate_evaluated: 0,
+    watch_created: 0,
+    early_created: 0,
+    watch_first_failed: {},
+    early_first_failed: {},
+    watch_flag_true: {},
+    early_flag_true: {},
+  };
+}
+
 function initGateStats(): ScanGateStats {
   return {
     readyCandidates: 0,
     bestCandidates: 0,
     ready: initReadyGateFailures(),
     best: initGateFailures(),
+    candidate: initCandidateStats(),
     precheck: initPrecheckStats(),
   };
 }
@@ -445,7 +469,54 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       if (d15.length < 210) { precheck.fail_15m_candles += 1; continue; }
       fetchedOk++;
 
-      const sig = analyzeSymbol(sym, d5, d15, thresholds, market ?? undefined);
+      const res = analyzeSymbolDetailed(sym, d5, d15, thresholds, market ?? undefined);
+      if (res?.debug?.candidate) {
+        const cand = res.debug.candidate;
+        gateStats.candidate.candidate_evaluated += 1;
+        if (cand.watchOk) gateStats.candidate.watch_created += 1;
+        if (cand.earlyOk) gateStats.candidate.early_created += 1;
+
+        const watchOrder = ['nearVwapWatch', 'rsiWatchOk', 'emaWatchOk'] as const;
+        const earlyOrder = [
+          'sessionOK',
+          'nearVwapWatch',
+          'rsiWatchOk',
+          'emaWatchOk',
+          'atrOkReady',
+          'reclaimOrTap',
+          'priceAboveVwap',
+        ] as const;
+
+        for (const k of watchOrder) {
+          if (cand.watchFlags[k]) {
+            gateStats.candidate.watch_flag_true[k] =
+              (gateStats.candidate.watch_flag_true[k] ?? 0) + 1;
+          }
+        }
+        for (const k of earlyOrder) {
+          if (cand.earlyFlags[k]) {
+            gateStats.candidate.early_flag_true[k] =
+              (gateStats.candidate.early_flag_true[k] ?? 0) + 1;
+          }
+        }
+
+        if (!cand.watchOk) {
+          const firstFailedWatch = watchOrder.find((k) => !cand.watchFlags[k]);
+          if (firstFailedWatch) {
+            gateStats.candidate.watch_first_failed[firstFailedWatch] =
+              (gateStats.candidate.watch_first_failed[firstFailedWatch] ?? 0) + 1;
+          }
+        }
+        if (!cand.earlyOk) {
+          const firstFailedEarly = earlyOrder.find((k) => !cand.earlyFlags[k]);
+          if (firstFailedEarly) {
+            gateStats.candidate.early_first_failed[firstFailedEarly] =
+              (gateStats.candidate.early_first_failed[firstFailedEarly] ?? 0) + 1;
+          }
+        }
+      }
+
+      const sig = res?.signal ?? null;
       if (sig) {
         const candleCloseMs = getCandleCloseMs(last5, 5 * 60_000);
         const withTime = { ...sig, time: candleCloseMs };
