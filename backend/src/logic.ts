@@ -407,7 +407,11 @@ export function analyzeSymbol(
     thresholds.volSpikeX === 1.5 &&
     thresholds.vwapDistancePct === 0.30 &&
     thresholds.atrGuardPct === 2.5;
-  const readyVolMin = isBalancedPreset ? 1.3 : Math.max(1.2, thresholds.volSpikeX);
+  const readyVolMinBase = isBalancedPreset ? 1.3 : Math.max(1.2, thresholds.volSpikeX);
+  const readyVolMin =
+    isBalancedPreset && nearVwapReady && reclaimOk
+      ? 1.2
+      : readyVolMinBase;
   const readyVolOk = volSpikeNow >= readyVolMin;
   const readyNoSweepVwapCap = 0.20;
   const nearVwapReadyNoSweep = Math.abs(distToVwapPct) <= readyNoSweepVwapCap;

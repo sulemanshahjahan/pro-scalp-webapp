@@ -66,6 +66,7 @@ type ReadyGateFailures = GateFailures & {
   ready_fallback_eligible: number;
   ready_sweep_true: number;
   ready_shadow_if_reclaim_relaxed: number;
+  ready_shadow_if_volSpike_1_2: number;
 };
 
 type ScanGateStats = {
@@ -134,6 +135,7 @@ function initReadyGateFailures(): ReadyGateFailures {
     ready_fallback_eligible: 0,
     ready_sweep_true: 0,
     ready_shadow_if_reclaim_relaxed: 0,
+    ready_shadow_if_volSpike_1_2: 0,
   };
 }
 
@@ -469,6 +471,13 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           const shadowRelaxReclaim = !coreFlags.reclaimOrTap
             && coreOrder.filter(k => k !== 'reclaimOrTap').every((k) => coreFlags[k]);
           if (shadowRelaxReclaim) gateStats.ready.ready_shadow_if_reclaim_relaxed += 1;
+
+          const relaxVolCond = Boolean(coreFlags.nearVwapReady && coreFlags.reclaimOrTap);
+          const shadowRelaxVol = !coreFlags.readyVolOk
+            && relaxVolCond
+            && coreOrder.filter(k => k !== 'readyVolOk').every((k) => coreFlags[k])
+            && Number(withTime.volSpike) >= 1.2;
+          if (shadowRelaxVol) gateStats.ready.ready_shadow_if_volSpike_1_2 += 1;
 
           if (!best.nearVwap) gateStats.best.failed_near_vwap += 1;
           if (!best.confirm15) gateStats.best.failed_confirm15 += 1;
