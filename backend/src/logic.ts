@@ -389,6 +389,8 @@ export function analyzeSymbol(
     thresholds.atrGuardPct === 2.5;
   const readyVolMin = isBalancedPreset ? 1.4 : Math.max(1.2, thresholds.volSpikeX);
   const readyVolOk = volSpikeNow >= readyVolMin;
+  const readyNoSweepVwapCap = 0.20;
+  const nearVwapReadyNoSweep = Math.abs(distToVwapPct) <= readyNoSweepVwapCap;
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyCore =
     sessionOK &&
@@ -409,8 +411,9 @@ export function analyzeSymbol(
     // Allow READY during BTC bear only if symbol is exceptionally strong
     (btcBear && confirm15mStrict && trendOk && strongBody && readyVolOk)
   );
-  const readyOk = readyCore && readyBtcOk;
-  const blockedByBtc = readyCore && !readyBtcOk;
+  const readySweepOk = liq.ok || (reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep);
+  const readyOk = readyCore && readySweepOk && readyBtcOk;
+  const blockedByBtc = readyCore && readySweepOk && !readyBtcOk;
 
   const readyGates: Gate[] = [
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
@@ -428,6 +431,7 @@ export function analyzeSymbol(
     { key: 'confirm15mOk', ok: confirm15mOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBody, reason: 'No strong bullish body candle' },
     { key: 'trendOk', ok: readyTrendOk, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
+    { key: 'readySweep', ok: readySweepOk, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
     {
       key: 'btcOkReady',
