@@ -442,7 +442,7 @@ export function analyzeSymbol(
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyCore =
     sessionOK &&
-    price > vwap_i &&
+    readyPriceAboveVwap &&
     priceAboveEma &&
     rsiReadyOk &&
     nearVwapReady &&
