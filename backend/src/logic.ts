@@ -383,7 +383,12 @@ export function analyzeSymbol(
   }
 
   /** ===================== READY TO BUY ===================== */
-  const readyVolOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
+  const isBalancedPreset =
+    thresholds.volSpikeX === 1.5 &&
+    thresholds.vwapDistancePct === 0.30 &&
+    thresholds.atrGuardPct === 2.5;
+  const readyVolMin = isBalancedPreset ? 1.4 : Math.max(1.2, thresholds.volSpikeX);
+  const readyVolOk = volSpikeNow >= readyVolMin;
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyCore =
     sessionOK &&
