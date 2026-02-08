@@ -79,7 +79,7 @@ type ScanHealth = {
 };
 
 let lastScanHealth: ScanHealth | null = null;
-let currentScan: { runId: string; preset: Preset; startedAt: number } | null = null;
+let currentScan: { runId: string; preset: string; startedAt: number } | null = null;
 let lastSymbols: string[] | null = null;
 export function getLastScanHealth() {
   return lastScanHealth;
