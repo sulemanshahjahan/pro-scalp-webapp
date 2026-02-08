@@ -72,11 +72,28 @@ type ReadyGateFailures = GateFailures & {
   ready_priceAboveVwap_relaxed_true: number;
 };
 
+type PrecheckStats = {
+  skip_stable: number;
+  skip_leveraged: number;
+  fail_5m_candles: number;
+  fail_last_candle: number;
+  fail_min_price: number;
+  fail_atr_rsi: number;
+  fail_atr_pct: number;
+  fail_rsi_range: number;
+  fail_ema: number;
+  fail_vwap: number;
+  fail_ema_soft: number;
+  fail_near_vwap_pre: number;
+  fail_15m_candles: number;
+};
+
 type ScanGateStats = {
   readyCandidates: number;
   bestCandidates: number;
   ready: ReadyGateFailures;
   best: GateFailures;
+  precheck: PrecheckStats;
 };
 
 type ScanHealth = {
@@ -145,12 +162,31 @@ function initReadyGateFailures(): ReadyGateFailures {
   };
 }
 
+function initPrecheckStats(): PrecheckStats {
+  return {
+    skip_stable: 0,
+    skip_leveraged: 0,
+    fail_5m_candles: 0,
+    fail_last_candle: 0,
+    fail_min_price: 0,
+    fail_atr_rsi: 0,
+    fail_atr_pct: 0,
+    fail_rsi_range: 0,
+    fail_ema: 0,
+    fail_vwap: 0,
+    fail_ema_soft: 0,
+    fail_near_vwap_pre: 0,
+    fail_15m_candles: 0,
+  };
+}
+
 function initGateStats(): ScanGateStats {
   return {
     readyCandidates: 0,
     bestCandidates: 0,
     ready: initReadyGateFailures(),
     best: initGateFailures(),
+    precheck: initPrecheckStats(),
   };
 }
 
@@ -290,6 +326,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     BEST_ENTRY: 0,
   };
   const gateStats = initGateStats();
+  const precheck = gateStats.precheck;
   let processed = 0;
   let precheckPassed = 0;
   let fetchedOk = 0;
@@ -347,8 +384,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   let no429Streak = 0;
   const shouldAbort = Boolean(errorMessage && symbols.length === 0);
   for (const sym of (shouldAbort ? [] : symbols)) {
-    if (isStableVsStable(sym)) continue;
-    if (LEVERAGED_SUFFIXES.test(sym)) continue;
+    if (isStableVsStable(sym)) { precheck.skip_stable += 1; continue; }
+    if (LEVERAGED_SUFFIXES.test(sym)) { precheck.skip_leveraged += 1; continue; }
 
     if (Date.now() - t0 > MAX_SCAN_MS) {
       console.warn(`[scan] max duration reached (${MAX_SCAN_MS}ms), stopping early`);
@@ -360,11 +397,14 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     try {
       let d5 = await klines(sym, '5m', 300);
       d5 = sliceToLastClosed(d5, 5 * 60_000, now);
-      if (d5.length < 210) continue;
+      if (d5.length < 210) { precheck.fail_5m_candles += 1; continue; }
 
       const last5 = d5[d5.length - 1];
-      if (!last5 || !Number.isFinite(last5.close) || !Number.isFinite(last5.high) || !Number.isFinite(last5.low) || !Number.isFinite(last5.volume)) continue;
-      if (last5.close < MIN_PRICE_USDT) continue;
+      if (!last5 || !Number.isFinite(last5.close) || !Number.isFinite(last5.high) || !Number.isFinite(last5.low) || !Number.isFinite(last5.volume)) {
+        precheck.fail_last_candle += 1;
+        continue;
+      }
+      if (last5.close < MIN_PRICE_USDT) { precheck.fail_min_price += 1; continue; }
 
       const closes5 = d5.map(d => d.close);
       const highs5 = d5.map(d => d.high);
@@ -375,14 +415,14 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const atrNow = atr5[i5];
       const rsiNow = rsi5[i5];
 
-      if (!Number.isFinite(atrNow) || !Number.isFinite(rsiNow)) continue;
-      if (atrNow < MIN_ATR_PCT_PRECHECK) continue;
-      if (rsiNow < RSI_PRECHECK_MIN || rsiNow > RSI_PRECHECK_MAX) continue;
+      if (!Number.isFinite(atrNow) || !Number.isFinite(rsiNow)) { precheck.fail_atr_rsi += 1; continue; }
+      if (atrNow < MIN_ATR_PCT_PRECHECK) { precheck.fail_atr_pct += 1; continue; }
+      if (rsiNow < RSI_PRECHECK_MIN || rsiNow > RSI_PRECHECK_MAX) { precheck.fail_rsi_range += 1; continue; }
 
       // 5m prefilter: only pull 15m if price is near VWAP/EMA200 window
       const ema200_5 = ema(closes5, 200);
       const emaNow = ema200_5[i5];
-      if (!Number.isFinite(emaNow) || emaNow <= 0) continue;
+      if (!Number.isFinite(emaNow) || emaNow <= 0) { precheck.fail_ema += 1; continue; }
       const emaSoftOk =
         last5.close >= emaNow ||
         (((emaNow - last5.close) / emaNow) * 100 <= PRECHECK_EMA_SOFT_PCT);
@@ -392,16 +432,17 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const { cumPV, cumV } = buildCum(tp5, vols5);
       const a0 = dayAnchorIndexAt(d5, i5, 288);
       const vwap5 = anchoredVwapAt(cumPV, cumV, a0, i5);
-      if (!Number.isFinite(vwap5) || vwap5 <= 0) continue;
+      if (!Number.isFinite(vwap5) || vwap5 <= 0) { precheck.fail_vwap += 1; continue; }
       const distToVwapPct = ((last5.close - vwap5) / vwap5) * 100;
       const nearVwapPre = Math.abs(distToVwapPct) <= Math.max(thresholds.vwapDistancePct, PRECHECK_VWAP_MAX_PCT);
 
-      if (!emaSoftOk || !nearVwapPre) continue;
+      if (!emaSoftOk) { precheck.fail_ema_soft += 1; continue; }
+      if (!nearVwapPre) { precheck.fail_near_vwap_pre += 1; continue; }
       precheckPassed++;
 
       let d15 = await klines(sym, '15m', 260);
       d15 = sliceToLastClosed(d15, 15 * 60_000, now);
-      if (d15.length < 210) continue;
+      if (d15.length < 210) { precheck.fail_15m_candles += 1; continue; }
       fetchedOk++;
 
       const sig = analyzeSymbol(sym, d5, d15, thresholds, market ?? undefined);
@@ -564,6 +605,13 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   }
 
   const dtMs = Date.now() - t0;
+  const precheckTop = Object.entries(precheck)
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(' ');
+  console.log(`[precheck] pass=${precheckPassed}${precheckTop ? ' ' + precheckTop : ''}`);
   console.log(`[scan] done preset=${preset} processed=${processed} signals=${outs.length} 429=${err429} otherErr=${errOther} dt=${dtMs}ms`);
 
   lastScanHealth = {
