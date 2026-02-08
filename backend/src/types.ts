@@ -73,6 +73,9 @@ export interface Signal {
   btcGateReason?: string | null;
   gateSnapshot?: {
     ready: {
+      sessionOk?: boolean;
+      priceAboveVwap?: boolean;
+      priceAboveEma?: boolean;
       nearVwap: boolean;
       confirm15: boolean;
       trend: boolean;
@@ -82,6 +85,7 @@ export interface Signal {
       sweepFallback?: boolean;
       strongBody?: boolean;
       reclaimOrTap?: boolean;
+      rsiReadyOk?: boolean;
       hasMarket?: boolean;
       btc: boolean;
       core: boolean;

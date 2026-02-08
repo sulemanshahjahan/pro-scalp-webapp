@@ -640,6 +640,9 @@ export function analyzeSymbol(
   const cleanedReasons = reasons.filter(Boolean);
   const gateSnapshot = {
     ready: {
+      sessionOk: sessionOK,
+      priceAboveVwap: price > vwap_i,
+      priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
       trend: readyTrendOk,
@@ -649,6 +652,7 @@ export function analyzeSymbol(
       sweepFallback: readySweepFallbackOk,
       strongBody,
       reclaimOrTap: reclaimOk,
+      rsiReadyOk,
       hasMarket,
       btc: readyBtcOk,
       core: readyCore,

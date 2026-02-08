@@ -57,11 +57,15 @@ type GateFailures = {
 };
 
 type ReadyGateFailures = GateFailures & {
+  ready_core_evaluated: number;
   ready_core_true: number;
+  ready_core_first_failed: Record<string, number>;
+  ready_core_flag_true: Record<string, number>;
   ready_sweep_path_taken: number;
   ready_no_sweep_path_taken: number;
   ready_fallback_eligible: number;
   ready_sweep_true: number;
+  ready_shadow_if_reclaim_relaxed: number;
 };
 
 type ScanGateStats = {
@@ -117,11 +121,15 @@ function initGateFailures(): GateFailures {
 function initReadyGateFailures(): ReadyGateFailures {
   return {
     ...initGateFailures(),
+    ready_core_evaluated: 0,
     ready_core_true: 0,
+    ready_core_first_failed: {},
+    ready_core_flag_true: {},
     ready_sweep_path_taken: 0,
     ready_no_sweep_path_taken: 0,
     ready_fallback_eligible: 0,
     ready_sweep_true: 0,
+    ready_shadow_if_reclaim_relaxed: 0,
   };
 }
 
@@ -405,11 +413,58 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (!ready.atr) gateStats.ready.failed_atr += 1;
           if (!ready.sweep) gateStats.ready.failed_sweep += 1;
           if (ready.core && !ready.btc) gateStats.ready.failed_btc_gate += 1;
+
+          gateStats.ready.ready_core_evaluated += 1;
           if (ready.core) gateStats.ready.ready_core_true += 1;
           if (ready.core && ready.sweep) gateStats.ready.ready_sweep_true += 1;
           if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_fallback_eligible += 1;
           if (ready.core && ready.sweep) gateStats.ready.ready_sweep_path_taken += 1;
           if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_no_sweep_path_taken += 1;
+
+          const coreFlags: Record<string, boolean> = {
+            sessionOK: Boolean(ready.sessionOk),
+            priceAboveVwap: Boolean(ready.priceAboveVwap),
+            priceAboveEma: Boolean(ready.priceAboveEma),
+            nearVwapReady: Boolean(ready.nearVwap),
+            reclaimOrTap: Boolean(ready.reclaimOrTap),
+            readyVolOk: Boolean(ready.volSpike),
+            atrOkReady: Boolean(ready.atr),
+            confirm15mOk: Boolean(ready.confirm15),
+            strongBody: Boolean(ready.strongBody),
+            rsiReadyOk: Boolean(ready.rsiReadyOk),
+            readyTrendOk: Boolean(ready.trend),
+          };
+
+          const coreOrder = [
+            'sessionOK',
+            'priceAboveVwap',
+            'priceAboveEma',
+            'nearVwapReady',
+            'reclaimOrTap',
+            'readyVolOk',
+            'atrOkReady',
+            'confirm15mOk',
+            'strongBody',
+            'rsiReadyOk',
+            'readyTrendOk',
+          ];
+
+          const firstFailed = coreOrder.find((k) => !coreFlags[k]);
+          if (firstFailed) {
+            gateStats.ready.ready_core_first_failed[firstFailed] =
+              (gateStats.ready.ready_core_first_failed[firstFailed] ?? 0) + 1;
+          }
+
+          for (const k of coreOrder) {
+            if (coreFlags[k]) {
+              gateStats.ready.ready_core_flag_true[k] =
+                (gateStats.ready.ready_core_flag_true[k] ?? 0) + 1;
+            }
+          }
+
+          const shadowRelaxReclaim = !coreFlags.reclaimOrTap
+            && coreOrder.filter(k => k !== 'reclaimOrTap').every((k) => coreFlags[k]);
+          if (shadowRelaxReclaim) gateStats.ready.ready_shadow_if_reclaim_relaxed += 1;
 
           if (!best.nearVwap) gateStats.best.failed_near_vwap += 1;
           if (!best.confirm15) gateStats.best.failed_confirm15 += 1;
