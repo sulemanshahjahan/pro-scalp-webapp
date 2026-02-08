@@ -57,8 +57,11 @@ type GateFailures = {
 };
 
 type ReadyGateFailures = GateFailures & {
+  ready_core_true: number;
   ready_sweep_path_taken: number;
   ready_no_sweep_path_taken: number;
+  ready_fallback_eligible: number;
+  ready_sweep_true: number;
 };
 
 type ScanGateStats = {
@@ -114,8 +117,11 @@ function initGateFailures(): GateFailures {
 function initReadyGateFailures(): ReadyGateFailures {
   return {
     ...initGateFailures(),
+    ready_core_true: 0,
     ready_sweep_path_taken: 0,
     ready_no_sweep_path_taken: 0,
+    ready_fallback_eligible: 0,
+    ready_sweep_true: 0,
   };
 }
 
@@ -399,6 +405,9 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (!ready.atr) gateStats.ready.failed_atr += 1;
           if (!ready.sweep) gateStats.ready.failed_sweep += 1;
           if (ready.core && !ready.btc) gateStats.ready.failed_btc_gate += 1;
+          if (ready.core) gateStats.ready.ready_core_true += 1;
+          if (ready.core && ready.sweep) gateStats.ready.ready_sweep_true += 1;
+          if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_fallback_eligible += 1;
           if (ready.core && ready.sweep) gateStats.ready.ready_sweep_path_taken += 1;
           if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_no_sweep_path_taken += 1;
 
