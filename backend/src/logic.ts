@@ -18,7 +18,10 @@ const RSI_READY_MAX = 78;
 const RSI_EARLY_MIN = 48;
 const RSI_EARLY_MAX = 80;
 const RSI_DELTA_STRICT = 0.2;
-const MIN_BODY_PCT = 0.15;   // candle body filter (%)
+const MIN_BODY_PCT = 0.15;   // candle body filter (%) for BEST
+const READY_BODY_PCT = 0.10; // READY body filter (%)
+const READY_CLOSE_POS_MIN = 0.60; // close in top 40% of candle range
+const READY_UPPER_WICK_MAX = 0.40; // upper wick <= 40% of range
 const MIN_ATR_PCT = 0.10;    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
 
@@ -320,10 +323,20 @@ export function analyzeSymbol(
   const bodyPct = (openNow && openNow > 0) ? (Math.abs((closes5[i] - openNow) / openNow) * 100) : 0;
   const bullish = openNow != null ? closes5[i] > openNow : false;
 
-  const strongBody =
+  const rangeNow = highs5[i] - lows5[i];
+  const closePos = rangeNow > 0 ? (closes5[i] - lows5[i]) / rangeNow : 0;
+  const upperWickPct = rangeNow > 0 ? (highs5[i] - closes5[i]) / rangeNow : 1;
+
+  const strongBodyBest =
     bullish &&
     bodyPct >= MIN_BODY_PCT &&
-    (highs5[i] - closes5[i]) <= (highs5[i] - lows5[i]) * 0.5;
+    upperWickPct <= 0.5;
+
+  const strongBodyReady =
+    bullish &&
+    bodyPct >= READY_BODY_PCT &&
+    closePos >= READY_CLOSE_POS_MIN &&
+    upperWickPct <= READY_UPPER_WICK_MAX;
 
   const confirm15mStrict = confirm15_strict(data15);
   const confirm15mSoft   = confirm15_soft(data15);
@@ -359,7 +372,7 @@ export function analyzeSymbol(
     price > vwap_i &&
     nearVwapBuy &&
     rsiBestOk &&
-    strongBody &&
+    strongBodyBest &&
     atrOkBest &&
     trendOk &&
     sessionOK &&
@@ -409,14 +422,14 @@ export function analyzeSymbol(
     readyVolOk &&
     atrOkReady &&
     confirm15mOk &&
-    strongBody &&
+    strongBodyReady &&
     readyTrendOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
     (!btcBear && confirm15mStrict) ||
     // Allow READY during BTC bear only if symbol is exceptionally strong
-    (btcBear && confirm15mStrict && trendOk && strongBody && readyVolOk)
+    (btcBear && confirm15mStrict && trendOk && strongBodyReady && readyVolOk)
   );
   const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = liq.ok || readySweepFallbackOk;
@@ -443,7 +456,7 @@ export function analyzeSymbol(
     { key: 'readyVolOk', ok: readyVolOk, reason: 'Volume spike not met' },
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: confirm15mOk, reason: '15m confirmation not satisfied' },
-    { key: 'strongBody', ok: strongBody, reason: 'No strong bullish body candle' },
+    { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
     { key: 'trendOk', ok: readyTrendOk, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
     { key: 'readySweep', ok: readySweepOk, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
@@ -636,7 +649,7 @@ export function analyzeSymbol(
     { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
     { key: 'nearVwapBuy', ok: nearVwapBuy, reason: 'Too far from VWAP (extended)' },
     { key: 'rsiBestOk', ok: rsiBestOk, reason: `RSI not in ${RSI_BEST_MIN}–${RSI_BEST_MAX} rising window` },
-    { key: 'strongBody', ok: strongBody, reason: 'No strong bullish body candle' },
+    { key: 'strongBody', ok: strongBodyBest, reason: 'No strong bullish body candle' },
     { key: 'atrOkBest', ok: atrOkBest, reason: 'ATR too high' },
     { key: 'trendOk', ok: trendOk, reason: 'Trend not OK (EMA50>EMA200 + both rising)' },
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
@@ -663,7 +676,7 @@ export function analyzeSymbol(
       atr: atrOkReady,
       sweep: liq.ok,
       sweepFallback: readySweepFallbackOk,
-      strongBody,
+      strongBody: strongBodyReady,
       reclaimOrTap: reclaimOk,
       rsiReadyOk,
       hasMarket,
