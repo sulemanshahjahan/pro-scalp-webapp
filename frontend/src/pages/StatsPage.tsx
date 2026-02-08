@@ -361,8 +361,14 @@ export default function StatsPage() {
   const summaryTotals = summary?.totals ?? [];
   const outcomeStats = summary?.outcomes;
   const totalSignals = summaryTotals.reduce((acc: number, r: any) => acc + (Number(r?.n) || 0), 0);
-  const totalOutcomes = (outcomeStats?.completeN ?? 0) + (outcomeStats?.partialN ?? 0) + (outcomeStats?.invalidN ?? 0);
-  const completePct = totalOutcomes ? ((outcomeStats?.completeN ?? 0) / totalOutcomes) : 0;
+  const completeN = Number(outcomeStats?.completeN) || 0;
+  const partialN = Number(outcomeStats?.partialN) || 0;
+  const invalidN = Number(outcomeStats?.invalidN) || 0;
+  const winN = Number(outcomeStats?.winN) || 0;
+  const lossN = Number(outcomeStats?.lossN) || 0;
+  const noneN = Number(outcomeStats?.noneN) || 0;
+  const totalOutcomes = completeN + partialN + invalidN;
+  const completePct = totalOutcomes ? (completeN / totalOutcomes) : 0;
   const currentResolveVersion = summary?.currentResolveVersion ?? null;
 
   const btcMarket = health?.btc?.market ?? null;
@@ -483,8 +489,8 @@ export default function StatsPage() {
       <section className="grid grid-cols-1 lg:grid-cols-6 gap-3 fade-up">
         <div className="lg:col-span-4 grid grid-cols-2 md:grid-cols-3 gap-3">
           <KpiCard label="Total Signals" value={totalSignals} sub="All categories" />
-          <KpiCard label="Complete %" value={fmtRate(completePct, 1)} sub={`${outcomeStats?.completeN ?? 0}/${totalOutcomes}`} />
-          <KpiCard label="Win / Loss / No Hit" value={`${outcomeStats?.winN ?? 0} / ${outcomeStats?.lossN ?? 0} / ${outcomeStats?.noneN ?? 0}`} sub="Complete only" />
+          <KpiCard label="Complete %" value={fmtRate(completePct, 1)} sub={`${completeN}/${totalOutcomes}`} />
+          <KpiCard label="Win / Loss / No Hit" value={`${winN} / ${lossN} / ${noneN}`} sub="Complete only" />
           <KpiCard label="Net R (Risk)" value={fmt(outcomeStats?.netR, 2)} sub={`Avg ${fmt(outcomeStats?.avgR, 2)} - Median ${fmt(outcomeStats?.medianR, 2)}`} />
           <KpiCard label="Median Time to TP1" value={fmtMs(outcomeStats?.medianTimeToTp1Ms)} sub={`Horizon ${horizon}m`} />
           <KpiCard label="Avg Max Up / Down" value={`${fmt(outcomeStats?.avgMfePct, 2)}% / ${fmt(outcomeStats?.avgMaePct, 2)}%`} sub="Complete only" />
