@@ -11,18 +11,18 @@ export interface Thresholds {
 /** =================== Tunables & Env =================== */
 const RSI_MIN = 55;          // 15m strict confirm floor
 const RSI_MAX = 80;          // cap to avoid chasing overbought
-const RSI_BEST_MIN = 55;
-const RSI_BEST_MAX = 72;
-const RSI_READY_MIN = 52;
-const RSI_READY_MAX = 78;
-const RSI_EARLY_MIN = 48;
-const RSI_EARLY_MAX = 80;
-const RSI_DELTA_STRICT = 0.2;
-const MIN_BODY_PCT = 0.15;   // candle body filter (%) for BEST
-const READY_BODY_PCT = 0.10; // READY body filter (%)
-const READY_CLOSE_POS_MIN = 0.60; // close in top 40% of candle range
-const READY_UPPER_WICK_MAX = 0.40; // upper wick <= 40% of range
-const MIN_ATR_PCT = 0.10;    // skip when 5m ATR% < 0.10% (too dead)
+const RSI_BEST_MIN = parseFloat(process.env.RSI_BEST_MIN || '55');
+const RSI_BEST_MAX = parseFloat(process.env.RSI_BEST_MAX || '72');
+const RSI_READY_MIN = parseFloat(process.env.RSI_READY_MIN || '52');
+const RSI_READY_MAX = parseFloat(process.env.RSI_READY_MAX || '78');
+const RSI_EARLY_MIN = parseFloat(process.env.RSI_EARLY_MIN || '48');
+const RSI_EARLY_MAX = parseFloat(process.env.RSI_EARLY_MAX || '80');
+const RSI_DELTA_STRICT = parseFloat(process.env.RSI_DELTA_STRICT || '0.2');
+const MIN_BODY_PCT = parseFloat(process.env.MIN_BODY_PCT || '0.15');   // candle body filter (%) for BEST
+const READY_BODY_PCT = parseFloat(process.env.READY_BODY_PCT || '0.10'); // READY body filter (%)
+const READY_CLOSE_POS_MIN = parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'); // close in top 40% of candle range
+const READY_UPPER_WICK_MAX = parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'); // upper wick <= 40% of range
+const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
 
 const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
@@ -309,9 +309,10 @@ function analyzeSymbolInternal(
 
   // BUY window = preset threshold (e.g. 0.30%)
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
-  const readyVwapMax = thresholds.vwapDistancePct;
-  const READY_VWAP_TOUCH_PCT = 0.20;
-  const READY_VWAP_TOUCH_BARS = 5;
+  const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
+  const readyVwapMax = Number.isFinite(READY_VWAP_MAX_PCT) ? READY_VWAP_MAX_PCT : thresholds.vwapDistancePct;
+  const READY_VWAP_TOUCH_PCT = parseFloat(process.env.READY_VWAP_TOUCH_PCT || '0.20');
+  const READY_VWAP_TOUCH_BARS = parseInt(process.env.READY_VWAP_TOUCH_BARS || '5', 10);
   const touchStart = Math.max(0, i - READY_VWAP_TOUCH_BARS + 1);
   const touchedVwapRecently = lows5
     .slice(touchStart, i + 1)
@@ -369,7 +370,7 @@ function analyzeSymbolInternal(
   const confirm15mSoft   = confirm15_soft(data15);
   const confirm15mOk = confirm15mStrict || confirm15mSoft;
 
-  const READY_VWAP_EPS_PCT = 0.02;
+  const READY_VWAP_EPS_PCT = parseFloat(process.env.READY_VWAP_EPS_PCT || '0.02');
   const priceAboveVwapStrict = price > vwap_i;
   const readyPriceAboveVwap = priceAboveVwapStrict || (
     nearVwapReady &&
