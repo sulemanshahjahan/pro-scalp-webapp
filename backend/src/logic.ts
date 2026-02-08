@@ -683,6 +683,7 @@ export function analyzeSymbol(
       priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
+      confirm15Strict: confirm15mStrict,
       trend: readyTrendOk,
       volSpike: readyVolOk,
       atr: atrOkReady,

@@ -78,6 +78,7 @@ export interface Signal {
       priceAboveEma?: boolean;
       nearVwap: boolean;
       confirm15: boolean;
+      confirm15Strict?: boolean;
       trend: boolean;
       volSpike: boolean;
       atr: boolean;
