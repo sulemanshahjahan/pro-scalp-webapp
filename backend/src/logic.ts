@@ -284,7 +284,7 @@ export function analyzeSymbol(
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
   const readyVwapMax = thresholds.vwapDistancePct;
   const READY_VWAP_TOUCH_PCT = 0.20;
-  const READY_VWAP_TOUCH_BARS = 3;
+  const READY_VWAP_TOUCH_BARS = 5;
   const touchStart = Math.max(0, i - READY_VWAP_TOUCH_BARS + 1);
   const touchedVwapRecently = lows5
     .slice(touchStart, i + 1)

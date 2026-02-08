@@ -67,6 +67,9 @@ type ReadyGateFailures = GateFailures & {
   ready_sweep_true: number;
   ready_shadow_if_reclaim_relaxed: number;
   ready_shadow_if_volSpike_1_2: number;
+  ready_confirm15_strict_true: number;
+  ready_priceAboveVwap_relaxed_eligible: number;
+  ready_priceAboveVwap_relaxed_true: number;
 };
 
 type ScanGateStats = {
@@ -136,6 +139,9 @@ function initReadyGateFailures(): ReadyGateFailures {
     ready_sweep_true: 0,
     ready_shadow_if_reclaim_relaxed: 0,
     ready_shadow_if_volSpike_1_2: 0,
+    ready_confirm15_strict_true: 0,
+    ready_priceAboveVwap_relaxed_eligible: 0,
+    ready_priceAboveVwap_relaxed_true: 0,
   };
 }
 
@@ -440,6 +446,12 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
             rsiReadyOk: Boolean(ready.rsiReadyOk),
             readyTrendOk: Boolean(ready.trend),
           };
+
+          if (ready.confirm15Strict) gateStats.ready.ready_confirm15_strict_true += 1;
+          if (ready.nearVwap && ready.confirm15Strict) {
+            gateStats.ready.ready_priceAboveVwap_relaxed_eligible += 1;
+            if (ready.priceAboveVwap) gateStats.ready.ready_priceAboveVwap_relaxed_true += 1;
+          }
 
           const coreOrder = [
             'sessionOK',
