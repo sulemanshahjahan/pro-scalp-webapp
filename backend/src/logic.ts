@@ -29,6 +29,7 @@ const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
 const VWAP_WATCH_MIN_PCT = 0.80;   // WATCH near-VWAP minimum window
 const EMA5_WATCH_SOFT_TOL = 0.25;  // allow up to 0.25% below EMA200 on WATCH
 const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
+const READY_VWAP_MIN_PCT = 0.55;   // READY can be a bit wider than preset
 
 const LIQ_LOOKBACK = parseInt(process.env.LIQ_LOOKBACK || '20', 10);
 const RR_MIN_BEST  = parseFloat(process.env.RR_MIN_BEST || '2.0');
@@ -279,6 +280,8 @@ export function analyzeSymbol(
 
   // BUY window = preset threshold (e.g. 0.30%)
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
+  const readyVwapMax = Math.max(thresholds.vwapDistancePct, READY_VWAP_MIN_PCT);
+  const nearVwapReady = Math.abs(distToVwapPct) <= readyVwapMax;
 
   // WATCH window = max(preset, 0.80%) so you actually see setups
   const nearVwapWatch = Math.abs(distToVwapPct) <= Math.max(thresholds.vwapDistancePct, VWAP_WATCH_MIN_PCT);
@@ -381,23 +384,24 @@ export function analyzeSymbol(
   }
 
   /** ===================== READY TO BUY ===================== */
-  const readyVolOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
+  const readyVolOk = volSpikeNow >= Math.max(1.1, thresholds.volSpikeX * 0.8);
+  const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyCore =
     sessionOK &&
     price > vwap_i &&
     priceAboveEma &&
     rsiReadyOk &&
-    nearVwapBuy &&
+    nearVwapReady &&
     (reclaim || tappedVwapPrev) &&
     readyVolOk &&
     atrOkReady &&
     confirm15mOk &&
     strongBody &&
-    trendOk;
+    readyTrendOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
-    (!btcBear && confirm15mStrict) ||
+    (!btcBear && confirm15mOk) ||
     // Allow READY during BTC bear only if symbol is exceptionally strong
     (btcBear && confirm15mStrict && trendOk && strongBody && readyVolOk)
   );
@@ -408,7 +412,7 @@ export function analyzeSymbol(
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
     { key: 'price>VWAP', ok: price > vwap_i, reason: 'Price not above VWAP' },
     { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
-    { key: 'nearVwapBuy', ok: nearVwapBuy, reason: 'Too far from VWAP (extended)' },
+    { key: 'nearVwapReady', ok: nearVwapReady, reason: `Too far from VWAP (>${readyVwapMax.toFixed(2)}%)` },
     { key: 'rsiReadyOk', ok: rsiReadyOk, reason: `RSI not in ${RSI_READY_MIN}–${RSI_READY_MAX} rising window` },
     {
       key: 'reclaimOrTap',
@@ -419,7 +423,7 @@ export function analyzeSymbol(
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: confirm15mOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBody, reason: 'No strong bullish body candle' },
-    { key: 'trendOk', ok: trendOk, reason: 'Trend not OK (EMA50>EMA200 + both rising)' },
+    { key: 'trendOk', ok: readyTrendOk, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
     {
       key: 'btcOkReady',
@@ -445,7 +449,7 @@ export function analyzeSymbol(
       reasons.push(
         'Price > (anchored) VWAP & EMA200',
         `RSI-9 rising (${RSI_READY_MIN}–${RSI_READY_MAX})`,
-        `Near VWAP (≤${thresholds.vwapDistancePct.toFixed(2)}%)`,
+        `Near VWAP (≤${readyVwapMax.toFixed(2)}%)`,
         (reclaim ? 'VWAP reclaim' : 'VWAP tap & hold'),
         'Trend up (EMA50 > EMA200)',
         'Strong-bodied close',
@@ -627,9 +631,9 @@ export function analyzeSymbol(
   const cleanedReasons = reasons.filter(Boolean);
   const gateSnapshot = {
     ready: {
-      nearVwap: nearVwapBuy,
+      nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
-      trend: trendOk,
+      trend: readyTrendOk,
       volSpike: readyVolOk,
       atr: atrOkReady,
       sweep: liq.ok,
