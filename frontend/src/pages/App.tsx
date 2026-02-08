@@ -65,6 +65,7 @@ export default function App() {
   const [btcMarket, setBtcMarket] = useState<any | null>(null);
   const [btcAt, setBtcAt] = useState(0);
   const [health, setHealth] = useState<any | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
 
   // ✅ Prevent overlapping scans from UI
   const scanInFlight = useRef(false);
@@ -155,6 +156,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
     const onUnlocked = () => setSoundOn(true);
     window.addEventListener('sound-unlocked', onUnlocked as EventListener);
     return () => window.removeEventListener('sound-unlocked', onUnlocked as EventListener);
@@ -179,6 +185,28 @@ export default function App() {
   }, []);
 
   const [totals, setTotals] = useState({ watch: 0, early_ready: 0, ready: 0, best: 0 });
+
+  const scanState = health?.scan?.state ?? 'IDLE';
+  const scanMeta = health?.scan?.meta ?? null;
+  const scanCurrent = health?.scan?.current ?? null;
+  const scanLast = health?.scan?.last ?? null;
+  const scanIntervalMs = Number(scanMeta?.intervalMs) || 240_000;
+  const scanMaxMs = Number(scanMeta?.maxScanMs) || 4 * 60_000;
+  const scanNextAt = Number(health?.scan?.nextScanAt) || null;
+  const scanProgress = (() => {
+    if (scanState === 'RUNNING' && scanCurrent?.startedAt) {
+      const elapsed = Math.max(0, nowTs - Number(scanCurrent.startedAt));
+      return Math.max(0, Math.min(0.99, elapsed / scanMaxMs));
+    }
+    if (scanState === 'COOLDOWN' && scanNextAt) {
+      const remaining = Math.max(0, scanNextAt - nowTs);
+      return Math.max(0, Math.min(1, 1 - (remaining / scanIntervalMs)));
+    }
+    if (scanLast?.finishedAt) return 1;
+    return 0;
+  })();
+  const scanPct = Math.round(scanProgress * 100);
+  const gateStats = scanLast?.gateStats ?? health?.scan?.gateStats ?? null;
 
   function topGateFailures(gateStats: any, kind: 'ready' | 'best') {
     if (!gateStats?.[kind]) return [];
@@ -335,6 +363,18 @@ export default function App() {
 
           <div className="text-xs text-white/70 text-right">
             Last scan: {lastScanAt ? new Date(lastScanAt).toLocaleTimeString() : '—'}
+            <div className="mt-1">
+              <div className="flex items-center justify-end gap-2 text-[10px] text-white/60">
+                <span>Scan {String(scanState).toLowerCase()}</span>
+                <span>{scanPct}%</span>
+              </div>
+              <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  className={'h-1.5 ' + (scanState === 'RUNNING' ? 'bg-cyan-400/70' : scanState === 'COOLDOWN' ? 'bg-amber-400/70' : 'bg-emerald-400/70')}
+                  style={{ width: scanPct + '%' }}
+                />
+              </div>
+            </div>
             <br/>
             <span className="text-white/80">
               Watch: {totals.watch} | Early: {totals.early_ready} | Ready: {totals.ready} | Best: {totals.best}
@@ -359,17 +399,17 @@ export default function App() {
           <div className="mt-2 text-xs text-white/70">
             <div className="text-white/60">No Ready/Best yet — top reasons (last scan):</div>
             <div className="mt-1 flex flex-wrap gap-2">
-              {topGateFailures(health?.scan?.gateStats, 'ready').map((g) => (
+              {topGateFailures(gateStats, 'ready').map((g) => (
                 <span key={`ready-${g.label}`} className="px-2 py-0.5 rounded-lg border border-white/10 bg-white/5">
                   Ready: {g.label} ({g.n})
                 </span>
               ))}
-              {topGateFailures(health?.scan?.gateStats, 'best').map((g) => (
+              {topGateFailures(gateStats, 'best').map((g) => (
                 <span key={`best-${g.label}`} className="px-2 py-0.5 rounded-lg border border-white/10 bg-white/5">
                   Best: {g.label} ({g.n})
                 </span>
               ))}
-              {(!health?.scan?.gateStats || (!topGateFailures(health?.scan?.gateStats, 'ready').length && !topGateFailures(health?.scan?.gateStats, 'best').length)) ? (
+              {(!gateStats || (!topGateFailures(gateStats, 'ready').length && !topGateFailures(gateStats, 'best').length)) ? (
                 <span className="text-white/50">Waiting for scan stats…</span>
               ) : null}
             </div>

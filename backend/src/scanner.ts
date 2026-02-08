@@ -105,6 +105,10 @@ export function getScanIntervalMs() {
   return SCAN_INTERVAL_MS;
 }
 
+export function getMaxScanMs() {
+  return MAX_SCAN_MS;
+}
+
 function initGateFailures(): GateFailures {
   return {
     failed_btc_gate: 0,

@@ -133,6 +133,7 @@ export default function StatsPage() {
   const [buckets, setBuckets] = useState<any | null>(null);
   const [invalids, setInvalids] = useState<any | null>(null);
   const [health, setHealth] = useState<any | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
   const [loadingTop, setLoadingTop] = useState(false);
   const [readyGate, setReadyGate] = useState<any | null>(null);
   const [readyGateLoading, setReadyGateLoading] = useState(false);
@@ -354,6 +355,10 @@ export default function StatsPage() {
     return () => clearInterval(t);
   }, []);
   useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
     if (!selectedId) { setSelected(null); return; }
     fetchSignal(selectedId).then(setSelected).catch(() => setSelected(null));
   }, [selectedId]);
@@ -376,6 +381,25 @@ export default function StatsPage() {
   const btcAgeMin = btcAt ? (Date.now() - btcAt) / 60000 : NaN;
   const btcStale = Number.isFinite(btcAgeMin) && btcAgeMin > 20;
   const scanLast = health?.scan?.last ?? health?.scan ?? null;
+  const scanState = health?.scan?.state ?? 'IDLE';
+  const scanMeta = health?.scan?.meta ?? null;
+  const scanCurrent = health?.scan?.current ?? null;
+  const scanIntervalMs = Number(scanMeta?.intervalMs) || 240_000;
+  const scanMaxMs = Number(scanMeta?.maxScanMs) || 4 * 60_000;
+  const scanNextAt = Number(health?.scan?.nextScanAt) || null;
+  const scanProgress = (() => {
+    if (scanState === 'RUNNING' && scanCurrent?.startedAt) {
+      const elapsed = Math.max(0, nowTs - Number(scanCurrent.startedAt));
+      return Math.max(0, Math.min(0.99, elapsed / scanMaxMs));
+    }
+    if (scanState === 'COOLDOWN' && scanNextAt) {
+      const remaining = Math.max(0, scanNextAt - nowTs);
+      return Math.max(0, Math.min(1, 1 - (remaining / scanIntervalMs)));
+    }
+    if (scanLast?.finishedAt) return 1;
+    return 0;
+  })();
+  const scanPct = Math.round(scanProgress * 100);
 
   const matrixMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -613,6 +637,18 @@ export default function StatsPage() {
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 fade-up">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
           <div className="text-xs text-white/60 uppercase tracking-widest">System Health</div>
+          <div className="mt-2">
+            <div className="flex items-center justify-between text-[10px] text-white/60">
+              <span>Scan {String(scanState).toLowerCase()}</span>
+              <span>{scanPct}%</span>
+            </div>
+            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div
+                className={'h-1.5 ' + (scanState === 'RUNNING' ? 'bg-cyan-400/70' : scanState === 'COOLDOWN' ? 'bg-amber-400/70' : 'bg-emerald-400/70')}
+                style={{ width: scanPct + '%' }}
+              />
+            </div>
+          </div>
           <div className="mt-2 text-xs text-white/70 space-y-1">
             <div>Last scan: {scanLast?.finishedAt ? dt(scanLast.finishedAt) : '--'}</div>
             <div>Scan duration: {scanLast?.durationMs ? fmtMs(scanLast.durationMs) : '--'}</div>

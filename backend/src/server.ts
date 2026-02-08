@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
-import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, startLoop, scanOnce, type Preset } from './scanner.js';
+import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, type Preset } from './scanner.js';
 import { getLatestScanRuns } from './scanStore.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
@@ -133,6 +133,10 @@ app.get('/api/system/health', async (req, res) => {
     const scan = {
       state: scanState,
       nextScanAt,
+      meta: {
+        intervalMs: scanIntervalMs,
+        maxScanMs: getMaxScanMs(),
+      },
       last: scanLast,
       current: lastRunning ?? null,
     };
