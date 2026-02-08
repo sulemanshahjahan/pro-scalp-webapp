@@ -4,7 +4,8 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
-import { getLastBtcMarket, getLastScanHealth, startLoop, scanOnce, type Preset } from './scanner.js';
+import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, startLoop, scanOnce, type Preset } from './scanner.js';
+import { getLatestScanRuns } from './scanStore.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
@@ -35,6 +36,14 @@ import { DB_PATH } from './dbPath.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const serverStartedAt = Date.now();
+const buildGitSha =
+  process.env.GIT_SHA ||
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.RENDER_GIT_COMMIT ||
+  '';
+const buildStartedAt = Number(process.env.BUILD_STARTED_AT) || serverStartedAt;
 
 const app = express();
 const corsOrigins = (process.env.CORS_ORIGINS || '*')
@@ -108,7 +117,23 @@ app.get('/api/system/health', async (req, res) => {
   try {
     const days = Number((req.query as any)?.days);
     const safeDays = Number.isFinite(days) ? Math.max(1, Math.min(365, days)) : 7;
-    const scan = getLastScanHealth();
+    const { lastFinished, lastRunning } = await getLatestScanRuns();
+    const legacyScan = lastFinished ?? getLastScanHealth();
+    const scanIntervalMs = getScanIntervalMs();
+    let scanState: 'IDLE' | 'RUNNING' | 'COOLDOWN' = 'IDLE';
+    let nextScanAt: number | null = null;
+    if (lastRunning && lastRunning.status === 'RUNNING') {
+      scanState = 'RUNNING';
+    } else if (legacyScan?.finishedAt) {
+      const next = Number(legacyScan.finishedAt) + scanIntervalMs;
+      nextScanAt = next;
+      if (Date.now() < next) scanState = 'COOLDOWN';
+    }
+    const scan: any = legacyScan ? { ...legacyScan } : {};
+    scan.state = scanState;
+    scan.nextScanAt = nextScanAt;
+    scan.last = lastFinished ?? null;
+    scan.current = lastRunning ?? null;
     const { market, at } = getLastBtcMarket();
     const outcomes = getOutcomesHealth();
     const backlog = await getOutcomesBacklogCount({ days: safeDays });
@@ -116,6 +141,10 @@ app.get('/api/system/health', async (req, res) => {
       ok: true,
       days: safeDays,
       categoriesLogged: getLoggedCategories(),
+      build: {
+        gitSha: buildGitSha || null,
+        startedAt: buildStartedAt,
+      },
       scan,
       btc: { market, at },
       outcomes: {

@@ -1,4 +1,5 @@
-﻿import { topUSDTByQuoteVolume, listAllUSDTMarkets, klines } from './binance.js';
+import { topUSDTByQuoteVolume, listAllUSDTMarkets, klines } from './binance.js';
+import { startScanRun, finishScanRun, failScanRun, pruneScanRuns } from './scanStore.js';
 import { analyzeSymbol } from './logic.js';
 import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
@@ -78,9 +79,18 @@ type ScanHealth = {
 };
 
 let lastScanHealth: ScanHealth | null = null;
+let currentScan: { runId: string; preset: Preset; startedAt: number } | null = null;
 let lastSymbols: string[] | null = null;
 export function getLastScanHealth() {
   return lastScanHealth;
+}
+
+export function getCurrentScan() {
+  return currentScan;
+}
+
+export function getScanIntervalMs() {
+  return SCAN_INTERVAL_MS;
 }
 
 function initGateFailures(): GateFailures {
@@ -227,6 +237,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   const t0 = Date.now();
   const thresholds = thresholdsForPreset(preset);
   const now = Date.now();
+  const scanRun = await startScanRun(preset);
+  currentScan = scanRun;
 
   const signalsByCategory: Record<string, number> = {
     WATCH: 0,
@@ -235,6 +247,12 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     BEST_ENTRY: 0,
   };
   const gateStats = initGateStats();
+  let processed = 0;
+  let precheckPassed = 0;
+  let fetchedOk = 0;
+  let err429 = 0;
+  let errOther = 0;
+  let errorMessage: string | null = null;
 
   let symbols: string[] = [];
   try {
@@ -253,22 +271,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       console.warn('[scan] using cached symbols list after fetch failure');
       symbols = lastSymbols;
     } else {
-      const dtMs = Date.now() - t0;
-      lastScanHealth = {
-        preset,
-        startedAt: t0,
-        finishedAt: Date.now(),
-        durationMs: dtMs,
-        processedSymbols: 0,
-        precheckPassed: 0,
-        fetchedOk: 0,
-        errors429: 0,
-        errorsOther: 1,
-        signalsByCategory,
-        gateStats,
-        error: `top symbols failed: ${msg}`,
-      };
-      return [];
+      errorMessage = `top symbols failed: ${msg}`;
+      errOther += 1;
     }
   }
 
@@ -296,14 +300,10 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     console.warn('[scan] btc regime fetch failed:', e);
   }
 
-  let processed = 0;
-  let precheckPassed = 0;
-  let fetchedOk = 0;
-  let err429 = 0;
-  let errOther = 0;
   let adaptiveDelayMs = SYMBOL_DELAY_MS;
   let no429Streak = 0;
-  for (const sym of symbols) {
+  const shouldAbort = Boolean(errorMessage && symbols.length === 0);
+  for (const sym of (shouldAbort ? [] : symbols)) {
     if (isStableVsStable(sym)) continue;
     if (LEVERAGED_SUFFIXES.test(sym)) continue;
 
@@ -470,7 +470,28 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     errorsOther: errOther,
     signalsByCategory,
     gateStats,
+    ...(errorMessage ? { error: errorMessage } : {}),
   };
+
+  const finishedAt = Date.now();
+  const payload = {
+    finishedAt,
+    durationMs: finishedAt - t0,
+    processedSymbols: processed,
+    precheckPassed,
+    fetchedOk,
+    errors429: err429,
+    errorsOther: errOther,
+    signalsByCategory,
+    gateStats,
+  };
+  if (errorMessage) {
+    await failScanRun(scanRun.runId, errorMessage, payload);
+  } else {
+    await finishScanRun(scanRun.runId, payload);
+  }
+  await pruneScanRuns();
+  currentScan = null;
 
   return outs;
 }

@@ -161,6 +161,28 @@ CREATE TABLE IF NOT EXISTS outcome_skips (
   FOREIGN KEY(signal_id) REFERENCES signals(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS scan_runs (
+  id BIGSERIAL PRIMARY KEY,
+  run_id TEXT NOT NULL UNIQUE,
+  preset TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT,
+  duration_ms BIGINT,
+  processed_symbols INTEGER,
+  precheck_passed INTEGER,
+  fetched_ok INTEGER,
+  errors_429 INTEGER,
+  errors_other INTEGER,
+  signals_by_category_json TEXT,
+  gate_stats_json TEXT,
+  error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+
 CREATE INDEX IF NOT EXISTS idx_signals_time ON signals(time);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
