@@ -137,6 +137,9 @@ export default function StatsPage() {
   const [loadingTop, setLoadingTop] = useState(false);
   const [readyGate, setReadyGate] = useState<any | null>(null);
   const [readyGateLoading, setReadyGateLoading] = useState(false);
+  const [scanRuns, setScanRuns] = useState<any[]>([]);
+  const [scanRunsLoading, setScanRunsLoading] = useState(false);
+  const [scanRunsLimit, setScanRunsLimit] = useState(25);
 
   const [outcomes, setOutcomes] = useState<any | null>(null);
   const [outcomesLoading, setOutcomesLoading] = useState(false);
@@ -284,6 +287,16 @@ export default function StatsPage() {
     if (resp?.ok) setHealth(resp);
   }
 
+  async function loadScanRuns() {
+    setScanRunsLoading(true);
+    try {
+      const resp = await fetch(API(`/api/scanRuns?limit=${scanRunsLimit}`)).then(r => r.json());
+      if (resp?.ok) setScanRuns(resp.rows ?? []);
+    } finally {
+      setScanRunsLoading(false);
+    }
+  }
+
   async function loadReadyGateDebug() {
     setReadyGateLoading(true);
     try {
@@ -351,9 +364,14 @@ export default function StatsPage() {
   useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, windowStatus, resultFilter, invalidReasonFilter, page, limit, sort]);
   useEffect(() => {
     loadHealth().catch(() => {});
-    const t = setInterval(() => loadHealth().catch(() => {}), 60_000);
+    loadScanRuns().catch(() => {});
+    const t = setInterval(() => {
+      loadHealth().catch(() => {});
+      loadScanRuns().catch(() => {});
+    }, 60_000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => { loadScanRuns().catch(() => {}); }, [scanRunsLimit]);
   useEffect(() => {
     const t = setInterval(() => setNowTs(Date.now()), 1_000);
     return () => clearInterval(t);
@@ -733,6 +751,38 @@ export default function StatsPage() {
           ) : (
             <div className="mt-2 text-xs text-white/50">Load to see last 50 signals with failed gates.</div>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-3 fade-up">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs text-white/60 uppercase tracking-widest">Scan History (DB)</div>
+          <div className="flex items-center gap-2 text-xs">
+            <select
+              className="px-2 py-1 rounded bg-white/10 border border-white/10"
+              value={scanRunsLimit}
+              onChange={(e) => setScanRunsLimit(Number(e.target.value))}
+            >
+              {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n} rows</option>)}
+            </select>
+            <button
+              onClick={loadScanRuns}
+              disabled={scanRunsLoading}
+              className="px-2 py-1 rounded bg-white/10 border border-white/10 disabled:opacity-50"
+            >
+              {scanRunsLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+        <div className="mt-2 max-h-[280px] overflow-auto pr-1 text-[11px] text-white/80 font-mono space-y-2">
+          {scanRuns.map((row) => (
+            <div key={row.id} className="rounded-lg border border-white/10 bg-white/5 p-2 whitespace-pre-wrap">
+              {JSON.stringify(row)}
+            </div>
+          ))}
+          {!scanRuns.length && !scanRunsLoading ? (
+            <div className="text-white/50">No scan runs yet.</div>
+          ) : null}
         </div>
       </section>
 

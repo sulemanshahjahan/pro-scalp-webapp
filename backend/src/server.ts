@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
 import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, type Preset } from './scanner.js';
-import { getLatestScanRuns } from './scanStore.js';
+import { getLatestScanRuns, listScanRuns } from './scanStore.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
@@ -158,6 +158,18 @@ app.get('/api/system/health', async (req, res) => {
         backlog,
       },
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Scan runs (history)
+app.get('/api/scanRuns', async (req, res) => {
+  try {
+    const limitRaw = Number((req.query as any)?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    const rows = await listScanRuns(limit);
+    res.json({ ok: true, limit, rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
