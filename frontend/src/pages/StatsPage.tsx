@@ -384,6 +384,9 @@ export default function StatsPage() {
     return map;
   }, [matrix]);
 
+  const signalsPerHour = summary?.signalsPerHour ?? [];
+  const maxSignalsPerHour = Math.max(1, ...signalsPerHour.map((x: any) => Number(x?.n) || 0));
+
   const outcomesRows = outcomes?.rows ?? [];
   const totalPages = outcomes?.total ? Math.ceil(outcomes.total / limit) : 1;
 
@@ -498,23 +501,27 @@ export default function StatsPage() {
         <div className="lg:col-span-2 rounded-2xl border border-white/10 bg-white/5 p-3">
           <div className="text-xs text-white/60 uppercase tracking-widest">Signals Per Hour</div>
           <div className="mt-3 space-y-2">
-            {(summary?.signalsPerHour ?? []).slice(-12).map((h: any) => (
-              <div key={h.hourStart} className="flex items-center gap-3 text-xs">
-                <div className="w-16 text-white/60">
-                  {Number.isFinite(num(h.hourStart))
-                    ? new Date(num(h.hourStart)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                    : '--'}
+            {signalsPerHour.slice(-12).map((h: any) => {
+              const hourStart = num(h?.hourStart);
+              const hourLabel = Number.isFinite(hourStart)
+                ? new Date(hourStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '--';
+              const count = Number(h?.n) || 0;
+              const widthPct = Math.min(100, (count / maxSignalsPerHour) * 100);
+              return (
+                <div key={h.hourStart} className="flex items-center gap-3 text-xs">
+                  <div className="w-16 text-white/60">{hourLabel}</div>
+                  <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                    <div
+                      className="h-2 bg-cyan-400/60"
+                      style={{ width: `${widthPct}%` }}
+                    />
+                  </div>
+                  <div className="w-10 text-right text-white/70">{count}</div>
                 </div>
-                <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                  <div
-                    className="h-2 bg-cyan-400/60"
-                    style={{ width: `${Math.min(100, (h.n / Math.max(1, Math.max(...(summary?.signalsPerHour ?? []).map((x: any) => x.n)))) * 100)}%` }}
-                  />
-                </div>
-                <div className="w-10 text-right text-white/70">{h.n}</div>
-              </div>
-            ))}
-            {!(summary?.signalsPerHour ?? []).length ? (
+              );
+            })}
+            {!signalsPerHour.length ? (
               <div className="text-xs text-white/50">No signal history for this range.</div>
             ) : null}
           </div>
