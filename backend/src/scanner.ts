@@ -427,8 +427,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (!ready.trend) gateStats.ready.failed_trend += 1;
           if (!ready.volSpike) gateStats.ready.failed_volSpike += 1;
           if (!ready.atr) gateStats.ready.failed_atr += 1;
-          if (!ready.sweep) gateStats.ready.failed_sweep += 1;
-          if (ready.core && !ready.btc) gateStats.ready.failed_btc_gate += 1;
+          if (ready.core && !ready.sweep) gateStats.ready.failed_sweep += 1;
+          if (ready.core && ready.sweep && !ready.btc) gateStats.ready.failed_btc_gate += 1;
 
           gateStats.ready.ready_core_evaluated += 1;
           if (ready.core) gateStats.ready.ready_core_true += 1;
@@ -500,8 +500,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (!best.trend) gateStats.best.failed_trend += 1;
           if (!best.volSpike) gateStats.best.failed_volSpike += 1;
           if (!best.atr) gateStats.best.failed_atr += 1;
-          if (!best.sweep) gateStats.best.failed_sweep += 1;
-          if (!best.rr) gateStats.best.failed_rr += 1;
+          if (best.corePreSweep && !best.sweep) gateStats.best.failed_sweep += 1;
+          if (best.corePreRr && !best.rr) gateStats.best.failed_rr += 1;
           if (best.core && !best.btc) gateStats.best.failed_btc_gate += 1;
         }
 

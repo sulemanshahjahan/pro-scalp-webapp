@@ -375,6 +375,22 @@ export function analyzeSymbol(
 
   /** ===================== BEST ENTRY ===================== */
   const bestVolOk = volSpikeNow >= Math.max(1.2, volBestMin);
+  const bestCorePreSweep =
+    priceAboveEma &&
+    readyPriceAboveVwap &&
+    nearVwapBuy &&
+    rsiBestOk &&
+    strongBodyBest &&
+    atrOkBest &&
+    trendOk &&
+    sessionOK &&
+    confirm15mOk &&
+    (reclaim || tappedVwapPrev) &&
+    bestVolOk &&
+    hasMarket;
+
+  const bestCorePreRr = bestCorePreSweep && liq.ok;
+
   const bestCore =
     priceAboveEma &&
     readyPriceAboveVwap &&
@@ -697,6 +713,8 @@ export function analyzeSymbol(
       core: readyCore,
     },
     best: {
+      corePreSweep: bestCorePreSweep,
+      corePreRr: bestCorePreRr,
       nearVwap: nearVwapBuy,
       confirm15: confirm15mOk,
       trend: trendOk,

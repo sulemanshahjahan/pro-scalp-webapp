@@ -92,6 +92,8 @@ export interface Signal {
       core: boolean;
     };
     best: {
+      corePreSweep?: boolean;
+      corePreRr?: boolean;
       nearVwap: boolean;
       confirm15: boolean;
       trend: boolean;
