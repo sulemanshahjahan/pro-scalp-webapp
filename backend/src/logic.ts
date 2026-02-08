@@ -342,6 +342,14 @@ export function analyzeSymbol(
   const confirm15mSoft   = confirm15_soft(data15);
   const confirm15mOk = confirm15mStrict || confirm15mSoft;
 
+  const READY_VWAP_EPS_PCT = 0.02;
+  const priceAboveVwapStrict = price > vwap_i;
+  const readyPriceAboveVwap = priceAboveVwapStrict || (
+    nearVwapReady &&
+    confirm15mStrict &&
+    price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100)
+  );
+
   const volBestMin  = Math.max(thresholds.volSpikeX, 1.4);
 
   const atrOkReady = atrNow <= thresholds.atrGuardPct * 1.2;
@@ -369,7 +377,7 @@ export function analyzeSymbol(
   const bestVolOk = volSpikeNow >= Math.max(1.2, volBestMin);
   const bestCore =
     priceAboveEma &&
-    price > vwap_i &&
+    readyPriceAboveVwap &&
     nearVwapBuy &&
     rsiBestOk &&
     strongBodyBest &&
@@ -442,7 +450,7 @@ export function analyzeSymbol(
 
   const readyGates: Gate[] = [
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
-    { key: 'price>VWAP', ok: price > vwap_i, reason: 'Price not above VWAP' },
+    { key: 'price>VWAP', ok: readyPriceAboveVwap, reason: 'Price not above VWAP' },
     { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
     {
       key: 'nearVwapReady',
@@ -671,7 +679,7 @@ export function analyzeSymbol(
   const gateSnapshot = {
     ready: {
       sessionOk: sessionOK,
-      priceAboveVwap: price > vwap_i,
+      priceAboveVwap: readyPriceAboveVwap,
       priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
