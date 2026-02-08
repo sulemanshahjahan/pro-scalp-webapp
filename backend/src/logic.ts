@@ -29,7 +29,6 @@ const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
 const VWAP_WATCH_MIN_PCT = 0.80;   // WATCH near-VWAP minimum window
 const EMA5_WATCH_SOFT_TOL = 0.25;  // allow up to 0.25% below EMA200 on WATCH
 const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
-const READY_VWAP_MIN_PCT = 0.55;   // READY can be a bit wider than preset
 
 const LIQ_LOOKBACK = parseInt(process.env.LIQ_LOOKBACK || '20', 10);
 const RR_MIN_BEST  = parseFloat(process.env.RR_MIN_BEST || '2.0');
@@ -280,7 +279,7 @@ export function analyzeSymbol(
 
   // BUY window = preset threshold (e.g. 0.30%)
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
-  const readyVwapMax = Math.max(thresholds.vwapDistancePct, READY_VWAP_MIN_PCT);
+  const readyVwapMax = thresholds.vwapDistancePct;
   const nearVwapReady = Math.abs(distToVwapPct) <= readyVwapMax;
 
   // WATCH window = max(preset, 0.80%) so you actually see setups
@@ -384,7 +383,7 @@ export function analyzeSymbol(
   }
 
   /** ===================== READY TO BUY ===================== */
-  const readyVolOk = volSpikeNow >= Math.max(1.1, thresholds.volSpikeX * 0.8);
+  const readyVolOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyCore =
     sessionOK &&
@@ -401,7 +400,7 @@ export function analyzeSymbol(
 
   const readyBtcOk = hasMarket && (
     btcBull ||
-    (!btcBear && confirm15mOk) ||
+    (!btcBear && confirm15mStrict) ||
     // Allow READY during BTC bear only if symbol is exceptionally strong
     (btcBear && confirm15mStrict && trendOk && strongBody && readyVolOk)
   );
