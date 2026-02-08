@@ -280,7 +280,14 @@ export function analyzeSymbol(
   // BUY window = preset threshold (e.g. 0.30%)
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
   const readyVwapMax = thresholds.vwapDistancePct;
-  const nearVwapReady = Math.abs(distToVwapPct) <= readyVwapMax;
+  const READY_VWAP_TOUCH_PCT = 0.15;
+  const READY_VWAP_TOUCH_BARS = 3;
+  const touchStart = Math.max(0, i - READY_VWAP_TOUCH_BARS + 1);
+  const touchedVwapRecently = lows5
+    .slice(touchStart, i + 1)
+    .some((low) => low <= vwap_i * (1 + READY_VWAP_TOUCH_PCT / 100));
+  const nearVwapReadyDist = Math.abs(distToVwapPct) <= readyVwapMax;
+  const nearVwapReady = nearVwapReadyDist && touchedVwapRecently;
 
   // WATCH window = max(preset, 0.80%) so you actually see setups
   const nearVwapWatch = Math.abs(distToVwapPct) <= Math.max(thresholds.vwapDistancePct, VWAP_WATCH_MIN_PCT);
@@ -420,7 +427,13 @@ export function analyzeSymbol(
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
     { key: 'price>VWAP', ok: price > vwap_i, reason: 'Price not above VWAP' },
     { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
-    { key: 'nearVwapReady', ok: nearVwapReady, reason: `Too far from VWAP (>${readyVwapMax.toFixed(2)}%)` },
+    {
+      key: 'nearVwapReady',
+      ok: nearVwapReady,
+      reason: !nearVwapReadyDist
+        ? `Too far from VWAP (>${readyVwapMax.toFixed(2)}%)`
+        : `No VWAP touch in last ${READY_VWAP_TOUCH_BARS} candles (<=${READY_VWAP_TOUCH_PCT.toFixed(2)}%)`,
+    },
     { key: 'rsiReadyOk', ok: rsiReadyOk, reason: `RSI not in ${RSI_READY_MIN}–${RSI_READY_MAX} rising window` },
     {
       key: 'reclaimOrTap',
