@@ -29,7 +29,7 @@ const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
 const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
 
 // ✅ Make WATCH easier than BUY without changing preset thresholds
-const VWAP_WATCH_MIN_PCT = 0.80;   // WATCH near-VWAP minimum window
+const VWAP_WATCH_MIN_PCT = parseFloat(process.env.VWAP_WATCH_MIN_PCT || '0.80');   // WATCH near-VWAP minimum window
 const EMA5_WATCH_SOFT_TOL = 0.25;  // allow up to 0.25% below EMA200 on WATCH
 const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
 

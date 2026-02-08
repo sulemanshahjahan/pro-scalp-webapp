@@ -74,6 +74,8 @@ type ReadyGateFailures = GateFailures & {
 
 type CandidateStats = {
   candidate_evaluated: number;
+  candidate_skipped: number;
+  candidate_skip_reason: Record<string, number>;
   watch_created: number;
   early_created: number;
   watch_first_failed: Record<string, number>;
@@ -194,6 +196,8 @@ function initPrecheckStats(): PrecheckStats {
 function initCandidateStats(): CandidateStats {
   return {
     candidate_evaluated: 0,
+    candidate_skipped: 0,
+    candidate_skip_reason: {},
     watch_created: 0,
     early_created: 0,
     watch_first_failed: {},
@@ -470,6 +474,12 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       fetchedOk++;
 
       const res = analyzeSymbolDetailed(sym, d5, d15, thresholds, market ?? undefined);
+      if (!res?.debug?.candidate) {
+        gateStats.candidate.candidate_skipped += 1;
+        gateStats.candidate.candidate_skip_reason.analyze_null =
+          (gateStats.candidate.candidate_skip_reason.analyze_null ?? 0) + 1;
+        continue;
+      }
       if (res?.debug?.candidate) {
         const cand = res.debug.candidate;
         gateStats.candidate.candidate_evaluated += 1;
@@ -516,6 +526,97 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         }
       }
 
+      const snap = res?.debug?.gateSnapshot;
+      if (snap) {
+        const ready = snap.ready;
+        const best = snap.best;
+
+        gateStats.readyCandidates += 1;
+        gateStats.bestCandidates += 1;
+
+        if (!ready.nearVwap) gateStats.ready.failed_near_vwap += 1;
+        if (!ready.confirm15) gateStats.ready.failed_confirm15 += 1;
+        if (!ready.trend) gateStats.ready.failed_trend += 1;
+        if (!ready.volSpike) gateStats.ready.failed_volSpike += 1;
+        if (!ready.atr) gateStats.ready.failed_atr += 1;
+        if (ready.core && !ready.sweep) gateStats.ready.failed_sweep += 1;
+        if (ready.core && ready.sweep && !ready.btc) gateStats.ready.failed_btc_gate += 1;
+
+        gateStats.ready.ready_core_evaluated += 1;
+        if (ready.core) gateStats.ready.ready_core_true += 1;
+        if (ready.core && ready.sweep) gateStats.ready.ready_sweep_true += 1;
+        if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_fallback_eligible += 1;
+        if (ready.core && ready.sweep) gateStats.ready.ready_sweep_path_taken += 1;
+        if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_no_sweep_path_taken += 1;
+
+        const coreFlags: Record<string, boolean> = {
+          sessionOK: Boolean(ready.sessionOk),
+          priceAboveVwap: Boolean(ready.priceAboveVwap),
+          priceAboveEma: Boolean(ready.priceAboveEma),
+          nearVwapReady: Boolean(ready.nearVwap),
+          reclaimOrTap: Boolean(ready.reclaimOrTap),
+          readyVolOk: Boolean(ready.volSpike),
+          atrOkReady: Boolean(ready.atr),
+          confirm15mOk: Boolean(ready.confirm15),
+          strongBody: Boolean(ready.strongBody),
+          rsiReadyOk: Boolean(ready.rsiReadyOk),
+          readyTrendOk: Boolean(ready.trend),
+        };
+
+        if (ready.confirm15Strict) gateStats.ready.ready_confirm15_strict_true += 1;
+        if (ready.nearVwap && ready.confirm15Strict) {
+          gateStats.ready.ready_priceAboveVwap_relaxed_eligible += 1;
+          if (ready.priceAboveVwap) gateStats.ready.ready_priceAboveVwap_relaxed_true += 1;
+        }
+
+        const coreOrder = [
+          'sessionOK',
+          'priceAboveVwap',
+          'priceAboveEma',
+          'nearVwapReady',
+          'reclaimOrTap',
+          'readyVolOk',
+          'atrOkReady',
+          'confirm15mOk',
+          'strongBody',
+          'rsiReadyOk',
+          'readyTrendOk',
+        ];
+
+        const firstFailed = coreOrder.find((k) => !coreFlags[k]);
+        if (firstFailed) {
+          gateStats.ready.ready_core_first_failed[firstFailed] =
+            (gateStats.ready.ready_core_first_failed[firstFailed] ?? 0) + 1;
+        }
+
+        for (const k of coreOrder) {
+          if (coreFlags[k]) {
+            gateStats.ready.ready_core_flag_true[k] =
+              (gateStats.ready.ready_core_flag_true[k] ?? 0) + 1;
+          }
+        }
+
+        const shadowRelaxReclaim = !coreFlags.reclaimOrTap
+          && coreOrder.filter(k => k !== 'reclaimOrTap').every((k) => coreFlags[k]);
+        if (shadowRelaxReclaim) gateStats.ready.ready_shadow_if_reclaim_relaxed += 1;
+
+        const relaxVolCond = Boolean(coreFlags.nearVwapReady && coreFlags.reclaimOrTap);
+        const shadowRelaxVol = !coreFlags.readyVolOk
+          && relaxVolCond
+          && coreOrder.filter(k => k !== 'readyVolOk').every((k) => coreFlags[k])
+          && Number(res?.signal?.volSpike ?? 0) >= 1.2;
+        if (shadowRelaxVol) gateStats.ready.ready_shadow_if_volSpike_1_2 += 1;
+
+        if (!best.nearVwap) gateStats.best.failed_near_vwap += 1;
+        if (!best.confirm15) gateStats.best.failed_confirm15 += 1;
+        if (!best.trend) gateStats.best.failed_trend += 1;
+        if (!best.volSpike) gateStats.best.failed_volSpike += 1;
+        if (!best.atr) gateStats.best.failed_atr += 1;
+        if (best.corePreSweep && !best.sweep) gateStats.best.failed_sweep += 1;
+        if (best.corePreRr && !best.rr) gateStats.best.failed_rr += 1;
+        if (best.core && !best.btc) gateStats.best.failed_btc_gate += 1;
+      }
+
       const sig = res?.signal ?? null;
       if (sig) {
         const candleCloseMs = getCandleCloseMs(last5, 5 * 60_000);
@@ -524,97 +625,6 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         if (withTime?.category) {
           const key = String(withTime.category);
           signalsByCategory[key] = (signalsByCategory[key] ?? 0) + 1;
-        }
-
-        const snap = withTime.gateSnapshot;
-        if (snap) {
-          const ready = snap.ready;
-          const best = snap.best;
-
-          if (ready.core) gateStats.readyCandidates += 1;
-          if (best.core) gateStats.bestCandidates += 1;
-
-          if (!ready.nearVwap) gateStats.ready.failed_near_vwap += 1;
-          if (!ready.confirm15) gateStats.ready.failed_confirm15 += 1;
-          if (!ready.trend) gateStats.ready.failed_trend += 1;
-          if (!ready.volSpike) gateStats.ready.failed_volSpike += 1;
-          if (!ready.atr) gateStats.ready.failed_atr += 1;
-          if (ready.core && !ready.sweep) gateStats.ready.failed_sweep += 1;
-          if (ready.core && ready.sweep && !ready.btc) gateStats.ready.failed_btc_gate += 1;
-
-          gateStats.ready.ready_core_evaluated += 1;
-          if (ready.core) gateStats.ready.ready_core_true += 1;
-          if (ready.core && ready.sweep) gateStats.ready.ready_sweep_true += 1;
-          if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_fallback_eligible += 1;
-          if (ready.core && ready.sweep) gateStats.ready.ready_sweep_path_taken += 1;
-          if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_no_sweep_path_taken += 1;
-
-          const coreFlags: Record<string, boolean> = {
-            sessionOK: Boolean(ready.sessionOk),
-            priceAboveVwap: Boolean(ready.priceAboveVwap),
-            priceAboveEma: Boolean(ready.priceAboveEma),
-            nearVwapReady: Boolean(ready.nearVwap),
-            reclaimOrTap: Boolean(ready.reclaimOrTap),
-            readyVolOk: Boolean(ready.volSpike),
-            atrOkReady: Boolean(ready.atr),
-            confirm15mOk: Boolean(ready.confirm15),
-            strongBody: Boolean(ready.strongBody),
-            rsiReadyOk: Boolean(ready.rsiReadyOk),
-            readyTrendOk: Boolean(ready.trend),
-          };
-
-          if (ready.confirm15Strict) gateStats.ready.ready_confirm15_strict_true += 1;
-          if (ready.nearVwap && ready.confirm15Strict) {
-            gateStats.ready.ready_priceAboveVwap_relaxed_eligible += 1;
-            if (ready.priceAboveVwap) gateStats.ready.ready_priceAboveVwap_relaxed_true += 1;
-          }
-
-          const coreOrder = [
-            'sessionOK',
-            'priceAboveVwap',
-            'priceAboveEma',
-            'nearVwapReady',
-            'reclaimOrTap',
-            'readyVolOk',
-            'atrOkReady',
-            'confirm15mOk',
-            'strongBody',
-            'rsiReadyOk',
-            'readyTrendOk',
-          ];
-
-          const firstFailed = coreOrder.find((k) => !coreFlags[k]);
-          if (firstFailed) {
-            gateStats.ready.ready_core_first_failed[firstFailed] =
-              (gateStats.ready.ready_core_first_failed[firstFailed] ?? 0) + 1;
-          }
-
-          for (const k of coreOrder) {
-            if (coreFlags[k]) {
-              gateStats.ready.ready_core_flag_true[k] =
-                (gateStats.ready.ready_core_flag_true[k] ?? 0) + 1;
-            }
-          }
-
-          const shadowRelaxReclaim = !coreFlags.reclaimOrTap
-            && coreOrder.filter(k => k !== 'reclaimOrTap').every((k) => coreFlags[k]);
-          if (shadowRelaxReclaim) gateStats.ready.ready_shadow_if_reclaim_relaxed += 1;
-
-          const relaxVolCond = Boolean(coreFlags.nearVwapReady && coreFlags.reclaimOrTap);
-          const shadowRelaxVol = !coreFlags.readyVolOk
-            && relaxVolCond
-            && coreOrder.filter(k => k !== 'readyVolOk').every((k) => coreFlags[k])
-            && Number(withTime.volSpike) >= 1.2;
-          if (shadowRelaxVol) gateStats.ready.ready_shadow_if_volSpike_1_2 += 1;
-
-          if (!best.nearVwap) gateStats.best.failed_near_vwap += 1;
-          if (!best.confirm15) gateStats.best.failed_confirm15 += 1;
-          if (!best.trend) gateStats.best.failed_trend += 1;
-          if (!best.volSpike) gateStats.best.failed_volSpike += 1;
-          if (!best.atr) gateStats.best.failed_atr += 1;
-          if (best.corePreSweep && !best.sweep) gateStats.best.failed_sweep += 1;
-          if (best.corePreRr && !best.rr) gateStats.best.failed_rr += 1;
-          if (best.core && !best.btc) gateStats.best.failed_btc_gate += 1;
         }
 
         if (['BEST_ENTRY','READY_TO_BUY','EARLY_READY'].includes(withTime.category)) {
