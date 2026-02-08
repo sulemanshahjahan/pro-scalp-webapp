@@ -79,6 +79,7 @@ export interface Signal {
       volSpike: boolean;
       atr: boolean;
       sweep: boolean;
+      sweepFallback?: boolean;
       strongBody?: boolean;
       reclaimOrTap?: boolean;
       hasMarket?: boolean;

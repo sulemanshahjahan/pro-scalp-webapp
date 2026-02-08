@@ -118,22 +118,24 @@ app.get('/api/system/health', async (req, res) => {
     const days = Number((req.query as any)?.days);
     const safeDays = Number.isFinite(days) ? Math.max(1, Math.min(365, days)) : 7;
     const { lastFinished, lastRunning } = await getLatestScanRuns();
-    const legacyScan = lastFinished ?? getLastScanHealth();
+    const legacyScan = getLastScanHealth();
+    const scanLast = lastFinished ?? legacyScan ?? null;
     const scanIntervalMs = getScanIntervalMs();
     let scanState: 'IDLE' | 'RUNNING' | 'COOLDOWN' = 'IDLE';
     let nextScanAt: number | null = null;
     if (lastRunning && lastRunning.status === 'RUNNING') {
       scanState = 'RUNNING';
-    } else if (legacyScan?.finishedAt) {
-      const next = Number(legacyScan.finishedAt) + scanIntervalMs;
+    } else if (scanLast?.finishedAt) {
+      const next = Number(scanLast.finishedAt) + scanIntervalMs;
       nextScanAt = next;
       if (Date.now() < next) scanState = 'COOLDOWN';
     }
-    const scan: any = legacyScan ? { ...legacyScan } : {};
-    scan.state = scanState;
-    scan.nextScanAt = nextScanAt;
-    scan.last = lastFinished ?? null;
-    scan.current = lastRunning ?? null;
+    const scan = {
+      state: scanState,
+      nextScanAt,
+      last: scanLast,
+      current: lastRunning ?? null,
+    };
     const { market, at } = getLastBtcMarket();
     const outcomes = getOutcomesHealth();
     const backlog = await getOutcomesBacklogCount({ days: safeDays });

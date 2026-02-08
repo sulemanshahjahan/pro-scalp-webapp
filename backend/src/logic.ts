@@ -411,7 +411,8 @@ export function analyzeSymbol(
     // Allow READY during BTC bear only if symbol is exceptionally strong
     (btcBear && confirm15mStrict && trendOk && strongBody && readyVolOk)
   );
-  const readySweepOk = liq.ok || (reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep);
+  const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep;
+  const readySweepOk = liq.ok || readySweepFallbackOk;
   const readyOk = readyCore && readySweepOk && readyBtcOk;
   const blockedByBtc = readyCore && readySweepOk && !readyBtcOk;
 
@@ -645,6 +646,7 @@ export function analyzeSymbol(
       volSpike: readyVolOk,
       atr: atrOkReady,
       sweep: liq.ok,
+      sweepFallback: readySweepFallbackOk,
       strongBody,
       reclaimOrTap: reclaimOk,
       hasMarket,

@@ -56,10 +56,15 @@ type GateFailures = {
   failed_rr: number;
 };
 
+type ReadyGateFailures = GateFailures & {
+  ready_sweep_path_taken: number;
+  ready_no_sweep_path_taken: number;
+};
+
 type ScanGateStats = {
   readyCandidates: number;
   bestCandidates: number;
-  ready: GateFailures;
+  ready: ReadyGateFailures;
   best: GateFailures;
 };
 
@@ -106,11 +111,19 @@ function initGateFailures(): GateFailures {
   };
 }
 
+function initReadyGateFailures(): ReadyGateFailures {
+  return {
+    ...initGateFailures(),
+    ready_sweep_path_taken: 0,
+    ready_no_sweep_path_taken: 0,
+  };
+}
+
 function initGateStats(): ScanGateStats {
   return {
     readyCandidates: 0,
     bestCandidates: 0,
-    ready: initGateFailures(),
+    ready: initReadyGateFailures(),
     best: initGateFailures(),
   };
 }
@@ -386,6 +399,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (!ready.atr) gateStats.ready.failed_atr += 1;
           if (!ready.sweep) gateStats.ready.failed_sweep += 1;
           if (ready.core && !ready.btc) gateStats.ready.failed_btc_gate += 1;
+          if (ready.core && ready.sweep) gateStats.ready.ready_sweep_path_taken += 1;
+          if (ready.core && !ready.sweep && ready.sweepFallback) gateStats.ready.ready_no_sweep_path_taken += 1;
 
           if (!best.nearVwap) gateStats.best.failed_near_vwap += 1;
           if (!best.confirm15) gateStats.best.failed_confirm15 += 1;

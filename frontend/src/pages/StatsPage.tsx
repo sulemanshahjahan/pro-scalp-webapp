@@ -375,6 +375,7 @@ export default function StatsPage() {
   const btcAt = health?.btc?.at ?? 0;
   const btcAgeMin = btcAt ? (Date.now() - btcAt) / 60000 : NaN;
   const btcStale = Number.isFinite(btcAgeMin) && btcAgeMin > 20;
+  const scanLast = health?.scan?.last ?? health?.scan ?? null;
 
   const matrixMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -613,10 +614,10 @@ export default function StatsPage() {
         <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
           <div className="text-xs text-white/60 uppercase tracking-widest">System Health</div>
           <div className="mt-2 text-xs text-white/70 space-y-1">
-            <div>Last scan: {health?.scan?.finishedAt ? dt(health.scan.finishedAt) : '--'}</div>
-            <div>Scan duration: {health?.scan?.durationMs ? fmtMs(health.scan.durationMs) : '--'}</div>
-            <div>Processed: {health?.scan?.processedSymbols ?? 0} - Precheck: {health?.scan?.precheckPassed ?? 0} - Fetched OK: {health?.scan?.fetchedOk ?? 0}</div>
-            <div>429s: {health?.scan?.errors429 ?? 0} - Other errors: {health?.scan?.errorsOther ?? 0}</div>
+            <div>Last scan: {scanLast?.finishedAt ? dt(scanLast.finishedAt) : '--'}</div>
+            <div>Scan duration: {scanLast?.durationMs ? fmtMs(scanLast.durationMs) : '--'}</div>
+            <div>Processed: {scanLast?.processedSymbols ?? 0} - Precheck: {scanLast?.precheckPassed ?? 0} - Fetched OK: {scanLast?.fetchedOk ?? 0}</div>
+            <div>429s: {scanLast?.errors429 ?? 0} - Other errors: {scanLast?.errorsOther ?? 0}</div>
             <div>Outcomes backlog: {health?.outcomes?.backlog ?? 0}</div>
             <div>Outcomes last run: {health?.outcomes?.lastRun?.finishedAt ? dt(health.outcomes.lastRun.finishedAt) : '--'}</div>
           </div>
@@ -627,24 +628,24 @@ export default function StatsPage() {
           <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-white/70">
             <div>
               <div className="text-white/60">READY failures</div>
-              <div>BTC: {health?.scan?.gateStats?.ready?.failed_btc_gate ?? 0}</div>
-              <div>Confirm15: {health?.scan?.gateStats?.ready?.failed_confirm15 ?? 0}</div>
-              <div>Trend: {health?.scan?.gateStats?.ready?.failed_trend ?? 0}</div>
-              <div>Near VWAP: {health?.scan?.gateStats?.ready?.failed_near_vwap ?? 0}</div>
-              <div>VolSpike: {health?.scan?.gateStats?.ready?.failed_volSpike ?? 0}</div>
-              <div>ATR: {health?.scan?.gateStats?.ready?.failed_atr ?? 0}</div>
-              <div>Sweep: {health?.scan?.gateStats?.ready?.failed_sweep ?? 0}</div>
+              <div>BTC: {scanLast?.gateStats?.ready?.failed_btc_gate ?? 0}</div>
+              <div>Confirm15: {scanLast?.gateStats?.ready?.failed_confirm15 ?? 0}</div>
+              <div>Trend: {scanLast?.gateStats?.ready?.failed_trend ?? 0}</div>
+              <div>Near VWAP: {scanLast?.gateStats?.ready?.failed_near_vwap ?? 0}</div>
+              <div>VolSpike: {scanLast?.gateStats?.ready?.failed_volSpike ?? 0}</div>
+              <div>ATR: {scanLast?.gateStats?.ready?.failed_atr ?? 0}</div>
+              <div>Sweep: {scanLast?.gateStats?.ready?.failed_sweep ?? 0}</div>
             </div>
             <div>
               <div className="text-white/60">BEST failures</div>
-              <div>BTC: {health?.scan?.gateStats?.best?.failed_btc_gate ?? 0}</div>
-              <div>Confirm15: {health?.scan?.gateStats?.best?.failed_confirm15 ?? 0}</div>
-              <div>Trend: {health?.scan?.gateStats?.best?.failed_trend ?? 0}</div>
-              <div>Near VWAP: {health?.scan?.gateStats?.best?.failed_near_vwap ?? 0}</div>
-              <div>VolSpike: {health?.scan?.gateStats?.best?.failed_volSpike ?? 0}</div>
-              <div>ATR: {health?.scan?.gateStats?.best?.failed_atr ?? 0}</div>
-              <div>Sweep: {health?.scan?.gateStats?.best?.failed_sweep ?? 0}</div>
-              <div>RR: {health?.scan?.gateStats?.best?.failed_rr ?? 0}</div>
+              <div>BTC: {scanLast?.gateStats?.best?.failed_btc_gate ?? 0}</div>
+              <div>Confirm15: {scanLast?.gateStats?.best?.failed_confirm15 ?? 0}</div>
+              <div>Trend: {scanLast?.gateStats?.best?.failed_trend ?? 0}</div>
+              <div>Near VWAP: {scanLast?.gateStats?.best?.failed_near_vwap ?? 0}</div>
+              <div>VolSpike: {scanLast?.gateStats?.best?.failed_volSpike ?? 0}</div>
+              <div>ATR: {scanLast?.gateStats?.best?.failed_atr ?? 0}</div>
+              <div>Sweep: {scanLast?.gateStats?.best?.failed_sweep ?? 0}</div>
+              <div>RR: {scanLast?.gateStats?.best?.failed_rr ?? 0}</div>
             </div>
           </div>
         </div>
