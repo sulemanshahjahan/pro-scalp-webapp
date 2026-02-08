@@ -563,11 +563,11 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           readyTrendOk: Boolean(ready.trend),
         };
 
-        if (ready.confirm15Strict) gateStats.ready.ready_confirm15_strict_true += 1;
-        if (ready.nearVwap && ready.confirm15Strict) {
-          gateStats.ready.ready_priceAboveVwap_relaxed_eligible += 1;
-          if (ready.priceAboveVwap) gateStats.ready.ready_priceAboveVwap_relaxed_true += 1;
-        }
+          if (ready.confirm15Strict) gateStats.ready.ready_confirm15_strict_true += 1;
+          if (ready.priceAboveVwapRelaxedEligible) {
+            gateStats.ready.ready_priceAboveVwap_relaxed_eligible += 1;
+            if (ready.priceAboveVwapRelaxedTrue) gateStats.ready.ready_priceAboveVwap_relaxed_true += 1;
+          }
 
         const coreOrder = [
           'sessionOK',

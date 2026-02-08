@@ -372,11 +372,15 @@ function analyzeSymbolInternal(
 
   const READY_VWAP_EPS_PCT = parseFloat(process.env.READY_VWAP_EPS_PCT || '0.02');
   const priceAboveVwapStrict = price > vwap_i;
-  const readyPriceAboveVwap = priceAboveVwapStrict || (
+  const readyPriceAboveVwapRelaxedEligible =
+    !priceAboveVwapStrict &&
     nearVwapReady &&
-    confirm15mStrict &&
-    price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100)
-  );
+    confirm15mOk &&
+    reclaimOk;
+  const readyPriceAboveVwapRelaxedTrue =
+    readyPriceAboveVwapRelaxedEligible &&
+    price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
+  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue;
 
   const volBestMin  = Math.max(thresholds.volSpikeX, 1.4);
 
@@ -741,6 +745,8 @@ function analyzeSymbolInternal(
     ready: {
       sessionOk: sessionOK,
       priceAboveVwap: readyPriceAboveVwap,
+      priceAboveVwapRelaxedEligible: readyPriceAboveVwapRelaxedEligible,
+      priceAboveVwapRelaxedTrue: readyPriceAboveVwapRelaxedTrue,
       priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
