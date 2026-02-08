@@ -44,6 +44,12 @@ async function ensureScanSchema() {
         gate_stats_json TEXT,
         error_message TEXT
       );
+      CREATE TABLE IF NOT EXISTS scan_lock (
+        id INTEGER PRIMARY KEY,
+        locked_until INTEGER NOT NULL DEFAULT 0,
+        locked_at INTEGER NOT NULL DEFAULT 0,
+        locked_by TEXT NOT NULL DEFAULT ''
+      );
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
@@ -66,6 +72,12 @@ async function ensureScanSchema() {
         signals_by_category_json TEXT,
         gate_stats_json TEXT,
         error_message TEXT
+      );
+      CREATE TABLE IF NOT EXISTS scan_lock (
+        id INTEGER PRIMARY KEY,
+        locked_until BIGINT NOT NULL DEFAULT 0,
+        locked_at BIGINT NOT NULL DEFAULT 0,
+        locked_by TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
@@ -113,6 +125,41 @@ export async function startScanRun(preset: string) {
   return { runId, preset, startedAt };
 }
 
+export async function tryStartScanRun(preset: string, lockMs: number) {
+  await ensureScanSchema();
+  const d = getDb();
+  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+  const lockedUntil = startedAt + Math.max(10_000, lockMs);
+
+  const acquire = d.transaction(async () => {
+    await d.prepare(`
+      INSERT INTO scan_lock (id, locked_until, locked_at, locked_by)
+      VALUES (1, 0, 0, '')
+      ON CONFLICT (id) DO NOTHING
+    `).run();
+
+    const res = await d.prepare(`
+      UPDATE scan_lock
+      SET locked_until = @lockedUntil,
+          locked_at = @startedAt,
+          locked_by = @runId
+      WHERE id = 1 AND locked_until <= @startedAt
+    `).run({ lockedUntil, startedAt, runId });
+
+    if (!res.changes) return null;
+
+    await d.prepare(`
+      INSERT INTO scan_runs (run_id, preset, status, started_at)
+      VALUES (@runId, @preset, 'RUNNING', @startedAt)
+    `).run({ runId, preset, startedAt });
+
+    return { runId, preset, startedAt };
+  });
+
+  return acquire();
+}
+
 export async function finishScanRun(runId: string, data: {
   finishedAt: number;
   durationMs: number;
@@ -152,6 +199,12 @@ export async function finishScanRun(runId: string, data: {
     signalsByCategoryJson: JSON.stringify(data.signalsByCategory ?? {}),
     gateStatsJson: JSON.stringify(data.gateStats ?? {}),
   });
+
+  await d.prepare(`
+    UPDATE scan_lock
+    SET locked_until = 0, locked_by = ''
+    WHERE id = 1 AND locked_by = @runId
+  `).run({ runId });
 }
 
 export async function failScanRun(runId: string, errorMessage: string, data: {
@@ -194,6 +247,12 @@ export async function failScanRun(runId: string, errorMessage: string, data: {
     gateStatsJson: JSON.stringify(data.gateStats ?? {}),
     errorMessage,
   });
+
+  await d.prepare(`
+    UPDATE scan_lock
+    SET locked_until = 0, locked_by = ''
+    WHERE id = 1 AND locked_by = @runId
+  `).run({ runId });
 }
 
 export async function getLatestScanRuns() {

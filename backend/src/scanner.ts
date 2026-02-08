@@ -1,5 +1,5 @@
 import { topUSDTByQuoteVolume, listAllUSDTMarkets, klines } from './binance.js';
-import { startScanRun, finishScanRun, failScanRun, pruneScanRuns } from './scanStore.js';
+import { tryStartScanRun, finishScanRun, failScanRun, pruneScanRuns } from './scanStore.js';
 import { analyzeSymbol } from './logic.js';
 import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
@@ -276,7 +276,11 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   const t0 = Date.now();
   const thresholds = thresholdsForPreset(preset);
   const now = Date.now();
-  const scanRun = await startScanRun(preset);
+  const scanRun = await tryStartScanRun(preset, MAX_SCAN_MS);
+  if (!scanRun) {
+    console.log('[scan] skip: another scan is already running');
+    return [];
+  }
   currentScan = scanRun;
 
   const signalsByCategory: Record<string, number> = {
