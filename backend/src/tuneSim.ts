@@ -33,6 +33,8 @@ export type TuneConfig = {
   BEST_VWAP_MAX_PCT: number | null;
   BEST_VWAP_EPS_PCT: number;
   BEST_EMA_EPS_PCT: number;
+  CONFIRM15_VWAP_EPS_PCT: number;
+  CONFIRM15_VWAP_ROLL_BARS: number;
 };
 
 export type EvalResult = {
@@ -82,6 +84,8 @@ function parseBool(v: any): boolean | null {
 export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
   const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
   const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
+  const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.20');
+  const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '96', 10);
   return {
     thresholds,
     RSI_BEST_MIN: parseFloat(process.env.RSI_BEST_MIN || '55'),
@@ -115,6 +119,8 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : thresholds.vwapDistancePct,
     BEST_VWAP_EPS_PCT: parseFloat(process.env.BEST_VWAP_EPS_PCT || '0'),
     BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
+    CONFIRM15_VWAP_EPS_PCT: Number.isFinite(CONFIRM15_VWAP_EPS_PCT) ? CONFIRM15_VWAP_EPS_PCT : 0.20,
+    CONFIRM15_VWAP_ROLL_BARS: Number.isFinite(CONFIRM15_VWAP_ROLL_BARS) ? CONFIRM15_VWAP_ROLL_BARS : 96,
   };
 }
 

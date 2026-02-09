@@ -96,6 +96,179 @@ function computePercentiles(values: number[], ps = [0.1, 0.25, 0.5, 0.75, 0.9]) 
   return out;
 }
 
+function buildOverrideNotes(overrides: Record<string, any> | undefined) {
+  const notes: string[] = [];
+  if (!overrides) return notes;
+  const keys = Object.keys(overrides);
+  const confirmKeys = ['CONFIRM15_VWAP_EPS_PCT', 'CONFIRM15_VWAP_ROLL_BARS'];
+  if (keys.some(k => confirmKeys.includes(k))) {
+    notes.push('Confirm15 overrides do not recompute stored confirm15 flags. Re-run a scan to apply confirm15 logic changes.');
+  }
+  return notes;
+}
+
+type SimEval = {
+  counts: { watch: number; early: number; ready: number; best: number };
+  funnel: {
+    candidate_evaluated: number;
+    watch_created: number;
+    early_created: number;
+    ready_core_true: number;
+    best_core_true: number;
+    ready_final_true: number;
+    best_final_true: number;
+  };
+  firstFailed: Record<string, Record<string, number>>;
+  gateTrue: Record<string, Record<string, number>>;
+  postCoreFailed: Record<string, Record<string, number>>;
+  examples?: Record<string, Record<string, string[]>>;
+  readySymbols: Set<string>;
+  bestSymbols: Set<string>;
+};
+
+function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: any }>, cfg: any, opts?: { includeExamples?: boolean; examplesPerGate?: number }): SimEval {
+  const includeExamples = Boolean(opts?.includeExamples);
+  const examplesPerGate = Math.max(1, Math.min(50, Number(opts?.examplesPerGate ?? 5)));
+
+  const counts = { watch: 0, early: 0, ready: 0, best: 0 };
+  const funnel = {
+    candidate_evaluated: rows.length,
+    watch_created: 0,
+    early_created: 0,
+    ready_core_true: 0,
+    best_core_true: 0,
+    ready_final_true: 0,
+    best_final_true: 0,
+  };
+  const firstFailed: Record<string, Record<string, number>> = {
+    watch: {},
+    early: {},
+    ready: {},
+    best: {},
+  };
+  const gateTrue: Record<string, Record<string, number>> = {
+    watch: {},
+    early: {},
+    ready: {},
+    best: {},
+  };
+  const postCoreFailed: Record<string, Record<string, number>> = {
+    ready: {},
+    best: {},
+  };
+  const examples: Record<string, Record<string, string[]>> | undefined = includeExamples
+    ? { watch: {}, early: {}, ready: {}, best: {} }
+    : undefined;
+
+  const watchOrder = ['nearVwapWatch', 'rsiWatchOk', 'emaWatchOk'];
+  const earlyOrder = ['sessionOK', 'nearVwapWatch', 'rsiWatchOk', 'emaWatchOk', 'atrOkReady', 'reclaimOrTap', 'priceAboveVwap'];
+  const readyOrder = [
+    'sessionOK',
+    'priceAboveVwap',
+    'priceAboveEma',
+    'nearVwapReady',
+    'reclaimOrTap',
+    'readyVolOk',
+    'atrOkReady',
+    'confirm15mOk',
+    'strongBody',
+    'rsiReadyOk',
+    'readyTrendOk',
+  ];
+  const bestOrder = [
+    'priceAboveVwap',
+    'priceAboveEma',
+    'nearVwapBuy',
+    'rsiBestOk',
+    'strongBody',
+    'atrOkBest',
+    'trendOk',
+    'sessionOK',
+    'confirm15mOk',
+    'sweepOk',
+    'reclaimOrTap',
+    'bestVolOk',
+    'rrOk',
+    'hasMarket',
+  ];
+
+  const addGateTrue = (bucket: Record<string, number>, flags: Record<string, boolean>) => {
+    for (const [k, ok] of Object.entries(flags)) {
+      if (ok) bucket[k] = (bucket[k] ?? 0) + 1;
+    }
+  };
+  const addFirstFailed = (stage: string, order: string[], flags: Record<string, boolean>, symbol: string) => {
+    const k = order.find(key => !flags[key]);
+    if (!k) return;
+    firstFailed[stage][k] = (firstFailed[stage][k] ?? 0) + 1;
+    if (examples) {
+      const arr = examples[stage][k] ?? (examples[stage][k] = []);
+      if (arr.length < examplesPerGate) arr.push(symbol);
+    }
+  };
+  const addExample = (stage: string, key: string, symbol: string) => {
+    if (!examples) return;
+    const arr = examples[stage][key] ?? (examples[stage][key] = []);
+    if (arr.length < examplesPerGate) arr.push(symbol);
+  };
+
+  const readySymbols = new Set<string>();
+  const bestSymbols = new Set<string>();
+
+  for (const row of rows) {
+    const evalRes = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
+    if (evalRes.watchOk) counts.watch += 1;
+    if (evalRes.earlyOk) counts.early += 1;
+    if (evalRes.readyOk) counts.ready += 1;
+    if (evalRes.bestOk) counts.best += 1;
+
+    if (evalRes.watchOk) funnel.watch_created += 1;
+    if (evalRes.earlyOk) funnel.early_created += 1;
+    if (evalRes.readyCore) funnel.ready_core_true += 1;
+    if (evalRes.bestCore) funnel.best_core_true += 1;
+    if (evalRes.readyOk) funnel.ready_final_true += 1;
+    if (evalRes.bestOk) funnel.best_final_true += 1;
+
+    addGateTrue(gateTrue.watch, evalRes.watchFlags);
+    addGateTrue(gateTrue.early, evalRes.earlyFlags);
+    addGateTrue(gateTrue.ready, evalRes.readyFlags);
+    addGateTrue(gateTrue.best, evalRes.bestFlags);
+
+    if (!evalRes.watchOk) addFirstFailed('watch', watchOrder, evalRes.watchFlags, row.symbol);
+    if (!evalRes.earlyOk) addFirstFailed('early', earlyOrder, evalRes.earlyFlags, row.symbol);
+
+    if (!evalRes.readyCore) {
+      addFirstFailed('ready', readyOrder, evalRes.readyFlags, row.symbol);
+    } else if (!evalRes.readySweepOk) {
+      firstFailed.ready.readySweep = (firstFailed.ready.readySweep ?? 0) + 1;
+      addExample('ready', 'readySweep', row.symbol);
+    } else if (!evalRes.readyBtcOk) {
+      firstFailed.ready.btcOkReady = (firstFailed.ready.btcOkReady ?? 0) + 1;
+      addExample('ready', 'btcOkReady', row.symbol);
+    }
+
+    if (!evalRes.bestCore) {
+      addFirstFailed('best', bestOrder, evalRes.bestFlags, row.symbol);
+    } else if (!evalRes.bestBtcOk) {
+      firstFailed.best.btcBull = (firstFailed.best.btcBull ?? 0) + 1;
+      addExample('best', 'btcBull', row.symbol);
+    }
+
+    if (evalRes.readyCore && !evalRes.readyOk) {
+      if (!evalRes.readySweepOk) postCoreFailed.ready.readySweep = (postCoreFailed.ready.readySweep ?? 0) + 1;
+      if (!evalRes.readyBtcOk) postCoreFailed.ready.btcOkReady = (postCoreFailed.ready.btcOkReady ?? 0) + 1;
+    }
+    if (evalRes.bestCore && !evalRes.bestOk) {
+      if (!evalRes.bestBtcOk) postCoreFailed.best.btcBull = (postCoreFailed.best.btcBull ?? 0) + 1;
+    }
+
+    if (evalRes.readyOk) readySymbols.add(row.symbol);
+    if (evalRes.bestOk) bestSymbols.add(row.symbol);
+  }
+
+  return { counts, funnel, firstFailed, gateTrue, postCoreFailed, examples, readySymbols, bestSymbols };
+}
+
 const db = getDb();
 const dbPath = db.driver === 'sqlite' ? DB_PATH : null;
 
@@ -236,146 +409,15 @@ app.post('/api/tune/sim', async (req, res) => {
 
     const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
     const overrideReport = applyOverrides(cfgBase, body.overrides || {});
-    const cfg = overrideReport.config;
     const includeExamples = Boolean(body.includeExamples);
-    const examplesPerGate = Math.max(1, Math.min(50, Number(body.examplesPerGate ?? 5)));
-
-    const counts = { watch: 0, early: 0, ready: 0, best: 0 };
-    const funnel = {
-      candidate_evaluated: rows.length,
-      watch_created: 0,
-      early_created: 0,
-      ready_core_true: 0,
-      best_core_true: 0,
-      ready_final_true: 0,
-      best_final_true: 0,
-    };
-    const postCoreFailed: Record<string, Record<string, number>> = {
-      ready: {},
-      best: {},
-    };
-    const firstFailed: Record<string, Record<string, number>> = {
-      watch: {},
-      early: {},
-      ready: {},
-      best: {},
-    };
-    const gateTrue: Record<string, Record<string, number>> = {
-      watch: {},
-      early: {},
-      ready: {},
-      best: {},
-    };
-    const examples: Record<string, Record<string, string[]>> | undefined = includeExamples
-      ? { watch: {}, early: {}, ready: {}, best: {} }
-      : undefined;
-
-    const watchOrder = ['nearVwapWatch', 'rsiWatchOk', 'emaWatchOk'];
-    const earlyOrder = ['sessionOK', 'nearVwapWatch', 'rsiWatchOk', 'emaWatchOk', 'atrOkReady', 'reclaimOrTap', 'priceAboveVwap'];
-    const readyOrder = [
-      'sessionOK',
-      'priceAboveVwap',
-      'priceAboveEma',
-      'nearVwapReady',
-      'reclaimOrTap',
-      'readyVolOk',
-      'atrOkReady',
-      'confirm15mOk',
-      'strongBody',
-      'rsiReadyOk',
-      'readyTrendOk',
-    ];
-    const bestOrder = [
-      'priceAboveVwap',
-      'priceAboveEma',
-      'nearVwapBuy',
-      'rsiBestOk',
-      'strongBody',
-      'atrOkBest',
-      'trendOk',
-      'sessionOK',
-      'confirm15mOk',
-      'sweepOk',
-      'reclaimOrTap',
-      'bestVolOk',
-      'rrOk',
-      'hasMarket',
-    ];
-
-    const addGateTrue = (bucket: Record<string, number>, flags: Record<string, boolean>) => {
-      for (const [k, ok] of Object.entries(flags)) {
-        if (ok) bucket[k] = (bucket[k] ?? 0) + 1;
-      }
-    };
-    const addFirstFailed = (stage: string, order: string[], flags: Record<string, boolean>, symbol: string) => {
-      const k = order.find(key => !flags[key]);
-      if (!k) return;
-      firstFailed[stage][k] = (firstFailed[stage][k] ?? 0) + 1;
-      if (examples) {
-        const arr = examples[stage][k] ?? (examples[stage][k] = []);
-        if (arr.length < examplesPerGate) arr.push(symbol);
-      }
-    };
-    const addExample = (stage: string, key: string, symbol: string) => {
-      if (!examples) return;
-      const arr = examples[stage][key] ?? (examples[stage][key] = []);
-      if (arr.length < examplesPerGate) arr.push(symbol);
-    };
-
-    for (const row of rows) {
-      const evalRes = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
-      if (evalRes.watchOk) counts.watch += 1;
-      if (evalRes.earlyOk) counts.early += 1;
-      if (evalRes.readyOk) counts.ready += 1;
-      if (evalRes.bestOk) counts.best += 1;
-
-      if (evalRes.watchOk) funnel.watch_created += 1;
-      if (evalRes.earlyOk) funnel.early_created += 1;
-      if (evalRes.readyCore) funnel.ready_core_true += 1;
-      if (evalRes.bestCore) funnel.best_core_true += 1;
-      if (evalRes.readyOk) funnel.ready_final_true += 1;
-      if (evalRes.bestOk) funnel.best_final_true += 1;
-
-      addGateTrue(gateTrue.watch, evalRes.watchFlags);
-      addGateTrue(gateTrue.early, evalRes.earlyFlags);
-      addGateTrue(gateTrue.ready, evalRes.readyFlags);
-      addGateTrue(gateTrue.best, evalRes.bestFlags);
-
-      if (!evalRes.watchOk) addFirstFailed('watch', watchOrder, evalRes.watchFlags, row.symbol);
-      if (!evalRes.earlyOk) addFirstFailed('early', earlyOrder, evalRes.earlyFlags, row.symbol);
-
-      if (!evalRes.readyCore) {
-        addFirstFailed('ready', readyOrder, evalRes.readyFlags, row.symbol);
-      } else if (!evalRes.readySweepOk) {
-        firstFailed.ready.readySweep = (firstFailed.ready.readySweep ?? 0) + 1;
-        addExample('ready', 'readySweep', row.symbol);
-      } else if (!evalRes.readyBtcOk) {
-        firstFailed.ready.btcOkReady = (firstFailed.ready.btcOkReady ?? 0) + 1;
-        addExample('ready', 'btcOkReady', row.symbol);
-      }
-
-      if (!evalRes.bestCore) {
-        addFirstFailed('best', bestOrder, evalRes.bestFlags, row.symbol);
-      } else if (!evalRes.bestBtcOk) {
-        firstFailed.best.btcBull = (firstFailed.best.btcBull ?? 0) + 1;
-        addExample('best', 'btcBull', row.symbol);
-      }
-
-      if (evalRes.readyCore && !evalRes.readyOk) {
-        if (!evalRes.readySweepOk) postCoreFailed.ready.readySweep = (postCoreFailed.ready.readySweep ?? 0) + 1;
-        if (!evalRes.readyBtcOk) postCoreFailed.ready.btcOkReady = (postCoreFailed.ready.btcOkReady ?? 0) + 1;
-      }
-      if (evalRes.bestCore && !evalRes.bestOk) {
-        if (!evalRes.bestBtcOk) postCoreFailed.best.btcBull = (postCoreFailed.best.btcBull ?? 0) + 1;
-      }
-    }
+    const sim = runTuneSimRows(rows, overrideReport.config, { includeExamples, examplesPerGate: body.examplesPerGate });
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
     const diffVsActual = scanRun?.signalsByCategory ? {
-      watch: counts.watch - Number(scanRun.signalsByCategory?.WATCH ?? 0),
-      early: counts.early - Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
-      ready: counts.ready - Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
-      best: counts.best - Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
+      watch: sim.counts.watch - Number(scanRun.signalsByCategory?.WATCH ?? 0),
+      early: sim.counts.early - Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
+      ready: sim.counts.ready - Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
+      best: sim.counts.best - Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
     } : null;
 
     res.json({
@@ -390,15 +432,145 @@ app.post('/api/tune/sim', async (req, res) => {
           typeErrors: overrideReport.overrideTypeErrors,
           effectiveConfig: overrideReport.config,
         },
+        notes: buildOverrideNotes(body.overrides),
       },
-      counts,
-      funnel,
-      postCoreFailed,
-      firstFailed,
-      gateTrue,
-      ...(examples ? { examples } : {}),
+      counts: sim.counts,
+      funnel: sim.funnel,
+      postCoreFailed: sim.postCoreFailed,
+      firstFailed: sim.firstFailed,
+      gateTrue: sim.gateTrue,
+      ...(sim.examples ? { examples: sim.examples } : {}),
       diffVsActual,
       riskNotes: [],
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Tune simulator (batch) (admin-only)
+app.post('/api/tune/simBatch', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const body = req.body || {};
+    const source = body.source || {};
+    const sourceMode = String(source.mode || '').toLowerCase();
+    let runId = String(body.runId || source.runId || '').trim();
+    const useLatest = body.useLatestFinishedIfMissing !== false;
+    if (sourceMode === 'lastscan') runId = '';
+    let scanRun = runId ? await getScanRunByRunId(runId) : null;
+    if (!runId && useLatest) {
+      const latest = await getLatestScanRuns();
+      scanRun = latest.lastFinished;
+      runId = scanRun?.runId ?? '';
+    }
+    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+    if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
+
+    const preset = parsePreset(body.preset ?? scanRun?.preset ?? 'BALANCED');
+    const scope = body.scope || {};
+    const limitRaw = Number(scope?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(5000, limitRaw)) : 500;
+    const symbols = Array.isArray(scope?.symbols) ? scope.symbols : null;
+    const includeExamples = Boolean(body.includeExamples);
+    const examplesPerGate = body.examplesPerGate;
+    const diffSymbolsLimitRaw = Number(body.diffSymbolsLimit ?? 200);
+    const diffSymbolsLimit = Number.isFinite(diffSymbolsLimitRaw) ? Math.max(0, Math.min(2000, diffSymbolsLimitRaw)) : 200;
+
+    const rows = await listCandidateFeatures({
+      runId,
+      preset: body.preset ? preset : undefined,
+      limit,
+      symbols,
+    });
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'No candidate features found' });
+
+    const variants = Array.isArray(body.variants) ? body.variants : [];
+    if (!variants.length) return res.status(400).json({ ok: false, error: 'variants required' });
+
+    const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
+    const baseOverrideReport = applyOverrides(cfgBase, body.baseOverrides || {});
+    const baseSim = runTuneSimRows(rows, baseOverrideReport.config, { includeExamples, examplesPerGate });
+
+    const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
+      const added: string[] = [];
+      const removed: string[] = [];
+      for (const sym of curSet) {
+        if (!baseSet.has(sym)) {
+          added.push(sym);
+          if (added.length >= diffSymbolsLimit) break;
+        }
+      }
+      for (const sym of baseSet) {
+        if (!curSet.has(sym)) {
+          removed.push(sym);
+          if (removed.length >= diffSymbolsLimit) break;
+        }
+      }
+      return { added, removed };
+    };
+
+    const variantResults = variants.map((variant: any, idx: number) => {
+      const nameRaw = variant?.name ?? `variant_${idx + 1}`;
+      const name = String(nameRaw || `variant_${idx + 1}`);
+      const overrides = variant?.overrides || {};
+      const overrideReport = applyOverrides(baseOverrideReport.config, overrides);
+      const sim = runTuneSimRows(rows, overrideReport.config, { includeExamples, examplesPerGate });
+      const readyDiff = buildDiff(baseSim.readySymbols, sim.readySymbols);
+      const bestDiff = buildDiff(baseSim.bestSymbols, sim.bestSymbols);
+      return {
+        name,
+        overrides: {
+          applied: overrideReport.appliedOverrides,
+          unknownKeys: overrideReport.unknownOverrideKeys,
+          typeErrors: overrideReport.overrideTypeErrors,
+          effectiveConfig: overrideReport.config,
+        },
+        notes: buildOverrideNotes({ ...(body.baseOverrides || {}), ...(overrides || {}) }),
+        counts: sim.counts,
+        funnel: sim.funnel,
+        postCoreFailed: sim.postCoreFailed,
+        firstFailed: sim.firstFailed,
+        gateTrue: sim.gateTrue,
+        ...(sim.examples ? { examples: sim.examples } : {}),
+        diffVsBase: {
+          counts: {
+            watch: sim.counts.watch - baseSim.counts.watch,
+            early: sim.counts.early - baseSim.counts.early,
+            ready: sim.counts.ready - baseSim.counts.ready,
+            best: sim.counts.best - baseSim.counts.best,
+          },
+          addedReadySymbols: readyDiff.added,
+          removedReadySymbols: readyDiff.removed,
+          addedBestSymbols: bestDiff.added,
+          removedBestSymbols: bestDiff.removed,
+        },
+      };
+    });
+
+    res.json({
+      meta: {
+        preset,
+        runId,
+        startedAt: scanRun?.startedAt ?? rows[0]?.startedAt ?? null,
+        evaluated: rows.length,
+        baseOverrides: {
+          applied: baseOverrideReport.appliedOverrides,
+          unknownKeys: baseOverrideReport.unknownOverrideKeys,
+          typeErrors: baseOverrideReport.overrideTypeErrors,
+          effectiveConfig: baseOverrideReport.config,
+        },
+        notes: buildOverrideNotes(body.baseOverrides),
+      },
+      base: {
+        counts: baseSim.counts,
+        funnel: baseSim.funnel,
+        postCoreFailed: baseSim.postCoreFailed,
+        firstFailed: baseSim.firstFailed,
+        gateTrue: baseSim.gateTrue,
+        ...(baseSim.examples ? { examples: baseSim.examples } : {}),
+      },
+      variants: variantResults,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
