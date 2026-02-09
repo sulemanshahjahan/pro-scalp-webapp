@@ -509,11 +509,12 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const diffSymbolsLimitRaw = Number(body.diffSymbolsLimit ?? 200);
     const diffSymbolsLimit = Number.isFinite(diffSymbolsLimitRaw) ? Math.max(0, Math.min(2000, diffSymbolsLimitRaw)) : 200;
 
-    const useMulti = Array.isArray(runIds) && runIds.length > 1;
-    const effectiveLimit = useMulti ? Math.min(50000, limitPerRun * runIds!.length) : limitPerRun;
+    const runIdsList = Array.isArray(runIds) ? runIds : [];
+    const useMulti = runIdsList.length > 1;
+    const effectiveLimit = useMulti ? Math.min(50000, limitPerRun * runIdsList.length) : limitPerRun;
     const rows = useMulti
       ? await listCandidateFeaturesMulti({
-        runIds: runIds!,
+        runIds: runIdsList,
         preset: body.preset ? preset : undefined,
         limit: effectiveLimit,
         symbols,
