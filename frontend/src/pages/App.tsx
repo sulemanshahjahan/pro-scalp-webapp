@@ -5,6 +5,7 @@ import { getBtcMarket, getSystemHealth, scanNow } from '../services/api'
 import SignalCard from '../components/SignalCard'
 import { enablePush, disablePush } from '../services/push'
 import StatsPage from '../pages/StatsPage'
+import TunePage from '../pages/TunePage'
 import { enableSoundSync, isSoundEnabled } from '../services/sound'
 import { playAlert } from '../services/sound'
 
@@ -16,12 +17,14 @@ const toApiPreset = (p: StorePreset): ApiPreset =>
   : p === 'Balanced'   ? 'BALANCED'
   : 'AGGRESSIVE';
 
-type Route = 'home' | 'stats';
+type Route = 'home' | 'stats' | 'tune';
 function getInitialRoute(): Route {
-  return window.location.pathname === '/stats' ? 'stats' : 'home';
+  if (window.location.pathname === '/stats') return 'stats';
+  if (window.location.pathname === '/tune') return 'tune';
+  return 'home';
 }
 function navigate(to: Route) {
-  const path = to === 'stats' ? '/stats' : '/';
+  const path = to === 'stats' ? '/stats' : to === 'tune' ? '/tune' : '/';
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
@@ -40,12 +43,20 @@ export default function App() {
         <header className="sticky top-0 bg-bg/70 backdrop-blur z-10 py-3 border-b border-white/5">
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
-            <button
-              onClick={() => navigate('home')}
-              className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
-            >
-              🏠 Home
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('tune')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Tune
+              </button>
+              <button
+                onClick={() => navigate('home')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Home
+              </button>
+            </div>
           </div>
           <div className="mt-1 text-xs text-white/60">
             Stats = logged signals + outcomes after 30m/60m/4h.
@@ -53,6 +64,37 @@ export default function App() {
         </header>
 
         <StatsPage />
+      </div>
+    );
+  }
+
+  if (route === 'tune') {
+    return (
+      <div className="min-h-dvh px-3 pb-24 max-w-[90%] mx-auto">
+        <header className="sticky top-0 bg-bg/70 backdrop-blur z-10 py-3 border-b border-white/5">
+          <div className="flex items-center justify-between">
+            <div className="text-xl font-semibold">Pro Scalp</div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('stats')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Stats
+              </button>
+              <button
+                onClick={() => navigate('home')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Home
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 text-xs text-white/60">
+            Tune = replay gates from stored feature snapshots.
+          </div>
+        </header>
+
+        <TunePage />
       </div>
     );
   }
@@ -324,12 +366,20 @@ export default function App() {
       <header className="sticky top-0 bg-bg/70 backdrop-blur z-10 py-3 border-b border-white/5">
         <div className="flex items-center justify-between">
           <div className="text-xl font-semibold">Pro Scalp</div>
-          <button
-            onClick={() => navigate('stats')}
-            className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
-          >
-            📊 Stats
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('tune')}
+              className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+            >
+              Tune
+            </button>
+            <button
+              onClick={() => navigate('stats')}
+              className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+            >
+              Stats
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center justify-between mt-2">
