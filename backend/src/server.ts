@@ -463,7 +463,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const runIdsRaw = Array.isArray(source.runIds) ? source.runIds : (Array.isArray(body.runIds) ? body.runIds : null);
     if (sourceMode === 'lastscan') runId = '';
     let scanRun = runId ? await getScanRunByRunId(runId) : null;
-    let runIds: string[] | null = null;
+    let runIds: string[] = [];
     let runMeta: Array<{ runId: string; startedAt: number }> = [];
 
     if (sourceMode === 'runids') {
@@ -509,7 +509,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const diffSymbolsLimitRaw = Number(body.diffSymbolsLimit ?? 200);
     const diffSymbolsLimit = Number.isFinite(diffSymbolsLimitRaw) ? Math.max(0, Math.min(2000, diffSymbolsLimitRaw)) : 200;
 
-    const runIdsList = Array.isArray(runIds) ? runIds : [];
+    const runIdsList = runIds;
     const useMulti = runIdsList.length > 1;
     const effectiveLimit = useMulti ? Math.min(50000, limitPerRun * runIdsList.length) : limitPerRun;
     const rows = useMulti
@@ -591,7 +591,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
     });
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
-    const runIdsOut = useMulti ? runIds! : [runId].filter(Boolean);
+    const runIdsOut = useMulti ? runIds : [runId].filter(Boolean);
     const startedAtRange = runMeta.length
       ? {
         min: Math.min(...runMeta.map(r => r.startedAt)),
