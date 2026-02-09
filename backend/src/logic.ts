@@ -338,9 +338,11 @@ function analyzeSymbolInternal(
   const reclaimDayBlocked = !(sameDay01 && sameDay12);
   const reclaimOk = reclaim || tappedVwapPrev;
 
-  const priceAboveEma = price > emaNow;
+  const READY_EMA_EPS_PCT = parseFloat(process.env.READY_EMA_EPS_PCT || '0');
+  const WATCH_EMA_EPS_PCT = parseFloat(process.env.WATCH_EMA_EPS_PCT || '0');
+  const priceAboveEma = price >= emaNow * (1 - READY_EMA_EPS_PCT / 100);
   const emaWatchOk =
-    priceAboveEma ||
+    price >= emaNow * (1 - WATCH_EMA_EPS_PCT / 100) ||
     (((emaNow - price) / emaNow) * 100 <= EMA5_WATCH_SOFT_TOL);
 
   const rsiBestOk  = rsiNow >= RSI_BEST_MIN && rsiNow <= RSI_BEST_MAX && rsiDelta >= RSI_DELTA_STRICT;
