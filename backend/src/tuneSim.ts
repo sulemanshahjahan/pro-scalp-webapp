@@ -46,6 +46,13 @@ export type CandidateFeatureInput = {
   computed: Record<string, any>;
 };
 
+export type OverrideReport = {
+  config: TuneConfig;
+  appliedOverrides: Record<string, number>;
+  unknownOverrideKeys: string[];
+  overrideTypeErrors: Record<string, string>;
+};
+
 function num(v: any): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : NaN;
@@ -79,22 +86,46 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
   };
 }
 
-export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>) {
-  if (!overrides || typeof overrides !== 'object') return cfg;
+export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>): OverrideReport {
   const out: TuneConfig = { ...cfg, thresholds: { ...cfg.thresholds } };
+  const appliedOverrides: Record<string, number> = {};
+  const unknownOverrideKeys: string[] = [];
+  const overrideTypeErrors: Record<string, string> = {};
+
+  if (!overrides || typeof overrides !== 'object') {
+    return { config: out, appliedOverrides, unknownOverrideKeys, overrideTypeErrors };
+  }
 
   for (const [key, raw] of Object.entries(overrides)) {
     const n = Number(raw);
-    if (!Number.isFinite(n)) continue;
-    if (key in out) {
-      (out as any)[key] = n;
+    if (!Number.isFinite(n)) {
+      overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
       continue;
     }
-    if (key === 'THRESHOLD_VWAP_DISTANCE_PCT') out.thresholds.vwapDistancePct = n;
-    if (key === 'THRESHOLD_VOL_SPIKE_X') out.thresholds.volSpikeX = n;
-    if (key === 'THRESHOLD_ATR_GUARD_PCT') out.thresholds.atrGuardPct = n;
+    if (key in out) {
+      (out as any)[key] = n;
+      appliedOverrides[key] = n;
+      continue;
+    }
+    if (key === 'THRESHOLD_VWAP_DISTANCE_PCT') {
+      out.thresholds.vwapDistancePct = n;
+      appliedOverrides[key] = n;
+      continue;
+    }
+    if (key === 'THRESHOLD_VOL_SPIKE_X') {
+      out.thresholds.volSpikeX = n;
+      appliedOverrides[key] = n;
+      continue;
+    }
+    if (key === 'THRESHOLD_ATR_GUARD_PCT') {
+      out.thresholds.atrGuardPct = n;
+      appliedOverrides[key] = n;
+      continue;
+    }
+    unknownOverrideKeys.push(key);
   }
-  return out;
+
+  return { config: out, appliedOverrides, unknownOverrideKeys, overrideTypeErrors };
 }
 
 export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): EvalResult {

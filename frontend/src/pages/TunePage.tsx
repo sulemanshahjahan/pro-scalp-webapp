@@ -283,6 +283,34 @@ export default function TunePage() {
             </div>
           </div>
 
+          {simResult?.meta?.overrides ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/80 space-y-2">
+              <div className="text-white/60">Overrides</div>
+              <div>
+                <span className="text-white/60">Applied:</span>{' '}
+                {Object.keys(simResult.meta.overrides.applied || {}).length
+                  ? JSON.stringify(simResult.meta.overrides.applied)
+                  : 'None'}
+              </div>
+              {simResult.meta.overrides.unknownKeys?.length ? (
+                <div className="text-amber-200">
+                  Unknown keys: {simResult.meta.overrides.unknownKeys.join(', ')}
+                </div>
+              ) : null}
+              {simResult.meta.overrides.typeErrors && Object.keys(simResult.meta.overrides.typeErrors).length ? (
+                <div className="text-amber-200">
+                  Type errors: {JSON.stringify(simResult.meta.overrides.typeErrors)}
+                </div>
+              ) : null}
+              <details className="mt-1">
+                <summary className="cursor-pointer text-white/60">Effective config</summary>
+                <pre className="mt-2 whitespace-pre-wrap text-[11px] bg-black/30 border border-white/10 rounded p-2">
+{JSON.stringify(simResult.meta.overrides.effectiveConfig ?? {}, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs text-white/60">Evaluated</div>
@@ -416,4 +444,3 @@ export default function TunePage() {
     </div>
   );
 }
-

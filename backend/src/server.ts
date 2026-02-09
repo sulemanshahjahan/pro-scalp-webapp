@@ -235,7 +235,8 @@ app.post('/api/tune/sim', async (req, res) => {
     if (!rows.length) return res.status(404).json({ ok: false, error: 'No candidate features found' });
 
     const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
-    const cfg = applyOverrides(cfgBase, body.overrides || {});
+    const overrideReport = applyOverrides(cfgBase, body.overrides || {});
+    const cfg = overrideReport.config;
     const includeExamples = Boolean(body.includeExamples);
     const examplesPerGate = Math.max(1, Math.min(50, Number(body.examplesPerGate ?? 5)));
 
@@ -367,6 +368,12 @@ app.post('/api/tune/sim', async (req, res) => {
         runId,
         startedAt,
         evaluated: rows.length,
+        overrides: {
+          applied: overrideReport.appliedOverrides,
+          unknownKeys: overrideReport.unknownOverrideKeys,
+          typeErrors: overrideReport.overrideTypeErrors,
+          effectiveConfig: overrideReport.config,
+        },
       },
       counts,
       funnel,
