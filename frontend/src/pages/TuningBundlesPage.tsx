@@ -40,6 +40,8 @@ export default function TuningBundlesPage() {
   const [bundleLoading, setBundleLoading] = useState(false);
   const [bundleError, setBundleError] = useState('');
   const [showBundleJson, setShowBundleJson] = useState(false);
+  const [configHash, setConfigHash] = useState('');
+  const [hashOptions, setHashOptions] = useState<Array<{ configHash: string; n: number }>>([]);
 
   useEffect(() => {
     localStorage.setItem('ps_admin_token', adminToken);
@@ -49,12 +51,31 @@ export default function TuningBundlesPage() {
     return adminToken.trim() ? { 'x-admin-token': adminToken.trim() } : {};
   }
 
+  async function loadConfigHashes() {
+    setBundleError('');
+    try {
+      const qs = new URLSearchParams();
+      if (Number.isFinite(bundleHours)) qs.set('hours', String(bundleHours));
+      const resp = await fetch(API(`/api/tuning/config-hashes?${qs.toString()}`), {
+        headers: authHeaders(),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setBundleError(resp?.error || 'Failed to load config hashes');
+        return;
+      }
+      setHashOptions(resp?.hashes ?? []);
+    } catch (e: any) {
+      setBundleError(String(e?.message || e));
+    }
+  }
+
   async function loadBundleLatest() {
     setBundleError('');
     setBundleLoading(true);
     try {
       const qs = new URLSearchParams();
       if (Number.isFinite(bundleHours)) qs.set('hours', String(bundleHours));
+      if (configHash.trim()) qs.set('configHash', configHash.trim());
       const resp = await fetch(API(`/api/tuning/bundles/latest?${qs.toString()}`), {
         headers: authHeaders(),
       }).then(r => r.json());
@@ -77,6 +98,7 @@ export default function TuningBundlesPage() {
     try {
       const qs = new URLSearchParams();
       if (Number.isFinite(bundleHours)) qs.set('hours', String(bundleHours));
+      if (configHash.trim()) qs.set('configHash', configHash.trim());
       const resp = await fetch(API(`/api/tuning/bundles/generate?${qs.toString()}`), {
         method: 'POST',
         headers: authHeaders(),
@@ -100,6 +122,7 @@ export default function TuningBundlesPage() {
     try {
       const qs = new URLSearchParams();
       if (Number.isFinite(bundleLimit)) qs.set('limit', String(bundleLimit));
+      if (configHash.trim()) qs.set('configHash', configHash.trim());
       const resp = await fetch(API(`/api/tuning/bundles/recent?${qs.toString()}`), {
         headers: authHeaders(),
       }).then(r => r.json());
@@ -186,6 +209,24 @@ export default function TuningBundlesPage() {
               onChange={(e) => setBundleHours(Math.max(1, Math.min(168, Number(e.target.value))))}
               className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1"
             />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-white/60">Config</span>
+            <select
+              value={configHash}
+              onChange={(e) => setConfigHash(e.target.value)}
+              className="bg-white/10 border border-white/10 rounded px-2 py-1 max-w-[260px]"
+            >
+              <option value="">All configs</option>
+              {hashOptions.map((h) => (
+                <option key={h.configHash} value={h.configHash}>
+                  {h.configHash} ({h.n})
+                </option>
+              ))}
+            </select>
+            <button onClick={loadConfigHashes} className="px-2 py-1 rounded bg-white/10 hover:bg-white/15">
+              Refresh hashes
+            </button>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-white/60">Limit</span>

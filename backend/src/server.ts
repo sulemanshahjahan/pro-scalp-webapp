@@ -756,6 +756,31 @@ app.post('/api/tuning/bundles/generate', async (req, res) => {
   }
 });
 
+// Admin: list recent config hashes from signals
+app.get('/api/tuning/config-hashes', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const hoursRaw = Number((req.query as any)?.hours);
+    const hours = Number.isFinite(hoursRaw) ? Math.max(1, Math.min(720, hoursRaw)) : 6;
+    const limitRaw = Number((req.query as any)?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 20;
+    const windowEndMs = Date.now();
+    const windowStartMs = windowEndMs - hours * 60 * 60_000;
+    const rows = await getDb().prepare(`
+      SELECT config_hash as "configHash", COUNT(*) as n
+      FROM signals
+      WHERE time >= @start AND time < @end
+        AND config_hash IS NOT NULL
+      GROUP BY config_hash
+      ORDER BY n DESC
+      LIMIT @limit
+    `).all({ start: windowStartMs, end: windowEndMs, limit });
+    res.json({ ok: true, hashes: rows ?? [], windowStartMs, windowEndMs });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Debug: list tables
 app.get('/api/debug/tables', async (_req, res) => {
   try {
