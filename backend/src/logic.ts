@@ -24,6 +24,7 @@ const READY_CLOSE_POS_MIN = parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'
 const READY_UPPER_WICK_MAX = parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'); // upper wick <= 40% of range
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
+const VWAP_TOUCH_SNAPSHOT_BARS = parseInt(process.env.VWAP_TOUCH_SNAPSHOT_BARS || '30', 10);
 
 const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
 const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
@@ -240,11 +241,46 @@ export type CandidateDebug = {
   };
 };
 
+export type CandidateFeatureSnapshot = {
+  metrics: {
+    price: number;
+    vwap: number;
+    ema200: number;
+    vwapDistPct: number;
+    emaDistPct: number;
+    rsi: number;
+    rsiPrev: number;
+    rsiDelta: number;
+    atrPct: number;
+    volSpike: number;
+    bodyPct: number;
+    closePos: number;
+    upperWickPct: number;
+    vwapLowDistPctLast: number[];
+  };
+  computed: {
+    sessionOk: boolean;
+    reclaimOrTap: boolean;
+    trendOk: boolean;
+    readyTrendOk: boolean;
+    confirm15Strict: boolean;
+    confirm15Soft: boolean;
+    confirm15Ok: boolean;
+    sweepOk: boolean;
+    rrOk: boolean;
+    hasMarket: boolean;
+    btcBull: boolean;
+    btcBear: boolean;
+    bullish: boolean;
+  };
+};
+
 export type AnalyzeResult = {
   signal: Omit<Signal, 'time'> | null;
   debug: {
     candidate: CandidateDebug;
     gateSnapshot: any;
+    features?: CandidateFeatureSnapshot;
   };
 };
 
@@ -306,6 +342,7 @@ function analyzeSymbolInternal(
   if (!Number.isFinite(emaNow) || emaNow <= 0) return null;
 
   const distToVwapPct = ((price - vwap_i) / vwap_i) * 100;
+  const emaDistPct = ((price - emaNow) / emaNow) * 100;
 
   // BUY window = preset threshold (e.g. 0.30%)
   const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
@@ -777,7 +814,45 @@ function analyzeSymbolInternal(
       core: bestCore,
     },
   };
-  const debug = { candidate: candidateDebug, gateSnapshot };
+  const snapshotBars = Math.max(1, Math.min(200, VWAP_TOUCH_SNAPSHOT_BARS || 30));
+  const lowDistStart = Math.max(0, i - snapshotBars + 1);
+  const vwapLowDistPctLast = lows5
+    .slice(lowDistStart, i + 1)
+    .map((low) => ((low - vwap_i) / vwap_i) * 100);
+  const features: CandidateFeatureSnapshot = {
+    metrics: {
+      price,
+      vwap: vwap_i,
+      ema200: emaNow,
+      vwapDistPct: distToVwapPct,
+      emaDistPct,
+      rsi: rsiNow,
+      rsiPrev,
+      rsiDelta,
+      atrPct: atrNow,
+      volSpike: volSpikeNow,
+      bodyPct,
+      closePos,
+      upperWickPct,
+      vwapLowDistPctLast,
+    },
+    computed: {
+      sessionOk: sessionOK,
+      reclaimOrTap: reclaimOk,
+      trendOk,
+      readyTrendOk,
+      confirm15Strict: confirm15mStrict,
+      confirm15Soft: confirm15mSoft,
+      confirm15Ok: confirm15mOk,
+      sweepOk: liq.ok,
+      rrOk: rrOK,
+      hasMarket,
+      btcBull,
+      btcBear,
+      bullish,
+    },
+  };
+  const debug = { candidate: candidateDebug, gateSnapshot, features };
 
   if (!category) {
     return { signal: null, debug };

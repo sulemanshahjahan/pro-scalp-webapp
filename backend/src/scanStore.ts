@@ -338,6 +338,34 @@ export async function listScanRuns(limit = 50) {
   return rows.map(normalizeScanRow).filter(Boolean);
 }
 
+export async function getScanRunByRunId(runId: string) {
+  if (!runId) return null;
+  await ensureScanSchema();
+  const d = getDb();
+  const row = await d.prepare(`
+    SELECT
+      id,
+      run_id as "runId",
+      preset,
+      status,
+      started_at as "startedAt",
+      finished_at as "finishedAt",
+      duration_ms as "durationMs",
+      processed_symbols as "processedSymbols",
+      precheck_passed as "precheckPassed",
+      fetched_ok as "fetchedOk",
+      errors_429 as "errors429",
+      errors_other as "errorsOther",
+      signals_by_category_json as "signalsByCategoryJson",
+      gate_stats_json as "gateStatsJson",
+      error_message as "errorMessage"
+    FROM scan_runs
+    WHERE run_id = @runId
+    LIMIT 1
+  `).get({ runId });
+  return normalizeScanRow(row);
+}
+
 export async function pruneScanRuns(limit = 2000) {
   await ensureScanSchema();
   const d = getDb();

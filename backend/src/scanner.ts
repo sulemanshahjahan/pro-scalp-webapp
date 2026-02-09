@@ -1,5 +1,6 @@
 import { topUSDTByQuoteVolume, listAllUSDTMarkets, klines } from './binance.js';
 import { tryStartScanRun, finishScanRun, failScanRun, pruneScanRuns } from './scanStore.js';
+import { upsertCandidateFeatures, pruneCandidateFeatures } from './candidateFeaturesStore.js';
 import { analyzeSymbolDetailed } from './logic.js';
 import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
@@ -526,6 +527,22 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         }
       }
 
+      const features = res?.debug?.features;
+      if (features) {
+        try {
+          await upsertCandidateFeatures({
+            runId: scanRun.runId,
+            symbol: sym,
+            preset,
+            startedAt: scanRun.startedAt,
+            metrics: features.metrics,
+            computed: features.computed,
+          });
+        } catch (e) {
+          console.warn('[candidate_features] upsert failed:', e);
+        }
+      }
+
       const snap = res?.debug?.gateSnapshot;
       if (snap) {
         const ready = snap.ready;
@@ -728,6 +745,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     await finishScanRun(scanRun.runId, payload);
   }
   await pruneScanRuns();
+  try { await pruneCandidateFeatures(); } catch (e) { console.warn('[candidate_features] prune failed:', e); }
   currentScan = null;
 
   return outs;

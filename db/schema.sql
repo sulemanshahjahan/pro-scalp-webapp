@@ -21,3 +21,16 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   only_best_entry INTEGER DEFAULT 0,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS candidate_features (
+  run_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  preset TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+  metrics TEXT NOT NULL,
+  computed TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (run_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
+CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);

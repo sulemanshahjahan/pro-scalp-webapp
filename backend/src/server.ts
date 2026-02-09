@@ -4,8 +4,10 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
-import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, type Preset } from './scanner.js';
-import { getLatestScanRuns, listScanRuns } from './scanStore.js';
+import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, thresholdsForPreset, type Preset } from './scanner.js';
+import { getLatestScanRuns, listScanRuns, getScanRunByRunId } from './scanStore.js';
+import { listCandidateFeatures } from './candidateFeaturesStore.js';
+import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSim.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
@@ -65,6 +67,33 @@ function parsePreset(v: any): Preset {
   const s = String(v || '').toUpperCase();
   if (s === 'CONSERVATIVE' || s === 'AGGRESSIVE' || s === 'BALANCED') return s as Preset;
   return 'BALANCED';
+}
+
+function requireAdmin(req: express.Request, res: express.Response) {
+  const token = process.env.ADMIN_TOKEN;
+  if (!token) return true;
+  const got = req.header('x-admin-token');
+  if (got !== token) {
+    res.status(401).json({ ok: false, error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function computePercentiles(values: number[], ps = [0.1, 0.25, 0.5, 0.75, 0.9]) {
+  const clean = values.filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+  const n = clean.length;
+  const out: Record<string, number | null> = {};
+  for (const p of ps) {
+    if (!n) { out[`p${Math.round(p * 100)}`] = null; continue; }
+    const idx = (n - 1) * p;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    const t = idx - lo;
+    const v = lo === hi ? clean[lo] : clean[lo] * (1 - t) + clean[hi] * t;
+    out[`p${Math.round(p * 100)}`] = Number.isFinite(v) ? v : null;
+  }
+  return out;
 }
 
 const db = getDb();
@@ -170,6 +199,244 @@ app.get('/api/scanRuns', async (req, res) => {
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
     const rows = await listScanRuns(limit);
     res.json({ ok: true, limit, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Tune simulator (admin-only)
+app.post('/api/tune/sim', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const body = req.body || {};
+    let runId = String(body.runId || '').trim();
+    const useLatest = body.useLatestFinishedIfMissing !== false;
+    let scanRun = runId ? await getScanRunByRunId(runId) : null;
+    if (!runId && useLatest) {
+      const latest = await getLatestScanRuns();
+      scanRun = latest.lastFinished;
+      runId = scanRun?.runId ?? '';
+    }
+    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+    if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
+
+    const preset = parsePreset(body.preset ?? scanRun?.preset ?? 'BALANCED');
+    const scope = body.scope || {};
+    const limitRaw = Number(scope?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(5000, limitRaw)) : 500;
+    const symbols = Array.isArray(scope?.symbols) ? scope.symbols : null;
+
+    const rows = await listCandidateFeatures({
+      runId,
+      preset: body.preset ? preset : undefined,
+      limit,
+      symbols,
+    });
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'No candidate features found' });
+
+    const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
+    const cfg = applyOverrides(cfgBase, body.overrides || {});
+    const includeExamples = Boolean(body.includeExamples);
+    const examplesPerGate = Math.max(1, Math.min(50, Number(body.examplesPerGate ?? 5)));
+
+    const counts = { watch: 0, early: 0, ready: 0, best: 0 };
+    const funnel = {
+      candidate_evaluated: rows.length,
+      watch_created: 0,
+      early_created: 0,
+      ready_core_true: 0,
+      best_core_true: 0,
+    };
+    const firstFailed: Record<string, Record<string, number>> = {
+      watch: {},
+      early: {},
+      ready: {},
+      best: {},
+    };
+    const gateTrue: Record<string, Record<string, number>> = {
+      watch: {},
+      early: {},
+      ready: {},
+      best: {},
+    };
+    const examples: Record<string, Record<string, string[]>> | undefined = includeExamples
+      ? { watch: {}, early: {}, ready: {}, best: {} }
+      : undefined;
+
+    const watchOrder = ['nearVwapWatch', 'rsiWatchOk', 'emaWatchOk'];
+    const earlyOrder = ['sessionOK', 'nearVwapWatch', 'rsiWatchOk', 'emaWatchOk', 'atrOkReady', 'reclaimOrTap', 'priceAboveVwap'];
+    const readyOrder = [
+      'sessionOK',
+      'priceAboveVwap',
+      'priceAboveEma',
+      'nearVwapReady',
+      'reclaimOrTap',
+      'readyVolOk',
+      'atrOkReady',
+      'confirm15mOk',
+      'strongBody',
+      'rsiReadyOk',
+      'readyTrendOk',
+    ];
+    const bestOrder = [
+      'priceAboveVwap',
+      'priceAboveEma',
+      'nearVwapBuy',
+      'rsiBestOk',
+      'strongBody',
+      'atrOkBest',
+      'trendOk',
+      'sessionOK',
+      'confirm15mOk',
+      'sweepOk',
+      'reclaimOrTap',
+      'bestVolOk',
+      'rrOk',
+      'hasMarket',
+    ];
+
+    const addGateTrue = (bucket: Record<string, number>, flags: Record<string, boolean>) => {
+      for (const [k, ok] of Object.entries(flags)) {
+        if (ok) bucket[k] = (bucket[k] ?? 0) + 1;
+      }
+    };
+    const addFirstFailed = (stage: string, order: string[], flags: Record<string, boolean>, symbol: string) => {
+      const k = order.find(key => !flags[key]);
+      if (!k) return;
+      firstFailed[stage][k] = (firstFailed[stage][k] ?? 0) + 1;
+      if (examples) {
+        const arr = examples[stage][k] ?? (examples[stage][k] = []);
+        if (arr.length < examplesPerGate) arr.push(symbol);
+      }
+    };
+    const addExample = (stage: string, key: string, symbol: string) => {
+      if (!examples) return;
+      const arr = examples[stage][key] ?? (examples[stage][key] = []);
+      if (arr.length < examplesPerGate) arr.push(symbol);
+    };
+
+    for (const row of rows) {
+      const evalRes = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
+      if (evalRes.watchOk) counts.watch += 1;
+      if (evalRes.earlyOk) counts.early += 1;
+      if (evalRes.readyOk) counts.ready += 1;
+      if (evalRes.bestOk) counts.best += 1;
+
+      if (evalRes.watchOk) funnel.watch_created += 1;
+      if (evalRes.earlyOk) funnel.early_created += 1;
+      if (evalRes.readyCore) funnel.ready_core_true += 1;
+      if (evalRes.bestCore) funnel.best_core_true += 1;
+
+      addGateTrue(gateTrue.watch, evalRes.watchFlags);
+      addGateTrue(gateTrue.early, evalRes.earlyFlags);
+      addGateTrue(gateTrue.ready, evalRes.readyFlags);
+      addGateTrue(gateTrue.best, evalRes.bestFlags);
+
+      if (!evalRes.watchOk) addFirstFailed('watch', watchOrder, evalRes.watchFlags, row.symbol);
+      if (!evalRes.earlyOk) addFirstFailed('early', earlyOrder, evalRes.earlyFlags, row.symbol);
+
+      if (!evalRes.readyCore) {
+        addFirstFailed('ready', readyOrder, evalRes.readyFlags, row.symbol);
+      } else if (!evalRes.readySweepOk) {
+        firstFailed.ready.readySweep = (firstFailed.ready.readySweep ?? 0) + 1;
+        addExample('ready', 'readySweep', row.symbol);
+      } else if (!evalRes.readyBtcOk) {
+        firstFailed.ready.btcOkReady = (firstFailed.ready.btcOkReady ?? 0) + 1;
+        addExample('ready', 'btcOkReady', row.symbol);
+      }
+
+      if (!evalRes.bestCore) {
+        addFirstFailed('best', bestOrder, evalRes.bestFlags, row.symbol);
+      } else if (!evalRes.bestBtcOk) {
+        firstFailed.best.btcBull = (firstFailed.best.btcBull ?? 0) + 1;
+        addExample('best', 'btcBull', row.symbol);
+      }
+    }
+
+    const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
+    const diffVsActual = scanRun?.signalsByCategory ? {
+      watch: counts.watch - Number(scanRun.signalsByCategory?.WATCH ?? 0),
+      early: counts.early - Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
+      ready: counts.ready - Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
+      best: counts.best - Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
+    } : null;
+
+    res.json({
+      meta: {
+        preset,
+        runId,
+        startedAt,
+        evaluated: rows.length,
+      },
+      counts,
+      funnel,
+      firstFailed,
+      gateTrue,
+      ...(examples ? { examples } : {}),
+      diffVsActual,
+      riskNotes: [],
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Tune histograms (admin-only)
+app.get('/api/tune/hist', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    let runId = String((req.query as any)?.runId || '').trim();
+    const useLatestRaw = String((req.query as any)?.useLatestFinishedIfMissing || '').toLowerCase();
+    const useLatest = useLatestRaw ? ['1', 'true', 'yes'].includes(useLatestRaw) : true;
+    let scanRun = runId ? await getScanRunByRunId(runId) : null;
+    if (!runId && useLatest) {
+      const latest = await getLatestScanRuns();
+      scanRun = latest.lastFinished;
+      runId = scanRun?.runId ?? '';
+    }
+    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+    if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
+
+    const preset = parsePreset((req.query as any)?.preset ?? scanRun?.preset ?? 'BALANCED');
+    const limitRaw = Number((req.query as any)?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(10000, limitRaw)) : 5000;
+    const rows = await listCandidateFeatures({ runId, preset: (req.query as any)?.preset ? preset : undefined, limit });
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'No candidate features found' });
+
+    const rsiVals: number[] = [];
+    const vwapAbs: number[] = [];
+    const emaAbs: number[] = [];
+    const bodyPctVals: number[] = [];
+    const atrPctVals: number[] = [];
+
+    for (const row of rows) {
+      const m = row.metrics ?? {};
+      const rsi = Number(m.rsi);
+      const vwapDist = Number(m.vwapDistPct);
+      const emaDist = Number(m.emaDistPct);
+      const body = Number(m.bodyPct);
+      const atr = Number(m.atrPct);
+      if (Number.isFinite(rsi)) rsiVals.push(rsi);
+      if (Number.isFinite(vwapDist)) vwapAbs.push(Math.abs(vwapDist));
+      if (Number.isFinite(emaDist)) emaAbs.push(Math.abs(emaDist));
+      if (Number.isFinite(body)) bodyPctVals.push(body);
+      if (Number.isFinite(atr)) atrPctVals.push(atr);
+    }
+
+    res.json({
+      ok: true,
+      meta: {
+        runId,
+        preset,
+        startedAt: scanRun?.startedAt ?? rows[0]?.startedAt ?? null,
+        evaluated: rows.length,
+      },
+      rsi: computePercentiles(rsiVals),
+      vwapAbs: computePercentiles(vwapAbs),
+      emaAbs: computePercentiles(emaAbs),
+      bodyPct: computePercentiles(bodyPctVals),
+      atrPct: computePercentiles(atrPctVals),
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
