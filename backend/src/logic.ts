@@ -29,6 +29,8 @@ const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true'
 const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_SWEEP_REQUIRED = (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_BTC_REQUIRED = (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const BEST_BTC_REQUIRED = (process.env.BEST_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
 
 const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
 const BEST_VWAP_EPS_PCT = parseFloat(process.env.BEST_VWAP_EPS_PCT || '0');
@@ -490,7 +492,8 @@ function analyzeSymbolInternal(
     rrOK &&
     hasMarket;
   const bestBtcOk = hasMarket && btcBull;
-  const bestOk = bestCore && bestBtcOk;
+  const bestBtcOkReq = BEST_BTC_REQUIRED ? bestBtcOk : true;
+  const bestOk = bestCore && bestBtcOkReq;
 
   if (bestOk) {
     category = 'BEST_ENTRY';
@@ -546,10 +549,11 @@ function analyzeSymbolInternal(
     // Allow READY during BTC bear only if symbol is exceptionally strong
     (btcBear && confirm15mStrict && trendOk && strongBodyReady && readyVolOk)
   );
+  const readyBtcOkReq = READY_BTC_REQUIRED ? readyBtcOk : true;
   const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = liq.ok || readySweepFallbackOk;
   const readySweepOkReq = READY_SWEEP_REQUIRED ? readySweepOk : true;
-  const readyOk = readyCore && readySweepOkReq && readyBtcOk;
+  const readyOk = readyCore && readySweepOkReq && readyBtcOkReq;
   const blockedByBtc = readyCore && readySweepOk && !readyBtcOk;
 
   const readyGates: Gate[] = [
@@ -578,7 +582,7 @@ function analyzeSymbolInternal(
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
     {
       key: 'btcOkReady',
-      ok: readyBtcOk,
+      ok: readyBtcOkReq,
       reason: 'BTC regime gate failed (bearish or neutral without strict confirm)',
     },
   ];
@@ -792,7 +796,7 @@ function analyzeSymbolInternal(
     { key: 'bestVolOk', ok: bestVolOk, reason: 'Volume spike not met' },
     { key: 'rrOk', ok: rrOK, reason: `R:R below ${RR_MIN_BEST.toFixed(2)}` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
-    { key: 'btcBull', ok: bestBtcOk, reason: 'BTC not bullish (15m)' },
+    { key: 'btcBull', ok: bestBtcOkReq, reason: 'BTC not bullish (15m)' },
   ];
   const bestDebug = buildGateDebug(bestGates);
 
@@ -816,7 +820,7 @@ function analyzeSymbolInternal(
       reclaimOrTap: reclaimOk,
       rsiReadyOk,
       hasMarket,
-      btc: readyBtcOk,
+      btc: readyBtcOkReq,
       core: readyCore,
     },
     best: {
@@ -828,7 +832,7 @@ function analyzeSymbolInternal(
       volSpike: bestVolOk,
       atr: atrOkBest,
       sweep: liq.ok,
-      btc: bestBtcOk,
+      btc: bestBtcOkReq,
       rr: rrOK,
       core: bestCore,
     },

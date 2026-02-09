@@ -376,6 +376,27 @@ export default function TunePage() {
             ))}
           </div>
 
+          {simResult?.postCoreFailed ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+              {(['ready', 'best'] as const).map((stage) => (
+                <div key={`${stage}-post`} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Post-Core Failed: {stage}</div>
+                  <div className="mt-2 text-sm text-white/80 space-y-1">
+                    {sortEntries(simResult?.postCoreFailed?.[stage]).map((r) => (
+                      <div key={`${stage}-post-${r.key}`} className="flex items-center justify-between">
+                        <span className="text-white/70">{r.key}</span>
+                        <span>{r.val}</span>
+                      </div>
+                    ))}
+                    {!sortEntries(simResult?.postCoreFailed?.[stage]).length ? (
+                      <div className="text-white/50">None</div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
             {(['watch', 'early', 'ready', 'best'] as const).map((stage) => (
               <div key={`${stage}-true`} className="rounded-xl border border-white/10 bg-white/5 p-3">

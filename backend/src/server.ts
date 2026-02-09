@@ -250,6 +250,10 @@ app.post('/api/tune/sim', async (req, res) => {
       ready_final_true: 0,
       best_final_true: 0,
     };
+    const postCoreFailed: Record<string, Record<string, number>> = {
+      ready: {},
+      best: {},
+    };
     const firstFailed: Record<string, Record<string, number>> = {
       watch: {},
       early: {},
@@ -356,6 +360,14 @@ app.post('/api/tune/sim', async (req, res) => {
         firstFailed.best.btcBull = (firstFailed.best.btcBull ?? 0) + 1;
         addExample('best', 'btcBull', row.symbol);
       }
+
+      if (evalRes.readyCore && !evalRes.readyOk) {
+        if (!evalRes.readySweepOk) postCoreFailed.ready.readySweep = (postCoreFailed.ready.readySweep ?? 0) + 1;
+        if (!evalRes.readyBtcOk) postCoreFailed.ready.btcOkReady = (postCoreFailed.ready.btcOkReady ?? 0) + 1;
+      }
+      if (evalRes.bestCore && !evalRes.bestOk) {
+        if (!evalRes.bestBtcOk) postCoreFailed.best.btcBull = (postCoreFailed.best.btcBull ?? 0) + 1;
+      }
     }
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
@@ -381,6 +393,7 @@ app.post('/api/tune/sim', async (req, res) => {
       },
       counts,
       funnel,
+      postCoreFailed,
       firstFailed,
       gateTrue,
       ...(examples ? { examples } : {}),

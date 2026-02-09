@@ -28,6 +28,8 @@ export type TuneConfig = {
   READY_TREND_REQUIRED: boolean;
   READY_VOL_SPIKE_REQUIRED: boolean;
   READY_SWEEP_REQUIRED: boolean;
+  READY_BTC_REQUIRED: boolean;
+  BEST_BTC_REQUIRED: boolean;
   BEST_VWAP_MAX_PCT: number | null;
   BEST_VWAP_EPS_PCT: number;
   BEST_EMA_EPS_PCT: number;
@@ -108,7 +110,9 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     READY_TREND_REQUIRED: (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_VOL_SPIKE_REQUIRED: (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_SWEEP_REQUIRED: (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false',
-    BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : null,
+    READY_BTC_REQUIRED: (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    BEST_BTC_REQUIRED: (process.env.BEST_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : thresholds.vwapDistancePct,
     BEST_VWAP_EPS_PCT: parseFloat(process.env.BEST_VWAP_EPS_PCT || '0'),
     BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
   };
@@ -315,10 +319,11 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     (!btcBear && confirm15Strict) ||
     (btcBear && confirm15Strict && trendOk && strongBodyReady && readyVolOk)
   );
+  const readyBtcOkReq = cfg.READY_BTC_REQUIRED ? readyBtcOk : true;
   const readySweepFallbackOk = reclaimOrTap && confirm15Strict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = sweepOk || readySweepFallbackOk;
   const readySweepOkReq = cfg.READY_SWEEP_REQUIRED ? readySweepOk : true;
-  const readyOk = readyCore && readySweepOkReq && readyBtcOk;
+  const readyOk = readyCore && readySweepOkReq && readyBtcOkReq;
 
   const bestCorePreSweep =
     bestPriceAboveEma &&
@@ -338,7 +343,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     sweepOk &&
     rrOk;
   const bestBtcOk = hasMarket && btcBull;
-  const bestOk = bestCore && bestBtcOk;
+  const bestBtcOkReq = cfg.BEST_BTC_REQUIRED ? bestBtcOk : true;
+  const bestOk = bestCore && bestBtcOkReq;
 
   return {
     watchOk: nearVwapWatch && rsiWatchOk && emaWatchOk,
@@ -355,8 +361,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     readyCore,
     bestCore,
     readySweepOk: readySweepOkReq,
-    readyBtcOk,
-    bestBtcOk,
+    readyBtcOk: readyBtcOkReq,
+    bestBtcOk: bestBtcOkReq,
     watchFlags: {
       nearVwapWatch,
       rsiWatchOk,
