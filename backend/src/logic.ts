@@ -39,6 +39,8 @@ const VWAP_TOUCH_SNAPSHOT_BARS = parseInt(process.env.VWAP_TOUCH_SNAPSHOT_BARS |
 
 const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
 const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
+const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '96', 10);
+const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.20');
 
 // ✅ Make WATCH easier than BUY without changing preset thresholds
 const VWAP_WATCH_MIN_PCT = parseFloat(process.env.VWAP_WATCH_MIN_PCT || '0.80');   // WATCH near-VWAP minimum window
@@ -62,7 +64,8 @@ function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number): numbe
   if (j <= 0) return 0;
   const hasTime = data[j].time != null || data[j].openTime != null;
   if (!hasTime) return Math.max(0, j - fallbackBars + 1);
-  const getMs = (d: OHLCV) => (d.openTime ?? d.time ?? 0);
+  const normalizeMs = (x: number) => (x > 0 && x < 1e12 ? x * 1000 : x);
+  const getMs = (d: OHLCV) => normalizeMs(Number(d.openTime ?? d.time ?? 0));
   const dateKey = (ms: number) => {
     const dt = new Date(ms);
     return dt.getUTCFullYear() * 10_000 + (dt.getUTCMonth() + 1) * 100 + dt.getUTCDate();
@@ -110,7 +113,14 @@ function buildGateDebug(gates: Gate[]) {
 /** ----------------------------------------------------------------- */
 
 /** ---------- 15m confirmations (higher-TF alignment) ------ */
-function confirm15_strict(data15: OHLCV[]): boolean {
+type Confirm15Debug = {
+  strict: { ok: boolean; reason: string };
+  soft: { ok: boolean; reason: string };
+  ok: boolean;
+  used: 'strict' | 'soft' | 'none';
+};
+
+function confirm15_strict(data15: OHLCV[], dbg?: { reason?: string }): boolean {
   if (data15.length < 210) return false;
 
   const closes = data15.map(d => d.close);
@@ -128,14 +138,18 @@ function confirm15_strict(data15: OHLCV[]): boolean {
   const anchor = dayAnchorIndexAt(data15, i, 96);
   const v_i = anchoredVwapAt(cumPV, cumV, anchor, i);
 
+  const aboveVwap = closes[i] > v_i;
+  const aboveEma = closes[i] > e[i];
   const rsiOk = r[i] > 55 && r[i] < 80 && r[i] >= r[i - 1];
-  return closes[i] > v_i && closes[i] > e[i] && rsiOk;
+  if (!aboveVwap) { if (dbg) dbg.reason = 'vwap'; return false; }
+  if (!aboveEma) { if (dbg) dbg.reason = 'ema'; return false; }
+  if (!rsiOk) { if (dbg) dbg.reason = 'rsi'; return false; }
+  if (dbg) dbg.reason = 'pass';
+  return true;
 }
 
-function confirm15_soft(data15: OHLCV[]): boolean {
-  if (data15.length < 210) return false;
-
-  if (confirm15_strict(data15)) return true;
+function confirm15_soft(data15: OHLCV[], dbg?: { reason?: string }): boolean {
+  if (data15.length < 210) { if (dbg) dbg.reason = 'len'; return false; }
 
   const closes = data15.map(d => d.close);
   const vols   = data15.map(d => d.volume);
@@ -146,33 +160,41 @@ function confirm15_soft(data15: OHLCV[]): boolean {
   const r = rsi(closes, 9);
 
   const i = closes.length - 1;
-  if (i < 2) return false;
+  if (i < 2) { if (dbg) dbg.reason = 'i'; return false; }
 
+  // “recent strict” (previous candle had it, using daily-anchored VWAP)
   const a0 = dayAnchorIndexAt(data15, i, 96);
   const a1 = dayAnchorIndexAt(data15, i - 1, 96);
-  const v_i  = anchoredVwapAt(cumPV, cumV, a0, i);
   const v_i1 = anchoredVwapAt(cumPV, cumV, a1, i - 1);
-
-  // “recent strict” (previous candle had it)
   const hadRecentStrict =
     closes[i - 1] > v_i1 &&
     closes[i - 1] > e[i - 1] &&
     r[i - 1] > 55 && r[i - 1] < 80 &&
     r[i - 1] >= r[i - 2];
+  if (hadRecentStrict) { if (dbg) dbg.reason = 'strict_prev'; return true; }
 
-  if (hadRecentStrict) return true;
+  // rolling anchor for soft confirm
+  const roll = Math.max(1, CONFIRM15_VWAP_ROLL_BARS || 96);
+  const anchor = Math.max(0, i - roll + 1);
+  const v_i = anchoredVwapAt(cumPV, cumV, anchor, i);
+  const vwapOk =
+    Number.isFinite(v_i) &&
+    closes[i] >= v_i * (1 - (CONFIRM15_VWAP_EPS_PCT / 100));
+  if (!vwapOk) { if (dbg) dbg.reason = 'vwap'; return false; }
 
-  const aboveVwap = closes[i] > v_i;
   const nearOrAboveEma =
     closes[i] > e[i] ||
     (((e[i] - closes[i]) / e[i]) * 100 <= EMA15_SOFT_TOL);
+  if (!nearOrAboveEma) { if (dbg) dbg.reason = 'ema'; return false; }
 
   const rsiSoftOk =
     r[i] >= RSI15_FLOOR_SOFT &&
     r[i] < RSI_MAX &&
     r[i] >= (r[i - 1] - 0.3);
+  if (!rsiSoftOk) { if (dbg) dbg.reason = 'rsi'; return false; }
 
-  return aboveVwap && nearOrAboveEma && rsiSoftOk;
+  if (dbg) dbg.reason = 'soft';
+  return true;
 }
 /** ------------------------------------------------------------------- */
 
@@ -292,6 +314,7 @@ export type AnalyzeResult = {
     candidate: CandidateDebug;
     gateSnapshot: any;
     features?: CandidateFeatureSnapshot;
+    confirm15?: Confirm15Debug;
   };
 };
 
@@ -418,9 +441,17 @@ function analyzeSymbolInternal(
     closePos >= READY_CLOSE_POS_MIN &&
     upperWickPct <= READY_UPPER_WICK_MAX;
 
-  const confirm15mStrict = confirm15_strict(data15);
-  const confirm15mSoft   = confirm15_soft(data15);
+  const strictDbg: { reason?: string } = {};
+  const softDbg: { reason?: string } = {};
+  const confirm15mStrict = confirm15_strict(data15, strictDbg);
+  const confirm15mSoft   = confirm15mStrict ? false : confirm15_soft(data15, softDbg);
   const confirm15mOk = confirm15mStrict || confirm15mSoft;
+  const confirm15Debug: Confirm15Debug = {
+    strict: { ok: confirm15mStrict, reason: confirm15mStrict ? 'pass' : (strictDbg.reason || 'unknown') },
+    soft: { ok: confirm15mSoft, reason: confirm15mSoft ? 'pass' : (softDbg.reason || 'unknown') },
+    ok: confirm15mOk,
+    used: confirm15mStrict ? 'strict' : confirm15mSoft ? 'soft' : 'none',
+  };
 
   const READY_VWAP_EPS_PCT = parseFloat(process.env.READY_VWAP_EPS_PCT || '0.02');
   const priceAboveVwapStrict = price > vwap_i;
@@ -875,7 +906,7 @@ function analyzeSymbolInternal(
       bullish,
     },
   };
-  const debug = { candidate: candidateDebug, gateSnapshot, features };
+  const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug };
 
   if (!category) {
     return { signal: null, debug };

@@ -108,6 +108,15 @@ type ScanGateStats = {
   best: GateFailures;
   candidate: CandidateStats;
   precheck: PrecheckStats;
+  confirm15: {
+    pass_strict: number;
+    pass_soft: number;
+    fail_len: number;
+    fail_vwap: number;
+    fail_ema: number;
+    fail_rsi: number;
+    fail_other: number;
+  };
 };
 
 type ScanHealth = {
@@ -216,6 +225,15 @@ function initGateStats(): ScanGateStats {
     best: initGateFailures(),
     candidate: initCandidateStats(),
     precheck: initPrecheckStats(),
+    confirm15: {
+      pass_strict: 0,
+      pass_soft: 0,
+      fail_len: 0,
+      fail_vwap: 0,
+      fail_ema: 0,
+      fail_rsi: 0,
+      fail_other: 0,
+    },
   };
 }
 
@@ -524,6 +542,23 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
             gateStats.candidate.early_first_failed[firstFailedEarly] =
               (gateStats.candidate.early_first_failed[firstFailedEarly] ?? 0) + 1;
           }
+        }
+      }
+
+      const c15 = res?.debug?.confirm15;
+      if (c15) {
+        const stats = gateStats.confirm15;
+        if (c15.strict.ok) {
+          stats.pass_strict += 1;
+        } else if (c15.soft.ok) {
+          stats.pass_soft += 1;
+        } else {
+          const reason = c15.soft.reason || c15.strict.reason || 'unknown';
+          if (reason === 'len' || reason === 'i') stats.fail_len += 1;
+          else if (reason === 'vwap') stats.fail_vwap += 1;
+          else if (reason === 'ema') stats.fail_ema += 1;
+          else if (reason === 'rsi') stats.fail_rsi += 1;
+          else stats.fail_other += 1;
         }
       }
 
