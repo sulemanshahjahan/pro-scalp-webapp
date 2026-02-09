@@ -184,6 +184,19 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   error_message TEXT
 );
 
+CREATE TABLE IF NOT EXISTS tuning_bundles (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  window_hours INTEGER NOT NULL,
+  window_start_ms BIGINT NOT NULL,
+  window_end_ms BIGINT NOT NULL,
+  build_git_sha TEXT,
+  scan_run_id TEXT,
+  payload_json JSONB NOT NULL,
+  report_md TEXT NOT NULL,
+  error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS candidate_features (
   run_id TEXT NOT NULL,
   symbol TEXT NOT NULL,
@@ -198,6 +211,8 @@ CREATE TABLE IF NOT EXISTS candidate_features (
 CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+CREATE INDEX IF NOT EXISTS idx_tuning_bundles_created_at ON tuning_bundles(created_at);
+CREATE INDEX IF NOT EXISTS idx_tuning_bundles_window_end ON tuning_bundles(window_end_ms);
 CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
 CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
 

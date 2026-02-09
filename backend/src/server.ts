@@ -11,6 +11,7 @@ import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSi
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
+import { getLatestTuningBundle, listRecentTuningBundles, getTuningBundleById } from './tuningBundleStore.js';
 import {
   clearAllSignalsData,
   deleteOutcomesBulk,
@@ -676,6 +677,45 @@ app.get('/api/tune/hist', async (req, res) => {
       bodyPct: computePercentiles(bodyPctVals),
       atrPct: computePercentiles(atrPctVals),
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Tuning bundles (admin-only)
+app.get('/api/tuning/bundles/latest', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const hoursRaw = Number((req.query as any)?.hours);
+    const hours = Number.isFinite(hoursRaw) ? Math.max(1, Math.min(168, hoursRaw)) : undefined;
+    const bundle = await getLatestTuningBundle({ windowHours: hours });
+    if (!bundle) return res.status(404).json({ ok: false, error: 'No tuning bundle found' });
+    res.json({ ok: true, bundle });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/api/tuning/bundles/recent', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const limitRaw = Number((req.query as any)?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    const bundles = await listRecentTuningBundles({ limit });
+    res.json({ ok: true, bundles });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/api/tuning/bundles/:id', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'Invalid id' });
+    const bundle = await getTuningBundleById(id);
+    if (!bundle) return res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({ ok: true, bundle });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }

@@ -2564,6 +2564,7 @@ export async function listRecentOutcomes(params: {
       s.gate_snapshot_json as gateSnapshotJson,
       s.ready_debug_json as readyDebugJson,
       s.best_debug_json as bestDebugJson,
+      s.entry_debug_json as entryDebugJson,
       s.config_snapshot_json as configSnapshotJson,
       s.build_git_sha as buildGitSha,
       s.run_id as runId,
@@ -2588,6 +2589,7 @@ export async function listRecentOutcomes(params: {
     gateSnapshot: safeJsonParse<any>(r.gateSnapshotJson),
     readyDebug: safeJsonParse<any>(r.readyDebugJson),
     bestDebug: safeJsonParse<any>(r.bestDebugJson),
+    entryDebug: safeJsonParse<any>(r.entryDebugJson),
     configSnapshot: safeJsonParse<any>(r.configSnapshotJson),
     outcomeDebug: safeJsonParse<any>(r.outcomeDebugJson),
   }));
