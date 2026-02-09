@@ -1,4 +1,4 @@
-import type { Thresholds, CandidateFeatureSnapshot } from './logic.js';
+import type { Thresholds } from './logic.js';
 
 export type TuneConfig = {
   thresholds: Thresholds;
@@ -39,6 +39,11 @@ export type EvalResult = {
   earlyFlags: Record<string, boolean>;
   readyFlags: Record<string, boolean>;
   bestFlags: Record<string, boolean>;
+};
+
+export type CandidateFeatureInput = {
+  metrics: Record<string, any>;
+  computed: Record<string, any>;
 };
 
 function num(v: any): number {
@@ -92,7 +97,7 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
   return out;
 }
 
-export function evalFromFeatures(f: CandidateFeatureSnapshot, cfg: TuneConfig): EvalResult {
+export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): EvalResult {
   const metrics = f.metrics ?? ({} as any);
   const computed = f.computed ?? ({} as any);
 
