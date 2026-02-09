@@ -28,6 +28,7 @@ const READY_RECLAIM_REQUIRED = (process.env.READY_RECLAIM_REQUIRED ?? 'true').to
 const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_SWEEP_REQUIRED = (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false';
 
 const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
 const BEST_VWAP_EPS_PCT = parseFloat(process.env.BEST_VWAP_EPS_PCT || '0');
@@ -547,7 +548,8 @@ function analyzeSymbolInternal(
   );
   const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = liq.ok || readySweepFallbackOk;
-  const readyOk = readyCore && readySweepOk && readyBtcOk;
+  const readySweepOkReq = READY_SWEEP_REQUIRED ? readySweepOk : true;
+  const readyOk = readyCore && readySweepOkReq && readyBtcOk;
   const blockedByBtc = readyCore && readySweepOk && !readyBtcOk;
 
   const readyGates: Gate[] = [
@@ -572,7 +574,7 @@ function analyzeSymbolInternal(
     { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
     { key: 'trendOk', ok: readyTrendOkReq, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
-    { key: 'readySweep', ok: readySweepOk, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
+    { key: 'readySweep', ok: readySweepOkReq, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
     {
       key: 'btcOkReady',

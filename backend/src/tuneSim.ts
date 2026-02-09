@@ -27,6 +27,7 @@ export type TuneConfig = {
   READY_CONFIRM15_REQUIRED: boolean;
   READY_TREND_REQUIRED: boolean;
   READY_VOL_SPIKE_REQUIRED: boolean;
+  READY_SWEEP_REQUIRED: boolean;
   BEST_VWAP_MAX_PCT: number | null;
   BEST_VWAP_EPS_PCT: number;
   BEST_EMA_EPS_PCT: number;
@@ -106,6 +107,7 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     READY_CONFIRM15_REQUIRED: (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_TREND_REQUIRED: (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_VOL_SPIKE_REQUIRED: (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    READY_SWEEP_REQUIRED: (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false',
     BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : null,
     BEST_VWAP_EPS_PCT: parseFloat(process.env.BEST_VWAP_EPS_PCT || '0'),
     BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
@@ -315,7 +317,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   );
   const readySweepFallbackOk = reclaimOrTap && confirm15Strict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = sweepOk || readySweepFallbackOk;
-  const readyOk = readyCore && readySweepOk && readyBtcOk;
+  const readySweepOkReq = cfg.READY_SWEEP_REQUIRED ? readySweepOk : true;
+  const readyOk = readyCore && readySweepOkReq && readyBtcOk;
 
   const bestCorePreSweep =
     bestPriceAboveEma &&
@@ -351,7 +354,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     bestOk,
     readyCore,
     bestCore,
-    readySweepOk,
+    readySweepOk: readySweepOkReq,
     readyBtcOk,
     bestBtcOk,
     watchFlags: {
