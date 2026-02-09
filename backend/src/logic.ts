@@ -31,6 +31,14 @@ const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true'
 const READY_SWEEP_REQUIRED = (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_BTC_REQUIRED = (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const BEST_BTC_REQUIRED = (process.env.BEST_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const STRICT_NO_LOOKAHEAD = (process.env.STRICT_NO_LOOKAHEAD ?? 'false').toLowerCase() === 'true';
+const NO_LOOKAHEAD_LOG = (process.env.NO_LOOKAHEAD_LOG ?? 'false').toLowerCase() === 'true';
+let NO_LOOKAHEAD_LOG_BUDGET =
+  Number.isFinite(parseInt(process.env.NO_LOOKAHEAD_LOG_BUDGET || '', 10))
+    ? Math.max(0, parseInt(process.env.NO_LOOKAHEAD_LOG_BUDGET || '0', 10))
+    : 0;
+const NO_LOOKAHEAD_LOG_UNLIMITED =
+  NO_LOOKAHEAD_LOG && (!process.env.NO_LOOKAHEAD_LOG_BUDGET || NO_LOOKAHEAD_LOG_BUDGET === 0);
 
 const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
 const BEST_VWAP_EPS_PCT = parseFloat(process.env.BEST_VWAP_EPS_PCT || '0');
@@ -111,6 +119,58 @@ function buildGateDebug(gates: Gate[]) {
   };
 }
 /** ----------------------------------------------------------------- */
+
+function candleCloseMs(c: OHLCV, intervalMs: number): number {
+  if (Number.isFinite(c.closeTime as number)) return c.closeTime as number;
+  if (Number.isFinite(c.openTime as number)) return (c.openTime as number) + intervalMs - 1;
+  if (Number.isFinite(c.time as number)) return c.time as number;
+  return 0;
+}
+
+function fmtTs(ms: number) {
+  if (!ms || ms <= 0) return String(ms);
+  return new Date(ms).toISOString();
+}
+
+function enforceNoLookahead(
+  candles: OHLCV[],
+  intervalMs: number,
+  entryTimeMs: number,
+  label: string,
+  symbol?: string
+): OHLCV[] {
+  if (entryTimeMs <= 0) return candles;
+  const out = candles.slice();
+  let removed = 0;
+  while (out.length) {
+    const last = out[out.length - 1];
+    const close = candleCloseMs(last, intervalMs);
+    if (close > 0 && close >= entryTimeMs) {
+      if (STRICT_NO_LOOKAHEAD) {
+        throw new Error(`${label}_LOOKAHEAD: lastClose=${close} >= entryTime=${entryTimeMs}`);
+      }
+      out.pop();
+      removed++;
+      continue;
+    }
+    break;
+  }
+  const canLog =
+    NO_LOOKAHEAD_LOG &&
+    (NO_LOOKAHEAD_LOG_UNLIMITED || NO_LOOKAHEAD_LOG_BUDGET > 0);
+  if (removed > 0 && canLog) {
+    if (!NO_LOOKAHEAD_LOG_UNLIMITED) NO_LOOKAHEAD_LOG_BUDGET--;
+    const last = out[out.length - 1];
+    const lastClose = last ? candleCloseMs(last, intervalMs) : 0;
+    console.log(
+      `[no-lookahead] ${symbol ?? ''} ${label} removed=${removed} ` +
+      `entry=${entryTimeMs}(${fmtTs(entryTimeMs)}) ` +
+      `lastClose=${lastClose}(${fmtTs(lastClose)}) len=${out.length}` +
+      (NO_LOOKAHEAD_LOG_UNLIMITED ? '' : ` budgetLeft=${NO_LOOKAHEAD_LOG_BUDGET}`)
+    );
+  }
+  return out;
+}
 
 /** ---------- 15m confirmations (higher-TF alignment) ------ */
 type Confirm15Debug = {
@@ -326,6 +386,20 @@ function analyzeSymbolInternal(
   market?: MarketInfo
 ): AnalyzeResult | null {
   if (data5.length < 210 || data15.length < 210) return null;
+  const last5 = data5[data5.length - 1];
+  const last5Open = Number(last5?.openTime);
+  let entryTimeMs = 0;
+  if (Number.isFinite(last5Open) && last5Open > 0) {
+    entryTimeMs = last5Open + 5 * 60_000; // next open boundary
+  } else {
+    const last5Close = candleCloseMs(last5, 5 * 60_000);
+    if (last5Close > 0) entryTimeMs = last5Close + 1;
+  }
+  if (entryTimeMs > 0) {
+    data5 = enforceNoLookahead(data5, 5 * 60_000, entryTimeMs, 'C5', symbol);
+    data15 = enforceNoLookahead(data15, 15 * 60_000, entryTimeMs, 'C15', symbol);
+    if (data5.length < 210 || data15.length < 210) return null;
+  }
 
   // ----- 5m series -----
   const closes5 = data5.map(d => d.close);

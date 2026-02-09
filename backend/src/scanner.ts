@@ -14,7 +14,7 @@ const SYMBOL_DELAY_MS = parseInt(process.env.SYMBOL_DELAY_MS || '120', 10);
 const MAX_SCAN_MS = parseInt(process.env.MAX_SCAN_MS || String(4 * 60_000), 10);
 const BACKOFF_STEP_MS = parseInt(process.env.BACKOFF_STEP_MS || '200', 10);
 const BACKOFF_MAX_MS = parseInt(process.env.BACKOFF_MAX_MS || '2000', 10);
-const CLOCK_SKEW_MS = parseInt(process.env.CLOCK_SKEW_MS || '1500', 10);
+const CLOCK_SKEW_MS = Math.max(0, parseInt(process.env.CLOCK_SKEW_MS || '1500', 10) || 0);
 const INCLUDE_NON_TOP = (process.env.INCLUDE_NON_TOP ?? 'true').toLowerCase() !== 'false';
 const EXTRA_USDT_COUNT = parseInt(process.env.EXTRA_USDT_COUNT || '200', 10);
 
@@ -277,7 +277,8 @@ function sliceToLastClosed(data: OHLCV[], intervalMs: number, now = Date.now()):
   if (data.length < 3) return data;
   const last = data[data.length - 1];
   const close = getCandleCloseMs(last, intervalMs);
-  if (close > 0 && (now + CLOCK_SKEW_MS) < close) return data.slice(0, -1);
+  // Safe: CLOCK_SKEW_MS acts as "close buffer" (delay acceptance), never early acceptance.
+  if (close > 0 && now < close + CLOCK_SKEW_MS) return data.slice(0, -1);
   return data;
 }
 
