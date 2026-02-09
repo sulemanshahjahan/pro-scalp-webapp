@@ -33,7 +33,61 @@ function sortEntries(obj: Record<string, number> | null | undefined) {
     .sort((a, b) => b.val - a.val);
 }
 
+function parseJsonObject(text: string): { ok: true; value: Record<string, any> } | { ok: false; error: string } {
+  if (!text.trim()) return { ok: true, value: {} };
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, error: 'Overrides must be a JSON object.' };
+    }
+    return { ok: true, value: parsed as Record<string, any> };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || 'Invalid JSON') };
+  }
+}
+
+function makeId() {
+  return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function topGateLabel(obj: Record<string, number> | null | undefined) {
+  const top = sortEntries(obj)[0];
+  return top ? `${top.key} (${top.val})` : '--';
+}
+
+const SWEEP_KEYS = [
+  'THRESHOLD_VOL_SPIKE_X',
+  'THRESHOLD_VWAP_DISTANCE_PCT',
+  'THRESHOLD_ATR_GUARD_PCT',
+  'READY_VWAP_MAX_PCT',
+  'READY_VWAP_EPS_PCT',
+  'READY_EMA_EPS_PCT',
+  'READY_BODY_PCT',
+  'READY_CLOSE_POS_MIN',
+  'READY_UPPER_WICK_MAX',
+  'VWAP_WATCH_MIN_PCT',
+  'WATCH_EMA_EPS_PCT',
+  'RSI_EARLY_MIN',
+  'RSI_EARLY_MAX',
+  'RSI_READY_MIN',
+  'RSI_READY_MAX',
+  'RSI_BEST_MIN',
+  'RSI_BEST_MAX',
+  'RR_MIN_BEST',
+];
+
+const BOOLEAN_GATES = [
+  'READY_BTC_REQUIRED',
+  'READY_CONFIRM15_REQUIRED',
+  'READY_TREND_REQUIRED',
+  'READY_VOL_SPIKE_REQUIRED',
+  'READY_RECLAIM_REQUIRED',
+  'READY_SWEEP_REQUIRED',
+  'BEST_BTC_REQUIRED',
+];
+
 export default function TunePage() {
+  const [mode, setMode] = useState<'single' | 'batch'>('single');
   const [scanRuns, setScanRuns] = useState<any[]>([]);
   const [runId, setRunId] = useState('');
   const [useLatest, setUseLatest] = useState(true);
@@ -41,14 +95,28 @@ export default function TunePage() {
   const [limit, setLimit] = useState(500);
   const [symbolsText, setSymbolsText] = useState('');
   const [overridesText, setOverridesText] = useState('');
+  const [baseOverridesText, setBaseOverridesText] = useState('');
+  const [lockGuardrails, setLockGuardrails] = useState(true);
+  const [variants, setVariants] = useState<Array<{ id: string; name: string; overridesText: string }>>([
+    { id: makeId(), name: 'base', overridesText: '{}' },
+  ]);
+  const [diffSymbolsLimit, setDiffSymbolsLimit] = useState(200);
+  const [sweepKey, setSweepKey] = useState('THRESHOLD_VOL_SPIKE_X');
+  const [sweepStart, setSweepStart] = useState(1.2);
+  const [sweepEnd, setSweepEnd] = useState(1.8);
+  const [sweepSteps, setSweepSteps] = useState(5);
+  const [sweepIncludeBooleans, setSweepIncludeBooleans] = useState(false);
   const [includeExamples, setIncludeExamples] = useState(true);
   const [examplesPerGate, setExamplesPerGate] = useState(5);
 
   const [simResult, setSimResult] = useState<any | null>(null);
+  const [batchResult, setBatchResult] = useState<any | null>(null);
   const [histResult, setHistResult] = useState<any | null>(null);
   const [loadingSim, setLoadingSim] = useState(false);
+  const [loadingBatch, setLoadingBatch] = useState(false);
   const [loadingHist, setLoadingHist] = useState(false);
   const [error, setError] = useState<string>('');
+  const [selectedVariantName, setSelectedVariantName] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -66,6 +134,11 @@ export default function TunePage() {
     const items = symbolsText.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
     return items.length ? items : null;
   }, [symbolsText]);
+
+  const selectedVariant = useMemo(() => {
+    if (!batchResult?.variants?.length || !selectedVariantName) return null;
+    return batchResult.variants.find((v: any) => v?.name === selectedVariantName) ?? null;
+  }, [batchResult, selectedVariantName]);
 
   function applyExampleOverrides() {
     setOverridesText(JSON.stringify({
@@ -88,11 +161,14 @@ export default function TunePage() {
     setError('');
     setLoadingSim(true);
     setSimResult(null);
+    setBatchResult(null);
     try {
-      let overrides = {};
-      if (overridesText.trim()) {
-        overrides = JSON.parse(overridesText);
+      const parsed = parseJsonObject(overridesText);
+      if (!parsed.ok) {
+        setError(parsed.error);
+        return;
       }
+      const overrides = parsed.value;
       const body = {
         preset,
         runId: useLatest ? '' : runId.trim(),
@@ -145,6 +221,117 @@ export default function TunePage() {
     }
   }
 
+  function updateVariant(id: string, patch: Partial<{ name: string; overridesText: string }>) {
+    setVariants((items) => items.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+  }
+
+  function addVariant() {
+    setVariants((items) => [...items, { id: makeId(), name: `variant_${items.length + 1}`, overridesText: '{}' }]);
+  }
+
+  function duplicateVariant(id: string) {
+    setVariants((items) => {
+      const found = items.find((v) => v.id === id);
+      if (!found) return items;
+      return [...items, { id: makeId(), name: `${found.name}_copy`, overridesText: found.overridesText }];
+    });
+  }
+
+  function deleteVariant(id: string) {
+    setVariants((items) => items.filter((v) => v.id !== id));
+  }
+
+  function generateVariants() {
+    const steps = Math.max(1, Math.min(60, Number.isFinite(sweepSteps) ? sweepSteps : 5));
+    const start = Number(sweepStart);
+    const end = Number(sweepEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      setError('Sweep start/end must be numbers.');
+      return;
+    }
+    const span = end - start;
+    const stepSize = steps === 1 ? 0 : span / (steps - 1);
+    const next: Array<{ id: string; name: string; overridesText: string }> = [];
+    for (let i = 0; i < steps; i += 1) {
+      const value = start + stepSize * i;
+      const rounded = Number.isFinite(value) ? Number(value.toFixed(4)) : value;
+      const name = `${sweepKey}_${rounded}`;
+      next.push({ id: makeId(), name, overridesText: JSON.stringify({ [sweepKey]: rounded }, null, 2) });
+    }
+    if (sweepIncludeBooleans) {
+      const baseParsed = parseJsonObject(baseOverridesText);
+      const base = baseParsed.ok ? baseParsed.value : {};
+      for (const key of BOOLEAN_GATES) {
+        const cur = base[key];
+        const flipped = typeof cur === 'boolean' ? !cur : false;
+        next.push({ id: makeId(), name: `${key}_${String(flipped)}`, overridesText: JSON.stringify({ [key]: flipped }, null, 2) });
+      }
+    }
+    setVariants((items) => [...items, ...next]);
+  }
+
+  async function runBatch(onlyId?: string) {
+    setError('');
+    setLoadingBatch(true);
+    setBatchResult(null);
+    setSimResult(null);
+    try {
+      const baseParsed = parseJsonObject(baseOverridesText);
+      if (!baseParsed.ok) {
+        setError(baseParsed.error);
+        return;
+      }
+      const guardKeys = new Set(Object.keys(baseParsed.value));
+      const targetVariants = onlyId ? variants.filter((v) => v.id === onlyId) : variants;
+      if (!targetVariants.length) {
+        setError('No variants to run.');
+        return;
+      }
+      const parsedVariants = targetVariants.map((v) => {
+        const parsed = parseJsonObject(v.overridesText);
+        if (!parsed.ok) throw new Error(`Variant "${v.name}" overrides: ${parsed.error}`);
+        const filtered = lockGuardrails
+          ? Object.fromEntries(Object.entries(parsed.value).filter(([k]) => !guardKeys.has(k)))
+          : parsed.value;
+        return {
+          name: v.name?.trim() || v.id,
+          overrides: filtered,
+        };
+      });
+
+      const body = {
+        preset,
+        runId: useLatest ? '' : runId.trim(),
+        useLatestFinishedIfMissing: useLatest,
+        baseOverrides: baseParsed.value,
+        variants: parsedVariants,
+        scope: {
+          limit,
+          symbols,
+        },
+        includeExamples,
+        examplesPerGate,
+        diffSymbolsLimit,
+        source: { mode: useLatest ? 'lastScan' : 'runId', runId: runId.trim() },
+      };
+      const resp = await fetch(API('/api/tune/simBatch'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setError(resp?.error || 'Batch sim failed');
+        return;
+      }
+      setBatchResult(resp);
+      if (resp?.variants?.length) setSelectedVariantName(resp.variants[0].name);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setLoadingBatch(false);
+    }
+  }
+
   function onPickRun(value: string) {
     setRunId(value);
     const r = scanRuns.find((x) => x.runId === value);
@@ -159,6 +346,20 @@ export default function TunePage() {
         <div className="text-lg font-semibold">Tune Simulator</div>
         <div className="text-xs text-white/60 mt-1">
           Replay gates against stored snapshots to test thresholds in seconds.
+        </div>
+        <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 p-1 text-xs">
+          <button
+            onClick={() => setMode('single')}
+            className={`px-3 py-1 rounded-full ${mode === 'single' ? 'bg-emerald-400/20 text-white' : 'text-white/70 hover:text-white'}`}
+          >
+            Single Sim
+          </button>
+          <button
+            onClick={() => setMode('batch')}
+            className={`px-3 py-1 rounded-full ${mode === 'batch' ? 'bg-emerald-400/20 text-white' : 'text-white/70 hover:text-white'}`}
+          >
+            Batch Sim
+          </button>
         </div>
 
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
@@ -240,32 +441,184 @@ export default function TunePage() {
                 className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
               />
             </div>
+            {mode === 'batch' ? (
+              <div className="mt-2 flex items-center gap-2">
+                <label className="text-xs text-white/60">Diff symbols limit</label>
+                <input
+                  type="number"
+                  value={diffSymbolsLimit}
+                  onChange={(e) => setDiffSymbolsLimit(Math.max(0, Math.min(2000, Number(e.target.value))))}
+                  className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                />
+              </div>
+            ) : null}
             <div className="mt-4 flex items-center gap-2">
-              <button onClick={runSim} className="px-3 py-1 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30">
-                {loadingSim ? 'Running...' : 'Run Sim'}
-              </button>
-              <button onClick={loadHist} className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15">
-                {loadingHist ? 'Loading...' : 'Load Hist'}
-              </button>
+              {mode === 'single' ? (
+                <>
+                  <button onClick={runSim} className="px-3 py-1 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30">
+                    {loadingSim ? 'Running...' : 'Run Sim'}
+                  </button>
+                  <button onClick={loadHist} className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15">
+                    {loadingHist ? 'Loading...' : 'Load Hist'}
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => runBatch()} className="px-3 py-1 rounded-xl bg-emerald-400/20 hover:bg-emerald-400/30">
+                  {loadingBatch ? 'Running...' : 'Run Batch'}
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-white/60">Overrides JSON</div>
-            <button onClick={applyExampleOverrides} className="px-2 py-1 rounded bg-white/10 text-[10px]">
-              Load Example
-            </button>
+        {mode === 'single' ? (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-white/60">Overrides JSON</div>
+              <button onClick={applyExampleOverrides} className="px-2 py-1 rounded bg-white/10 text-[10px]">
+                Load Example
+              </button>
+            </div>
+            <textarea
+              value={overridesText}
+              onChange={(e) => setOverridesText(e.target.value)}
+              rows={10}
+              className="mt-2 w-full bg-black/30 border border-white/10 rounded p-2 font-mono text-[11px]"
+              placeholder='{"RSI_EARLY_MIN": 30}'
+            />
           </div>
-          <textarea
-            value={overridesText}
-            onChange={(e) => setOverridesText(e.target.value)}
-            rows={10}
-            className="mt-2 w-full bg-black/30 border border-white/10 rounded p-2 font-mono text-[11px]"
-            placeholder='{"RSI_EARLY_MIN": 30}'
-          />
-        </div>
+        ) : (
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-white/60">Base Overrides (Guardrails)</div>
+                <label className="text-[11px] text-white/60 flex items-center gap-2">
+                  <input type="checkbox" checked={lockGuardrails} onChange={(e) => setLockGuardrails(e.target.checked)} />
+                  Lock guardrails
+                </label>
+              </div>
+              <textarea
+                value={baseOverridesText}
+                onChange={(e) => setBaseOverridesText(e.target.value)}
+                rows={8}
+                className="mt-2 w-full bg-black/30 border border-white/10 rounded p-2 font-mono text-[11px]"
+                placeholder='{"READY_BTC_REQUIRED": true, "READY_CONFIRM15_REQUIRED": true}'
+              />
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-white/60">Variants</div>
+                <button onClick={addVariant} className="px-2 py-1 rounded bg-white/10 text-[10px]">
+                  Add Variant
+                </button>
+              </div>
+              <div className="mt-2 space-y-3">
+                {variants.map((variant) => (
+                  <div key={variant.id} className="rounded-lg border border-white/10 bg-white/5 p-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={variant.name}
+                        onChange={(e) => updateVariant(variant.id, { name: e.target.value })}
+                        className="flex-1 bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px]"
+                        placeholder="variant name"
+                      />
+                      <button
+                        onClick={() => runBatch(variant.id)}
+                        className="px-2 py-1 rounded bg-emerald-400/20 text-[10px]"
+                      >
+                        Run
+                      </button>
+                      <button
+                        onClick={() => duplicateVariant(variant.id)}
+                        className="px-2 py-1 rounded bg-white/10 text-[10px]"
+                      >
+                        Duplicate
+                      </button>
+                      <button
+                        onClick={() => deleteVariant(variant.id)}
+                        className="px-2 py-1 rounded bg-white/10 text-[10px]"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <textarea
+                      value={variant.overridesText}
+                      onChange={(e) => updateVariant(variant.id, { overridesText: e.target.value })}
+                      rows={4}
+                      className="mt-2 w-full bg-black/30 border border-white/10 rounded p-2 font-mono text-[11px]"
+                      placeholder='{"THRESHOLD_VOL_SPIKE_X": 1.35}'
+                    />
+                  </div>
+                ))}
+                {!variants.length ? (
+                  <div className="text-[11px] text-white/50">No variants yet.</div>
+                ) : null}
+              </div>
+            </div>
+            <div className="lg:col-span-2 rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-white/60">Sweep Generator</div>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-5 gap-2 text-xs">
+                <div className="md:col-span-2">
+                  <div className="text-white/60 mb-1">Key</div>
+                  <select
+                    value={sweepKey}
+                    onChange={(e) => setSweepKey(e.target.value)}
+                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px]"
+                  >
+                    {SWEEP_KEYS.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-white/60 mb-1">Start</div>
+                  <input
+                    type="number"
+                    value={sweepStart}
+                    onChange={(e) => setSweepStart(Number(e.target.value))}
+                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px]"
+                  />
+                </div>
+                <div>
+                  <div className="text-white/60 mb-1">End</div>
+                  <input
+                    type="number"
+                    value={sweepEnd}
+                    onChange={(e) => setSweepEnd(Number(e.target.value))}
+                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px]"
+                  />
+                </div>
+                <div>
+                  <div className="text-white/60 mb-1">Steps</div>
+                  <input
+                    type="number"
+                    value={sweepSteps}
+                    onChange={(e) => setSweepSteps(Math.max(1, Math.min(60, Number(e.target.value))))}
+                    className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-[11px]"
+                  />
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <label className="text-[11px] text-white/60 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={sweepIncludeBooleans}
+                    onChange={(e) => setSweepIncludeBooleans(e.target.checked)}
+                  />
+                  Also add required-gate flips
+                </label>
+                <button onClick={generateVariants} className="px-3 py-1 rounded bg-white/10 text-[11px]">
+                  Generate Variants
+                </button>
+              </div>
+              {sweepIncludeBooleans ? (
+                <div className="mt-2 text-[11px] text-white/50">
+                  Boolean flips: {BOOLEAN_GATES.join(', ')}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
 
         {error ? (
           <div className="mt-3 text-xs text-rose-200 bg-rose-400/10 border border-rose-400/30 rounded px-2 py-1">
@@ -274,7 +627,7 @@ export default function TunePage() {
         ) : null}
       </section>
 
-      {simResult ? (
+      {mode === 'single' && simResult ? (
         <section className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-4">
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold">Sim Results</div>
@@ -282,6 +635,12 @@ export default function TunePage() {
               Run {simResult?.meta?.runId || '--'} | {dt(simResult?.meta?.startedAt)}
             </div>
           </div>
+
+          {simResult?.meta?.notes?.length ? (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100">
+              {simResult.meta.notes.join(' ')}
+            </div>
+          ) : null}
 
           {simResult?.meta?.overrides ? (
             <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/80 space-y-2">
@@ -439,7 +798,277 @@ export default function TunePage() {
         </section>
       ) : null}
 
-      {histResult ? (
+      {mode === 'batch' && batchResult ? (
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-semibold">Batch Results</div>
+            <div className="text-xs text-white/60">
+              Run {batchResult?.meta?.runId || '--'} | {dt(batchResult?.meta?.startedAt)}
+            </div>
+          </div>
+
+          {batchResult?.meta?.notes?.length ? (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100">
+              {batchResult.meta.notes.join(' ')}
+            </div>
+          ) : null}
+
+          {batchResult?.meta?.baseOverrides ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/80 space-y-2">
+              <div className="text-white/60">Base Overrides</div>
+              <div>
+                <span className="text-white/60">Applied:</span>{' '}
+                {Object.keys(batchResult.meta.baseOverrides.applied || {}).length
+                  ? JSON.stringify(batchResult.meta.baseOverrides.applied)
+                  : 'None'}
+              </div>
+              {batchResult.meta.baseOverrides.unknownKeys?.length ? (
+                <div className="text-amber-200">
+                  Unknown keys: {batchResult.meta.baseOverrides.unknownKeys.join(', ')}
+                </div>
+              ) : null}
+              {batchResult.meta.baseOverrides.typeErrors && Object.keys(batchResult.meta.baseOverrides.typeErrors).length ? (
+                <div className="text-amber-200">
+                  Type errors: {JSON.stringify(batchResult.meta.baseOverrides.typeErrors)}
+                </div>
+              ) : null}
+              <details className="mt-1">
+                <summary className="cursor-pointer text-white/60">Effective config</summary>
+                <pre className="mt-2 whitespace-pre-wrap text-[11px] bg-black/30 border border-white/10 rounded p-2">
+{JSON.stringify(batchResult.meta.baseOverrides.effectiveConfig ?? {}, null, 2)}
+                </pre>
+              </details>
+            </div>
+          ) : null}
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-white/60">Base Summary</div>
+            <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/60">Evaluated</div>
+                <div className="text-xl font-semibold">{batchResult?.meta?.evaluated ?? 0}</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/60">Watch</div>
+                <div className="text-xl font-semibold">{batchResult?.base?.counts?.watch ?? 0}</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/60">Early</div>
+                <div className="text-xl font-semibold">{batchResult?.base?.counts?.early ?? 0}</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/60">Ready / Best</div>
+                <div className="text-xl font-semibold">
+                  {batchResult?.base?.counts?.ready ?? 0} / {batchResult?.base?.counts?.best ?? 0}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-white/60 mb-2">Variants Table</div>
+            <div className="overflow-auto">
+              <table className="w-full text-xs text-white/80">
+                <thead className="text-white/60">
+                  <tr className="text-left">
+                    <th className="py-1 pr-2">Variant</th>
+                    <th className="py-1 pr-2">Ready / Best</th>
+                    <th className="py-1 pr-2">ΔReady / ΔBest</th>
+                    <th className="py-1 pr-2">Added / Removed (Ready)</th>
+                    <th className="py-1 pr-2">Added / Removed (Best)</th>
+                    <th className="py-1 pr-2">Top Bottleneck</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(batchResult?.variants ?? []).map((v: any) => {
+                    const readyAdded = v?.diffVsBase?.addedReadySymbols?.length ?? 0;
+                    const readyRemoved = v?.diffVsBase?.removedReadySymbols?.length ?? 0;
+                    const bestAdded = v?.diffVsBase?.addedBestSymbols?.length ?? 0;
+                    const bestRemoved = v?.diffVsBase?.removedBestSymbols?.length ?? 0;
+                    const selected = selectedVariantName === v?.name;
+                    return (
+                      <tr
+                        key={`variant-${v?.name}`}
+                        onClick={() => setSelectedVariantName(v?.name)}
+                        className={`cursor-pointer border-t border-white/5 ${selected ? 'bg-white/5' : 'hover:bg-white/5'}`}
+                      >
+                        <td className="py-2 pr-2 font-medium">{v?.name}</td>
+                        <td className="py-2 pr-2">{v?.counts?.ready ?? 0} / {v?.counts?.best ?? 0}</td>
+                        <td className="py-2 pr-2">{v?.diffVsBase?.counts?.ready ?? 0} / {v?.diffVsBase?.counts?.best ?? 0}</td>
+                        <td className="py-2 pr-2">{readyAdded} / {readyRemoved}</td>
+                        <td className="py-2 pr-2">{bestAdded} / {bestRemoved}</td>
+                        <td className="py-2 pr-2">
+                          <div>ready: {topGateLabel(v?.firstFailed?.ready)}</div>
+                          <div>best: {topGateLabel(v?.firstFailed?.best)}</div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {selectedVariant ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Variant Details: {selectedVariant?.name}</div>
+                <div className="text-xs text-white/60">
+                  Ready / Best: {selectedVariant?.counts?.ready ?? 0} / {selectedVariant?.counts?.best ?? 0}
+                </div>
+              </div>
+
+              {selectedVariant?.notes?.length ? (
+                <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100">
+                  {selectedVariant.notes.join(' ')}
+                </div>
+              ) : null}
+
+              {selectedVariant?.overrides ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/80 space-y-2">
+                  <div className="text-white/60">Overrides</div>
+                  <div>
+                    <span className="text-white/60">Applied:</span>{' '}
+                    {Object.keys(selectedVariant.overrides.applied || {}).length
+                      ? JSON.stringify(selectedVariant.overrides.applied)
+                      : 'None'}
+                  </div>
+                  {selectedVariant.overrides.unknownKeys?.length ? (
+                    <div className="text-amber-200">
+                      Unknown keys: {selectedVariant.overrides.unknownKeys.join(', ')}
+                    </div>
+                  ) : null}
+                  {selectedVariant.overrides.typeErrors && Object.keys(selectedVariant.overrides.typeErrors).length ? (
+                    <div className="text-amber-200">
+                      Type errors: {JSON.stringify(selectedVariant.overrides.typeErrors)}
+                    </div>
+                  ) : null}
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-white/60">Effective config</summary>
+                    <pre className="mt-2 whitespace-pre-wrap text-[11px] bg-black/30 border border-white/10 rounded p-2">
+{JSON.stringify(selectedVariant.overrides.effectiveConfig ?? {}, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Funnel</div>
+                  <div className="mt-2 text-sm text-white/80 space-y-1">
+                    <div>candidate_evaluated: {selectedVariant?.funnel?.candidate_evaluated ?? 0}</div>
+                    <div>watch_created: {selectedVariant?.funnel?.watch_created ?? 0}</div>
+                    <div>early_created: {selectedVariant?.funnel?.early_created ?? 0}</div>
+                    <div>ready_core_true: {selectedVariant?.funnel?.ready_core_true ?? 0}</div>
+                    <div>best_core_true: {selectedVariant?.funnel?.best_core_true ?? 0}</div>
+                    <div>ready_final_true: {selectedVariant?.funnel?.ready_final_true ?? selectedVariant?.counts?.ready ?? 0}</div>
+                    <div>best_final_true: {selectedVariant?.funnel?.best_final_true ?? selectedVariant?.counts?.best ?? 0}</div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Diff vs Base</div>
+                  <div className="mt-2 text-sm text-white/80 space-y-1">
+                    <div>watch: {selectedVariant?.diffVsBase?.counts?.watch ?? '--'}</div>
+                    <div>early: {selectedVariant?.diffVsBase?.counts?.early ?? '--'}</div>
+                    <div>ready: {selectedVariant?.diffVsBase?.counts?.ready ?? '--'}</div>
+                    <div>best: {selectedVariant?.diffVsBase?.counts?.best ?? '--'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+                {(['ready', 'best'] as const).map((stage) => (
+                  <div key={`vf-${stage}`} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-xs text-white/60">First Failed: {stage}</div>
+                    <div className="mt-2 text-sm text-white/80 space-y-1">
+                      {sortEntries(selectedVariant?.firstFailed?.[stage]).slice(0, 8).map((r) => (
+                        <div key={`vf-${stage}-${r.key}`} className="flex items-center justify-between">
+                          <span className="text-white/70">{r.key}</span>
+                          <span>{r.val}</span>
+                        </div>
+                      ))}
+                      {!sortEntries(selectedVariant?.firstFailed?.[stage]).length ? (
+                        <div className="text-white/50">No failures</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+                {(['ready', 'best'] as const).map((stage) => (
+                  <div key={`vg-${stage}`} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-xs text-white/60">Gate True: {stage}</div>
+                    <div className="mt-2 text-sm text-white/80 space-y-1">
+                      {sortEntries(selectedVariant?.gateTrue?.[stage]).slice(0, 8).map((r) => (
+                        <div key={`vg-${stage}-${r.key}`} className="flex items-center justify-between">
+                          <span className="text-white/70">{r.key}</span>
+                          <span>{r.val}</span>
+                        </div>
+                      ))}
+                      {!sortEntries(selectedVariant?.gateTrue?.[stage]).length ? (
+                        <div className="text-white/50">No data</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Added / Removed Ready</div>
+                  <div className="mt-2 text-[11px] text-white/80 space-y-2">
+                    <div>
+                      <div className="text-white/60">Added</div>
+                      <div>{(selectedVariant?.diffVsBase?.addedReadySymbols ?? []).join(', ') || '--'}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/60">Removed</div>
+                      <div>{(selectedVariant?.diffVsBase?.removedReadySymbols ?? []).join(', ') || '--'}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Added / Removed Best</div>
+                  <div className="mt-2 text-[11px] text-white/80 space-y-2">
+                    <div>
+                      <div className="text-white/60">Added</div>
+                      <div>{(selectedVariant?.diffVsBase?.addedBestSymbols ?? []).join(', ') || '--'}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/60">Removed</div>
+                      <div>{(selectedVariant?.diffVsBase?.removedBestSymbols ?? []).join(', ') || '--'}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {selectedVariant?.examples ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-white/60">Examples</div>
+                  <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm text-white/80">
+                    {Object.entries(selectedVariant.examples).map(([stage, gates]: any) => (
+                      <div key={`ex-b-${stage}`} className="rounded-lg border border-white/10 bg-white/5 p-2">
+                        <div className="text-white/70">{stage}</div>
+                        <div className="mt-2 space-y-1">
+                          {Object.entries(gates as Record<string, string[]>).slice(0, 6).map(([k, v]) => (
+                            <div key={`ex-b-${stage}-${k}`} className="flex items-center justify-between text-[11px]">
+                              <span className="text-white/60">{k}</span>
+                              <span className="text-white/80">{(v ?? []).slice(0, 5).join(', ')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {mode === 'single' && histResult ? (
         <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold">Histograms</div>
