@@ -460,12 +460,27 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const sourceMode = String(source.mode || '').toLowerCase();
     let runId = String(body.runId || source.runId || '').trim();
     const useLatest = body.useLatestFinishedIfMissing !== false;
+    const runIdsRaw = Array.isArray(source.runIds) ? source.runIds : (Array.isArray(body.runIds) ? body.runIds : null);
     if (sourceMode === 'lastscan') runId = '';
     let scanRun = runId ? await getScanRunByRunId(runId) : null;
     let runIds: string[] | null = null;
     let runMeta: Array<{ runId: string; startedAt: number }> = [];
 
-    if (sourceMode === 'lastn') {
+    if (sourceMode === 'runids') {
+      const ids = (runIdsRaw ?? [])
+        .map((v: any) => String(v).trim())
+        .filter(Boolean);
+      if (!ids.length) return res.status(400).json({ ok: false, error: 'runIds required' });
+      runIds = ids.slice(0, 200);
+      scanRun = await getScanRunByRunId(runIds[0]);
+      const runsRaw = await listScanRuns(2000);
+      const runMap = new Map(runsRaw.map((r: any) => [r.runId, r]));
+      runMeta = runIds
+        .map((id) => ({ runId: id, startedAt: Number(runMap.get(id)?.startedAt ?? 0) }))
+        .filter((r) => Number.isFinite(r.startedAt) && r.startedAt > 0);
+      runId = runIds[0] || '';
+      if (!runIds.length) return res.status(404).json({ ok: false, error: 'No scan runs found' });
+    } else if (sourceMode === 'lastn') {
       const limitRaw = Number(source.limit ?? source.count ?? 25);
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 25;
       const runsRaw = await listScanRuns(limit);

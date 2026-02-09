@@ -91,8 +91,10 @@ export default function TunePage() {
   const [scanRuns, setScanRuns] = useState<any[]>([]);
   const [runId, setRunId] = useState('');
   const [useLatest, setUseLatest] = useState(true);
-  const [batchSource, setBatchSource] = useState<'latest' | 'runId' | 'lastN'>('latest');
+  const [batchSource, setBatchSource] = useState<'latest' | 'runId' | 'lastN' | 'range'>('latest');
   const [batchLastN, setBatchLastN] = useState(25);
+  const [batchRangeStart, setBatchRangeStart] = useState(0);
+  const [batchRangeEnd, setBatchRangeEnd] = useState(24);
   const [preset, setPreset] = useState<Preset>('BALANCED');
   const [limit, setLimit] = useState(500);
   const [symbolsText, setSymbolsText] = useState('');
@@ -119,6 +121,19 @@ export default function TunePage() {
   const [loadingHist, setLoadingHist] = useState(false);
   const [error, setError] = useState<string>('');
   const [selectedVariantName, setSelectedVariantName] = useState<string | null>(null);
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem('ps_admin_token') ?? '');
+  const [bundleHours, setBundleHours] = useState(6);
+  const [bundleLimit, setBundleLimit] = useState(20);
+  const [bundleLatest, setBundleLatest] = useState<any | null>(null);
+  const [bundleRecent, setBundleRecent] = useState<any[]>([]);
+  const [bundleSelected, setBundleSelected] = useState<any | null>(null);
+  const [bundleLoading, setBundleLoading] = useState(false);
+  const [bundleError, setBundleError] = useState('');
+  const [showBundleJson, setShowBundleJson] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('ps_admin_token', adminToken);
+  }, [adminToken]);
 
   useEffect(() => {
     const load = async () => {
@@ -141,6 +156,87 @@ export default function TunePage() {
     if (!batchResult?.variants?.length || !selectedVariantName) return null;
     return batchResult.variants.find((v: any) => v?.name === selectedVariantName) ?? null;
   }, [batchResult, selectedVariantName]);
+
+  const rangeRunIds = useMemo(() => {
+    if (batchSource !== 'range') return [];
+    const maxIdx = Math.max(0, scanRuns.length - 1);
+    const start = Math.max(0, Math.min(maxIdx, Number(batchRangeStart) || 0));
+    const end = Math.max(start, Math.min(maxIdx, Number(batchRangeEnd) || 0));
+    return scanRuns.slice(start, end + 1).map((r) => r.runId).filter(Boolean);
+  }, [batchSource, batchRangeStart, batchRangeEnd, scanRuns]);
+
+  function authHeaders() {
+    return adminToken.trim() ? { 'x-admin-token': adminToken.trim() } : {};
+  }
+
+  async function loadBundleLatest() {
+    setBundleError('');
+    setBundleLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (Number.isFinite(bundleHours)) qs.set('hours', String(bundleHours));
+      const resp = await fetch(API(`/api/tuning/bundles/latest?${qs.toString()}`), {
+        headers: authHeaders(),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setBundleError(resp?.error || 'Failed to load latest bundle');
+        return;
+      }
+      setBundleLatest(resp.bundle ?? null);
+      setBundleSelected(resp.bundle ?? null);
+    } catch (e: any) {
+      setBundleError(String(e?.message || e));
+    } finally {
+      setBundleLoading(false);
+    }
+  }
+
+  async function loadBundleRecent() {
+    setBundleError('');
+    setBundleLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (Number.isFinite(bundleLimit)) qs.set('limit', String(bundleLimit));
+      const resp = await fetch(API(`/api/tuning/bundles/recent?${qs.toString()}`), {
+        headers: authHeaders(),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setBundleError(resp?.error || 'Failed to load recent bundles');
+        return;
+      }
+      setBundleRecent(resp.bundles ?? []);
+    } catch (e: any) {
+      setBundleError(String(e?.message || e));
+    } finally {
+      setBundleLoading(false);
+    }
+  }
+
+  async function loadBundleById(id: number) {
+    if (!Number.isFinite(id)) return;
+    setBundleError('');
+    setBundleLoading(true);
+    try {
+      const resp = await fetch(API(`/api/tuning/bundles/${id}`), {
+        headers: authHeaders(),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setBundleError(resp?.error || 'Failed to load bundle');
+        return;
+      }
+      setBundleSelected(resp.bundle ?? null);
+    } catch (e: any) {
+      setBundleError(String(e?.message || e));
+    } finally {
+      setBundleLoading(false);
+    }
+  }
+
+  function copyBundleMarkdown() {
+    const md = bundleSelected?.reportMd ?? '';
+    if (!md) return;
+    navigator.clipboard.writeText(md).catch(() => {});
+  }
 
   function applyExampleOverrides() {
     setOverridesText(JSON.stringify({
@@ -185,7 +281,7 @@ export default function TunePage() {
       };
       const resp = await fetch(API('/api/tune/sim'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(body),
       }).then(r => r.json());
       if (resp?.ok === false) {
@@ -210,7 +306,9 @@ export default function TunePage() {
       if (useLatest) qs.set('useLatestFinishedIfMissing', 'true');
       qs.set('preset', preset);
       qs.set('limit', String(Math.min(10000, Math.max(100, limit))));
-      const resp = await fetch(API(`/api/tune/hist?${qs.toString()}`)).then(r => r.json());
+      const resp = await fetch(API(`/api/tune/hist?${qs.toString()}`), {
+        headers: authHeaders(),
+      }).then(r => r.json());
       if (resp?.ok === false) {
         setError(resp?.error || 'Hist load failed');
         return;
@@ -301,6 +399,11 @@ export default function TunePage() {
         };
       });
 
+      if (batchSource === 'range' && !rangeRunIds.length) {
+        setError('No scan runs found in range.');
+        return;
+      }
+
       const body = {
         preset,
         runId: batchSource === 'runId' ? runId.trim() : '',
@@ -316,11 +419,13 @@ export default function TunePage() {
         diffSymbolsLimit,
         source: batchSource === 'lastN'
           ? { mode: 'lastN', limit: batchLastN }
-          : { mode: batchSource === 'latest' ? 'lastScan' : 'runId', runId: runId.trim() },
+          : batchSource === 'range'
+            ? { mode: 'runIds', runIds: rangeRunIds }
+            : { mode: batchSource === 'latest' ? 'lastScan' : 'runId', runId: runId.trim() },
       };
       const resp = await fetch(API('/api/tune/simBatch'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(body),
       }).then(r => r.json());
       if (resp?.ok === false) {
@@ -366,6 +471,17 @@ export default function TunePage() {
           </button>
         </div>
 
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
+          <div className="text-white/70">Admin token (for tuning + bundles)</div>
+          <input
+            value={adminToken}
+            onChange={(e) => setAdminToken(e.target.value)}
+            className="mt-2 w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+            placeholder="x-admin-token (optional)"
+          />
+          <div className="mt-1 text-white/50">Stored in localStorage. Leave blank if ADMIN_TOKEN is not set.</div>
+        </div>
+
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="text-xs text-white/60">Run</div>
@@ -409,6 +525,7 @@ export default function TunePage() {
                     <option value="latest">Latest finished run</option>
                     <option value="runId">Specific run</option>
                     <option value="lastN">Last N runs</option>
+                    <option value="range">Range (index)</option>
                   </select>
                 </div>
                 {batchSource === 'runId' ? (
@@ -442,6 +559,29 @@ export default function TunePage() {
                       onChange={(e) => setBatchLastN(Math.max(1, Math.min(200, Number(e.target.value))))}
                       className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
                     />
+                  </div>
+                ) : null}
+                {batchSource === 'range' ? (
+                  <div className="mt-2 space-y-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <label className="text-white/60">Start index</label>
+                      <input
+                        type="number"
+                        value={batchRangeStart}
+                        onChange={(e) => setBatchRangeStart(Math.max(0, Number(e.target.value)))}
+                        className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                      />
+                      <label className="text-white/60">End index</label>
+                      <input
+                        type="number"
+                        value={batchRangeEnd}
+                        onChange={(e) => setBatchRangeEnd(Math.max(0, Number(e.target.value)))}
+                        className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                      />
+                    </div>
+                    <div className="text-white/50">
+                      Uses scanRuns list (index 0 = newest). Selected: {rangeRunIds.length}
+                    </div>
                   </div>
                 ) : null}
               </>
@@ -1157,6 +1297,118 @@ export default function TunePage() {
           </div>
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-lg font-semibold">Tuning Bundles</div>
+            <div className="text-xs text-white/60">Periodic snapshots for fast review.</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-white/60">Hours</span>
+              <input
+                type="number"
+                value={bundleHours}
+                onChange={(e) => setBundleHours(Math.max(1, Math.min(168, Number(e.target.value))))}
+                className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-white/60">Limit</span>
+              <input
+                type="number"
+                value={bundleLimit}
+                onChange={(e) => setBundleLimit(Math.max(1, Math.min(200, Number(e.target.value))))}
+                className="w-20 bg-white/10 border border-white/10 rounded px-2 py-1"
+              />
+            </div>
+            <button onClick={loadBundleLatest} className="px-2 py-1 rounded bg-white/10 hover:bg-white/15">
+              {bundleLoading ? 'Loading...' : 'Load latest'}
+            </button>
+            <button onClick={loadBundleRecent} className="px-2 py-1 rounded bg-white/10 hover:bg-white/15">
+              Load recent
+            </button>
+            <button onClick={copyBundleMarkdown} className="px-2 py-1 rounded bg-emerald-400/20 hover:bg-emerald-400/30">
+              Copy report
+            </button>
+          </div>
+        </div>
+
+        {bundleError ? (
+          <div className="mt-3 text-xs text-amber-200">{bundleError}</div>
+        ) : null}
+
+        <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-xs">
+          <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="text-white/60">Latest bundle</div>
+            <div className="mt-2 text-white/80">ID: {bundleLatest?.id ?? '--'}</div>
+            <div className="text-white/60">Created: {dt(bundleLatest?.createdAt)}</div>
+            <div className="text-white/60">Window: {bundleLatest?.windowHours ?? '--'}h</div>
+            <div className="text-white/60">Git: {bundleLatest?.buildGitSha ?? '--'}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-3 lg:col-span-2">
+            <div className="text-white/60 mb-2">Recent bundles</div>
+            <div className="max-h-56 overflow-auto">
+              {(bundleRecent ?? []).map((b) => (
+                <button
+                  key={`bundle-${b.id}`}
+                  onClick={() => loadBundleById(b.id)}
+                  className={`w-full flex items-center justify-between px-2 py-1 rounded border border-white/10 text-left ${
+                    bundleSelected?.id === b.id ? 'bg-white/10' : 'hover:bg-white/5'
+                  }`}
+                >
+                  <span>#{b.id} · {dt(b.createdAt)}</span>
+                  <span className="text-white/50">{b.windowHours}h</span>
+                </button>
+              ))}
+              {!bundleRecent?.length ? <div className="text-white/50">No bundles loaded.</div> : null}
+            </div>
+          </div>
+        </div>
+
+        {bundleSelected ? (
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-white/60">Summary</div>
+              <div className="mt-2 text-white/80 space-y-1">
+                <div>Created: {dt(bundleSelected.createdAt)}</div>
+                <div>Window: {bundleSelected.windowHours}h</div>
+                <div>Run: {bundleSelected.scanRunId ?? '--'}</div>
+                <div>Git: {bundleSelected.buildGitSha ?? '--'}</div>
+              </div>
+              <div className="mt-3 text-white/70">Top drivers</div>
+              <div className="mt-1 space-y-1">
+                {(bundleSelected.payload?.failureDrivers ?? []).slice(0, 5).map((d: any, i: number) => (
+                  <div key={`driver-${i}`} className="flex items-center justify-between">
+                    <span>{d.key}</span>
+                    <span>{d.n}</span>
+                  </div>
+                ))}
+                {!(bundleSelected.payload?.failureDrivers ?? []).length ? (
+                  <div className="text-white/50">No failure drivers.</div>
+                ) : null}
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-white/60 flex items-center justify-between">
+                Report (Markdown)
+                <button
+                  onClick={() => setShowBundleJson((v) => !v)}
+                  className="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/15"
+                >
+                  {showBundleJson ? 'Show report' : 'Show JSON'}
+                </button>
+              </div>
+              <pre className="mt-2 whitespace-pre-wrap text-[11px] bg-black/30 border border-white/10 rounded p-2 max-h-80 overflow-auto">
+{showBundleJson
+  ? JSON.stringify(bundleSelected.payload ?? {}, null, 2)
+  : (bundleSelected.reportMd ?? '')}
+              </pre>
+            </div>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }
