@@ -3,6 +3,7 @@ import { getOutcomesReport, listRecentOutcomes } from '../signalStore.js';
 import { thresholdsForPreset, type Preset, getScanIntervalMs, getMaxScanMs } from '../scanner.js';
 import { insertTuningBundle, pruneTuningBundles } from '../tuningBundleStore.js';
 import { buildConfigSnapshot, computeConfigHash, safeEnvSnapshot } from '../configSnapshot.js';
+import { getDb } from '../db/db.js';
 
 type TuningBundleParams = {
   hours?: number;
@@ -12,6 +13,7 @@ type TuningBundleParams = {
 };
 
 type FailureDriver = { key: string; n: number };
+type CategoryCountMap = Record<string, number>;
 
 const BUILD_GIT_SHA =
   process.env.RAILWAY_GIT_COMMIT_SHA ||
@@ -89,6 +91,38 @@ function normalizeTotals(raw: any) {
     out[k] = Number.isFinite(n) ? n : 0;
   }
   return out;
+}
+
+async function getWindowSignalsByCategory(params: {
+  windowStartMs: number;
+  windowEndMs: number;
+  configHash?: string | null;
+}): Promise<CategoryCountMap> {
+  const d = getDb();
+  const where: string[] = ['time >= @start', 'time < @end'];
+  const bind: any = {
+    start: params.windowStartMs,
+    end: params.windowEndMs,
+  };
+  if (params.configHash) {
+    where.push('config_hash = @configHash');
+    bind.configHash = params.configHash;
+  }
+  const rows = await d.prepare(`
+    SELECT category, COUNT(*) AS n
+    FROM signals
+    WHERE ${where.join(' AND ')}
+    GROUP BY category
+  `).all(bind);
+  const out: CategoryCountMap = {};
+  for (const row of rows) {
+    out[String(row.category)] = Number(row.n ?? 0);
+  }
+  return out;
+}
+
+function sumCounts(map: CategoryCountMap) {
+  return Object.values(map).reduce((acc, n) => acc + (Number(n) || 0), 0);
 }
 
 function buildChecklistMd(input: {
@@ -174,6 +208,12 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
   });
 
   const rates = computeRates(normalizedTotals);
+  const windowSignalsByCategory = await getWindowSignalsByCategory({
+    windowStartMs,
+    windowEndMs,
+    configHash,
+  });
+  const windowSignalsTotal = sumCounts(windowSignalsByCategory);
 
   const byCategory: Record<string, { total: number; win: number; loss: number; none: number }> = {};
   for (const row of recentOutcomes) {
@@ -254,6 +294,8 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
       rates,
       byCategory,
     },
+    windowSignalsByCategory,
+    windowSignalsTotal,
     failureDrivers,
     samples,
     config: {

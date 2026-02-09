@@ -127,6 +127,17 @@ export default function TuningBundlesPage() {
     return { winN, lossN, noneN, total };
   }, [bundleSelected]);
 
+  const signalWindow = useMemo(() => {
+    const windowCats = bundleSelected?.payload?.windowSignalsByCategory ?? {};
+    const lastScanCats = bundleSelected?.payload?.scan?.summary?.signalsByCategory ?? {};
+    const windowTotal = Number(bundleSelected?.payload?.windowSignalsTotal ?? 0);
+    return {
+      windowCats,
+      lastScanCats,
+      windowTotal,
+    };
+  }, [bundleSelected]);
+
   return (
     <div className="mt-4 space-y-6">
       <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -207,6 +218,24 @@ export default function TuningBundlesPage() {
 
         {bundleSelected ? (
           <div className="mt-4 space-y-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-white/60">Last scan (single run)</div>
+                <div className="mt-2 text-sm">
+                  READY: <b>{signalWindow.lastScanCats?.READY_TO_BUY ?? 0}</b> · BEST:{' '}
+                  <b>{signalWindow.lastScanCats?.BEST_ENTRY ?? 0}</b>
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-white/60">Last {bundleSelected?.windowHours ?? '?'}h (window)</div>
+                <div className="mt-2 text-sm">
+                  READY: <b>{signalWindow.windowCats?.READY_TO_BUY ?? 0}</b> · BEST:{' '}
+                  <b>{signalWindow.windowCats?.BEST_ENTRY ?? 0}</b>
+                </div>
+                <div className="mt-1 text-xs text-white/50">Total signals: {signalWindow.windowTotal ?? 0}</div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/60">Total</div>
@@ -285,4 +314,3 @@ export default function TuningBundlesPage() {
     </div>
   );
 }
-
