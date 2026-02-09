@@ -374,9 +374,7 @@ function analyzeSymbolInternal(
   const priceAboveVwapStrict = price > vwap_i;
   const readyPriceAboveVwapRelaxedEligible =
     !priceAboveVwapStrict &&
-    nearVwapReady &&
-    confirm15mOk &&
-    reclaimOk;
+    nearVwapReady;
   const readyPriceAboveVwapRelaxedTrue =
     readyPriceAboveVwapRelaxedEligible &&
     price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
