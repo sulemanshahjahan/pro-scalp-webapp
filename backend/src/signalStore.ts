@@ -31,6 +31,179 @@ const SIGNAL_LOG_CATS = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY
   .map(s => s.trim())
   .filter(Boolean);
 
+const BUILD_GIT_SHA =
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.GIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  null;
+
+const CONFIG_ENV_KEYS = [
+  'READY_BTC_REQUIRED',
+  'READY_CONFIRM15_REQUIRED',
+  'READY_TREND_REQUIRED',
+  'READY_VOL_SPIKE_REQUIRED',
+  'READY_SWEEP_REQUIRED',
+  'READY_RECLAIM_REQUIRED',
+  'READY_VWAP_MAX_PCT',
+  'READY_VWAP_EPS_PCT',
+  'READY_VWAP_TOUCH_PCT',
+  'READY_VWAP_TOUCH_BARS',
+  'READY_BODY_PCT',
+  'READY_CLOSE_POS_MIN',
+  'READY_UPPER_WICK_MAX',
+  'READY_EMA_EPS_PCT',
+  'WATCH_EMA_EPS_PCT',
+  'RSI_READY_MIN',
+  'RSI_READY_MAX',
+  'RSI_EARLY_MIN',
+  'RSI_EARLY_MAX',
+  'RSI_DELTA_STRICT',
+  'CONFIRM15_VWAP_EPS_PCT',
+  'CONFIRM15_VWAP_ROLL_BARS',
+  'BEST_BTC_REQUIRED',
+  'BEST_VWAP_MAX_PCT',
+  'BEST_VWAP_EPS_PCT',
+  'BEST_EMA_EPS_PCT',
+  'RSI_BEST_MIN',
+  'RSI_BEST_MAX',
+  'RR_MIN_BEST',
+  'MIN_BODY_PCT',
+  'MIN_ATR_PCT',
+  'MIN_RISK_PCT',
+  'SESSION_FILTER_ENABLED',
+  'SESSIONS_UTC',
+  'SCAN_INTERVAL_MS',
+];
+
+function parseEnvValue(raw: string) {
+  const v = String(raw).trim();
+  if (!v) return v;
+  if (v.toLowerCase() === 'true') return true;
+  if (v.toLowerCase() === 'false') return false;
+  const n = Number(v);
+  if (Number.isFinite(n)) return n;
+  return v;
+}
+
+function buildConfigSnapshot(preset: string | null | undefined, sig: Signal) {
+  const env: Record<string, any> = {};
+  for (const key of CONFIG_ENV_KEYS) {
+    if (process.env[key] != null) {
+      env[key] = parseEnvValue(String(process.env[key]));
+    }
+  }
+  return {
+    preset: preset ?? sig.preset ?? null,
+    env,
+    thresholds: {
+      vwapDistancePct: sig.thresholdVwapDistancePct ?? null,
+      volSpikeX: sig.thresholdVolSpikeX ?? null,
+      atrGuardPct: sig.thresholdAtrGuardPct ?? null,
+    },
+    build: { gitSha: BUILD_GIT_SHA },
+  };
+}
+
+function buildReadyDebugSnapshot(sig: Signal) {
+  const vwap = Number.isFinite(sig.vwap as number) ? Number(sig.vwap) : null;
+  const ema200 = Number.isFinite(sig.ema200 as number) ? Number(sig.ema200) : null;
+  const price = Number.isFinite(sig.price as number) ? Number(sig.price) : null;
+  const vwapDistPct = (price != null && vwap) ? ((price - vwap) / vwap) * 100 : null;
+  const emaDistPct = (price != null && ema200) ? ((price - ema200) / ema200) * 100 : null;
+  return {
+    ...(sig.readyDebug ?? {}),
+    metrics: {
+      price,
+      vwap,
+      vwapDistPct,
+      ema200,
+      emaDistPct,
+      rsi9: sig.rsi9 ?? null,
+      atrPct: sig.atrPct ?? null,
+      volSpike: sig.volSpike ?? null,
+    },
+    confirm15: {
+      strict: sig.confirm15mStrict ?? null,
+      soft: sig.confirm15mSoft ?? null,
+      used: sig.confirm15mStrict ? 'strict' : sig.confirm15mSoft ? 'soft' : 'none',
+      vwapEpsPct: parseEnvValue(String(process.env.CONFIRM15_VWAP_EPS_PCT ?? '0.20')),
+      rollBars: parseEnvValue(String(process.env.CONFIRM15_VWAP_ROLL_BARS ?? '96')),
+    },
+  };
+}
+
+function buildBestDebugSnapshot(sig: Signal) {
+  const vwap = Number.isFinite(sig.vwap as number) ? Number(sig.vwap) : null;
+  const ema200 = Number.isFinite(sig.ema200 as number) ? Number(sig.ema200) : null;
+  const price = Number.isFinite(sig.price as number) ? Number(sig.price) : null;
+  const vwapDistPct = (price != null && vwap) ? ((price - vwap) / vwap) * 100 : null;
+  const emaDistPct = (price != null && ema200) ? ((price - ema200) / ema200) * 100 : null;
+  return {
+    ...(sig.bestDebug ?? {}),
+    metrics: {
+      price,
+      vwap,
+      vwapDistPct,
+      ema200,
+      emaDistPct,
+      rsi9: sig.rsi9 ?? null,
+      atrPct: sig.atrPct ?? null,
+      volSpike: sig.volSpike ?? null,
+      rr: sig.rr ?? null,
+    },
+    confirm15: {
+      strict: sig.confirm15mStrict ?? null,
+      soft: sig.confirm15mSoft ?? null,
+      used: sig.confirm15mStrict ? 'strict' : sig.confirm15mSoft ? 'soft' : 'none',
+      vwapEpsPct: parseEnvValue(String(process.env.CONFIRM15_VWAP_EPS_PCT ?? '0.20')),
+      rollBars: parseEnvValue(String(process.env.CONFIRM15_VWAP_ROLL_BARS ?? '96')),
+    },
+  };
+}
+
+function buildEntrySnapshot(params: {
+  sig: Signal;
+  preset: string | null | undefined;
+  entryTimeAligned: number;
+  entryRule: string;
+  entryCandleOpenTime: number;
+}) {
+  const { sig, preset, entryTimeAligned, entryRule, entryCandleOpenTime } = params;
+  return {
+    version: sig.strategyVersion ?? STRATEGY_VERSION,
+    build: { gitSha: BUILD_GIT_SHA },
+    runId: sig.runId ?? null,
+    preset: preset ?? sig.preset ?? null,
+    entry: {
+      time: entryTimeAligned,
+      candleOpenTime: entryCandleOpenTime,
+      rule: entryRule,
+      price: sig.price,
+    },
+    config: buildConfigSnapshot(preset, sig),
+    metrics: {
+      price: sig.price,
+      vwap5: sig.vwap ?? null,
+      ema200_5: sig.ema200 ?? null,
+      rsi9_5: sig.rsi9 ?? null,
+      atrPct: sig.atrPct ?? null,
+      volSpike: sig.volSpike ?? null,
+      rr: sig.rr ?? null,
+      deltaVwapPct: sig.deltaVwapPct ?? null,
+    },
+    confirm15: {
+      strict: sig.confirm15mStrict ?? null,
+      soft: sig.confirm15mSoft ?? null,
+      used: sig.confirm15mStrict ? 'strict' : sig.confirm15mSoft ? 'soft' : 'none',
+      vwapEpsPct: parseEnvValue(String(process.env.CONFIRM15_VWAP_EPS_PCT ?? '0.20')),
+      rollBars: parseEnvValue(String(process.env.CONFIRM15_VWAP_ROLL_BARS ?? '96')),
+    },
+    gates: sig.gateSnapshot ?? null,
+    firstFailedGate: sig.firstFailedGate ?? null,
+    blockedReasons: sig.blockedReasons ?? [],
+  };
+}
+
 let schemaReady = false;
 
 async function ensureSchema() {
@@ -95,6 +268,10 @@ async function ensureSchema() {
       gate_snapshot_json TEXT,
       ready_debug_json TEXT,
       best_debug_json TEXT,
+      entry_debug_json TEXT,
+      config_snapshot_json TEXT,
+      build_git_sha TEXT,
+      run_id TEXT,
       blocked_reasons_json TEXT,
       first_failed_gate TEXT,
       gate_score INTEGER,
@@ -167,6 +344,7 @@ async function ensureSchema() {
       resolved_at INTEGER NOT NULL DEFAULT 0,
       resolve_version TEXT,
       prev_snapshot TEXT,
+      outcome_debug_json TEXT,
 
       UNIQUE(signal_id, horizon_min),
       FOREIGN KEY(signal_id) REFERENCES signals(id) ON DELETE CASCADE
@@ -212,6 +390,10 @@ async function ensureSchema() {
   try { await d.exec(`ALTER TABLE signals ADD COLUMN gate_snapshot_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN ready_debug_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN best_debug_json TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN entry_debug_json TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN config_snapshot_json TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN build_git_sha TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN run_id TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN blocked_reasons_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN first_failed_gate TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN gate_score INTEGER`); } catch {}
@@ -263,6 +445,7 @@ async function ensureSchema() {
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN resolved_at INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN resolve_version TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN prev_snapshot TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN outcome_debug_json TEXT`); } catch {}
 
   // Ensure flags are never NULL
   try { await d.exec(`UPDATE signal_outcomes SET hit_sl = 0 WHERE hit_sl IS NULL`); } catch {}
@@ -557,7 +740,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       confirm15_strict, confirm15_soft, rr_est,
       stop, tp1, tp2, target, rr, riskPct,
       session_ok, sweep_ok, trend_ok, blocked_by_btc, would_be_category, btc_gate, btc_gate_reason,
-      gate_snapshot_json, ready_debug_json, best_debug_json, blocked_reasons_json, first_failed_gate, gate_score,
+      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json, build_git_sha, run_id, blocked_reasons_json, first_failed_gate, gate_score,
       btc_bull, btc_bear, btc_close, btc_vwap, btc_ema200, btc_rsi, btc_delta_vwap,
       market_json, reasons_json,
       created_at, updated_at
@@ -569,7 +752,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       @confirm15_strict, @confirm15_soft, @rr_est,
       @stop, @tp1, @tp2, @target, @rr, @riskPct,
       @session_ok, @sweep_ok, @trend_ok, @blocked_by_btc, @would_be_category, @btc_gate, @btc_gate_reason,
-      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @blocked_reasons_json, @first_failed_gate, @gate_score,
+      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json, @build_git_sha, @run_id, @blocked_reasons_json, @first_failed_gate, @gate_score,
       @btc_bull, @btc_bear, @btc_close, @btc_vwap, @btc_ema200, @btc_rsi, @btc_delta_vwap,
       @market_json, @reasons_json,
       @created_at, @updated_at
@@ -610,6 +793,10 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       gate_snapshot_json=excluded.gate_snapshot_json,
       ready_debug_json=excluded.ready_debug_json,
       best_debug_json=excluded.best_debug_json,
+      entry_debug_json=excluded.entry_debug_json,
+      config_snapshot_json=excluded.config_snapshot_json,
+      build_git_sha=excluded.build_git_sha,
+      run_id=excluded.run_id,
       blocked_reasons_json=excluded.blocked_reasons_json,
       first_failed_gate=excluded.first_failed_gate,
       gate_score=excluded.gate_score,
@@ -662,8 +849,18 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     btc_gate: sig.btcGate ?? null,
     btc_gate_reason: sig.btcGateReason ?? null,
     gate_snapshot_json: sig.gateSnapshot ? JSON.stringify(sig.gateSnapshot) : null,
-    ready_debug_json: sig.readyDebug ? JSON.stringify(sig.readyDebug) : null,
-    best_debug_json: sig.bestDebug ? JSON.stringify(sig.bestDebug) : null,
+    ready_debug_json: JSON.stringify(buildReadyDebugSnapshot(sig)),
+    best_debug_json: JSON.stringify(buildBestDebugSnapshot(sig)),
+    entry_debug_json: JSON.stringify(buildEntrySnapshot({
+      sig,
+      preset,
+      entryTimeAligned,
+      entryRule: ENTRY_RULE,
+      entryCandleOpenTime,
+    })),
+    config_snapshot_json: JSON.stringify(buildConfigSnapshot(preset, sig)),
+    build_git_sha: BUILD_GIT_SHA,
+    run_id: sig.runId ?? null,
     blocked_reasons_json: sig.blockedReasons ? JSON.stringify(sig.blockedReasons) : null,
     first_failed_gate: sig.firstFailedGate ?? null,
     gate_score: sig.gateScore ?? null,
@@ -799,6 +996,7 @@ export function calcOutcomeFromCandles(params: {
       exitPrice: entry,
       exitTime: 0,
       ambiguous: 0,
+      exitIndex: -1,
     };
   }
 
@@ -929,6 +1127,7 @@ export function calcOutcomeFromCandles(params: {
     exitPrice,
     exitTime,
     ambiguous,
+    exitIndex,
   };
 }
 
@@ -1191,6 +1390,52 @@ async function computeOneOutcome(
     exitPrice: entry,
     exitTime: startTime,
     ambiguous: 0,
+    exitIndex: -1,
+  };
+
+  const exitCandle = (canCompute && out.exitIndex >= 0 && out.exitIndex < windowSlice.length)
+    ? windowSlice[out.exitIndex]
+    : null;
+  const outcomeDebug = {
+    window: {
+      startTimeMs: startTime,
+      endTimeMs: endTime,
+      intervalMs,
+      needed,
+      nCandles,
+      coveragePct,
+    },
+    resolution: {
+      result: canCompute ? out.result : 'PENDING',
+      reason: canCompute ? out.exitReason : (invalidReason ?? 'PENDING'),
+      ambiguous: canCompute ? Boolean(out.ambiguous) : false,
+    },
+    hits: {
+      tp1HitTime: out.tp1HitTime,
+      tp2HitTime: out.tp2HitTime,
+      slHitTime: out.slHitTime,
+      timeToFirstHitMs: out.timeToFirstHitMs,
+    },
+    exit: {
+      price: canCompute ? out.exitPrice : entry,
+      time: canCompute ? out.exitTime : startTime,
+      index: out.exitIndex,
+    },
+    exitCandle: exitCandle ? {
+      openTime: Number.isFinite(exitCandle.openTime) ? Number(exitCandle.openTime) : Number(exitCandle.time),
+      open: exitCandle.open,
+      high: exitCandle.high,
+      low: exitCandle.low,
+      close: exitCandle.close,
+    } : null,
+    excursions: {
+      mfePct: out.mfePct,
+      maePct: out.maePct,
+      rMfe: out.rMfe,
+      rMae: out.rMae,
+    },
+    windowStatus,
+    invalidReason,
   };
 
   let tradeState = 'PENDING';
@@ -1233,7 +1478,8 @@ async function computeOneOutcome(
       result, exit_reason, trade_state, exit_price, exit_time,
       window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
       expired_after_15m, expired_reason,
-      attempted_at, computed_at, resolved_at, resolve_version
+      attempted_at, computed_at, resolved_at, resolve_version,
+      outcome_debug_json
     ) VALUES (
       @signal_id, @horizon_min, @entry_time, @entry_candle_open_time, @entry_rule, @start_time, @end_time,
       @interval_min, @n_candles, @n_candles_expected, @coverage_pct,
@@ -1246,7 +1492,8 @@ async function computeOneOutcome(
       @result, @exit_reason, @trade_state, @exit_price, @exit_time,
       @window_status, @outcome_state, @invalid_levels, @invalid_reason, @ambiguous,
       @expired_after_15m, @expired_reason,
-      @attempted_at, @computed_at, @resolved_at, @resolve_version
+      @attempted_at, @computed_at, @resolved_at, @resolve_version,
+      @outcome_debug_json
     )
     ON CONFLICT(signal_id, horizon_min) DO UPDATE SET
       entry_time=excluded.entry_time,
@@ -1297,7 +1544,8 @@ async function computeOneOutcome(
         ELSE excluded.computed_at
       END,
       resolved_at=excluded.resolved_at,
-      resolve_version=excluded.resolve_version
+      resolve_version=excluded.resolve_version,
+      outcome_debug_json=excluded.outcome_debug_json
   `).run({
     signal_id: signalRow.id,
     horizon_min: horizonMin,
@@ -1348,6 +1596,7 @@ async function computeOneOutcome(
     computed_at: computedAt,
     resolved_at: resolvedAt,
     resolve_version: resolvedAt ? OUTCOME_RESOLVE_VERSION : null,
+    outcome_debug_json: JSON.stringify(outcomeDebug),
   });
 
   return true;
@@ -2261,6 +2510,159 @@ export async function listOutcomes(params: {
   return { start, end, days, limit, offset, total: totalRow.n, rows };
 }
 
+export async function listRecentOutcomes(params: {
+  hours?: number;
+  limit?: number;
+  filter?: string[];
+  result?: string[];
+  category?: string;
+  categories?: string[];
+}) {
+  const d = await getDbReady();
+  const hours = Math.max(1, Math.min(168, Number(params.hours) || 6));
+  const start = Date.now() - hours * 60 * 60_000;
+  const limit = Math.max(1, Math.min(500, Number(params.limit) || 200));
+  const filter = (params.result ?? params.filter ?? []).map(s => s.trim()).filter(Boolean);
+  const categories = params.categories?.length
+    ? params.categories
+    : (params.category ? [params.category] : []);
+
+  const where: string[] = [`COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start`];
+  const bind: Record<string, any> = { start, limit };
+
+  if (categories.length) {
+    const keys = categories.map((_, i) => `@cat_${i}`);
+    categories.forEach((v, i) => { bind[`cat_${i}`] = v; });
+    where.push(`s.category IN (${keys.join(',')})`);
+  }
+
+  if (filter.length) {
+    const keys = filter.map((_, i) => `@f_${i}`);
+    filter.forEach((v, i) => { bind[`f_${i}`] = v; });
+    where.push(`(
+      o.exit_reason IN (${keys.join(',')})
+      OR o.result IN (${keys.join(',')})
+      OR o.window_status IN (${keys.join(',')})
+      OR o.outcome_state IN (${keys.join(',')})
+    )`);
+  }
+
+  const rows = await d.prepare(`
+    SELECT
+      s.id as signalId,
+      s.symbol,
+      s.category,
+      s.time,
+      s.entry_time as entryTime,
+      s.entry_candle_open_time as entryCandleOpenTime,
+      s.entry_rule as entryRule,
+      s.price,
+      s.stop,
+      s.tp1,
+      s.tp2,
+      s.target,
+      s.gate_snapshot_json as gateSnapshotJson,
+      s.ready_debug_json as readyDebugJson,
+      s.best_debug_json as bestDebugJson,
+      s.config_snapshot_json as configSnapshotJson,
+      s.build_git_sha as buildGitSha,
+      s.run_id as runId,
+      o.horizon_min as horizonMin,
+      o.window_status as windowStatus,
+      o.outcome_state as outcomeState,
+      o.result,
+      o.exit_reason as exitReason,
+      o.mfe_pct as mfePct,
+      o.mae_pct as maePct,
+      o.bars_to_exit as barsToExit,
+      o.outcome_debug_json as outcomeDebugJson
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY s.time DESC
+    LIMIT @limit
+  `).all(bind) as any[];
+
+  return rows.map((r) => ({
+    ...r,
+    gateSnapshot: safeJsonParse<any>(r.gateSnapshotJson),
+    readyDebug: safeJsonParse<any>(r.readyDebugJson),
+    bestDebug: safeJsonParse<any>(r.bestDebugJson),
+    configSnapshot: safeJsonParse<any>(r.configSnapshotJson),
+    outcomeDebug: safeJsonParse<any>(r.outcomeDebugJson),
+  }));
+}
+
+export async function getOutcomesReport(params: { hours?: number }) {
+  const d = await getDbReady();
+  const hours = Math.max(1, Math.min(168, Number(params.hours) || 6));
+  const start = Date.now() - hours * 60 * 60_000;
+
+  const totals = await d.prepare(`
+    SELECT
+      COUNT(1) as total,
+      SUM(CASE WHEN o.window_status = 'COMPLETE' THEN 1 ELSE 0 END) as completeN,
+      SUM(CASE WHEN o.window_status = 'PARTIAL' THEN 1 ELSE 0 END) as partialN,
+      SUM(CASE WHEN o.window_status = 'INVALID' OR o.trade_state = 'INVALIDATED' THEN 1 ELSE 0 END) as invalidN,
+      SUM(CASE WHEN o.result = 'WIN' THEN 1 ELSE 0 END) as winN,
+      SUM(CASE WHEN o.result = 'LOSS' THEN 1 ELSE 0 END) as lossN,
+      SUM(CASE WHEN o.result = 'NONE' THEN 1 ELSE 0 END) as noneN,
+      AVG(CASE WHEN o.window_status = 'COMPLETE' THEN o.mfe_pct END) as avgMfePct,
+      AVG(CASE WHEN o.window_status = 'COMPLETE' THEN o.mae_pct END) as avgMaePct,
+      AVG(CASE WHEN o.window_status = 'COMPLETE' THEN o.bars_to_exit END) as avgBars,
+      AVG(CASE WHEN o.window_status = 'COMPLETE' THEN o.r_close END) as avgR
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+  `).get({ start }) as any;
+
+  const exitReasons = await d.prepare(`
+    SELECT o.exit_reason as reason, COUNT(1) as n
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+      AND o.window_status = 'COMPLETE'
+      AND o.exit_reason IS NOT NULL
+    GROUP BY o.exit_reason
+    ORDER BY n DESC
+    LIMIT 10
+  `).all({ start }) as any[];
+
+  const byConfirm15 = await d.prepare(`
+    SELECT
+      s.confirm15_strict as confirm15Strict,
+      SUM(CASE WHEN o.result = 'WIN' THEN 1 ELSE 0 END) as winN,
+      SUM(CASE WHEN o.result = 'LOSS' THEN 1 ELSE 0 END) as lossN,
+      SUM(CASE WHEN o.result = 'NONE' THEN 1 ELSE 0 END) as noneN,
+      COUNT(1) as total
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+      AND o.window_status = 'COMPLETE'
+    GROUP BY s.confirm15_strict
+  `).all({ start }) as any[];
+
+  const vwapByResult = await d.prepare(`
+    SELECT
+      AVG(CASE WHEN o.result = 'WIN' THEN s.deltaVwapPct END) as winAvgDeltaVwap,
+      AVG(CASE WHEN o.result = 'LOSS' THEN s.deltaVwapPct END) as lossAvgDeltaVwap,
+      AVG(CASE WHEN o.result = 'NONE' THEN s.deltaVwapPct END) as noneAvgDeltaVwap
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+      AND o.window_status = 'COMPLETE'
+  `).get({ start }) as any;
+
+  return {
+    hours,
+    start,
+    totals,
+    exitReasons,
+    byConfirm15,
+    vwapByResult,
+  };
+}
+
 async function markOutcomeSkips(items: Array<{ signalId: number; horizonMin: number }>, reason = 'user_delete') {
   if (!items.length) return 0;
   const d = await getDbReady();
@@ -2635,6 +3037,7 @@ export async function getSignalById(id: number) {
       invalid_levels as invalidLevels,
       invalid_reason as invalidReason,
       ambiguous as ambiguous,
+      outcome_debug_json as outcomeDebugJson,
       attempted_at as attemptedAt,
       computed_at as computedAt,
       resolved_at as resolvedAt,
@@ -2653,7 +3056,7 @@ export async function getSignalById(id: number) {
     const coveragePct = Number.isFinite(Number(o.coveragePct))
       ? Number(o.coveragePct)
       : (neededCandles > 0 ? (Number(o.nCandles) / neededCandles) * 100 : 0);
-    return { ...o, neededCandles, coveragePct };
+    return { ...o, neededCandles, coveragePct, outcomeDebug: safeJsonParse<any>(o.outcomeDebugJson) };
   });
 
   const toTri = (v: any) => (v == null ? null : Boolean(v));
@@ -2680,6 +3083,10 @@ export async function getSignalById(id: number) {
     gateSnapshot: safeJsonParse<any>(s.gate_snapshot_json),
     readyDebug: safeJsonParse<any>(s.ready_debug_json),
     bestDebug: safeJsonParse<any>(s.best_debug_json),
+    entryDebug: safeJsonParse<any>(s.entry_debug_json),
+    configSnapshot: safeJsonParse<any>(s.config_snapshot_json),
+    buildGitSha: s.build_git_sha ?? null,
+    runId: s.run_id ?? null,
     blockedReasons: safeJsonParse<string[]>(s.blocked_reasons_json) ?? null,
     firstFailedGate: s.first_failed_gate ?? null,
     gateScore: s.gate_score ?? null,

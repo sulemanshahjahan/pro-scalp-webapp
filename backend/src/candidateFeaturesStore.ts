@@ -150,6 +150,64 @@ export async function listCandidateFeatures(params: {
   }));
 }
 
+export async function listCandidateFeaturesMulti(params: {
+  runIds: string[];
+  preset?: string;
+  limit?: number;
+  symbols?: string[] | null;
+}) {
+  await ensureCandidateSchema();
+  const d = getDb();
+  const runIds = (params.runIds || []).map(s => String(s).trim()).filter(Boolean);
+  if (!runIds.length) return [];
+
+  const where: string[] = [
+    `run_id IN (${runIds.map((_, i) => `@run_${i}`).join(',')})`,
+  ];
+  const bind: any = {};
+  runIds.forEach((r, i) => { bind[`run_${i}`] = r; });
+
+  if (params.preset) {
+    where.push(`preset = @preset`);
+    bind.preset = params.preset;
+  }
+
+  if (params.symbols?.length) {
+    const cleaned = params.symbols.map(s => String(s).trim().toUpperCase()).filter(Boolean);
+    if (cleaned.length) {
+      where.push(`symbol IN (${cleaned.map((_, i) => `@sym_${i}`).join(',')})`);
+      cleaned.forEach((s, i) => { bind[`sym_${i}`] = s; });
+    }
+  }
+
+  const limit = Math.max(1, Math.min(50000, params.limit ?? 5000));
+  bind.limit = limit;
+
+  const sql = `
+    SELECT
+      run_id as "runId",
+      symbol,
+      preset,
+      started_at as "startedAt",
+      metrics,
+      computed
+    FROM candidate_features
+    WHERE ${where.join(' AND ')}
+    ORDER BY started_at DESC, symbol ASC
+    LIMIT @limit
+  `;
+
+  const rows = await d.prepare(sql).all(bind) as any[];
+  return rows.map((r) => ({
+    runId: String(r.runId ?? ''),
+    symbol: String(r.symbol ?? ''),
+    preset: String(r.preset ?? ''),
+    startedAt: Number(r.startedAt ?? 0),
+    metrics: parseJsonField<Record<string, any>>(r.metrics) ?? {},
+    computed: parseJsonField<Record<string, any>>(r.computed) ?? {},
+  }));
+}
+
 export async function pruneCandidateFeatures(params?: { keepDays?: number }) {
   await ensureCandidateSchema();
   const d = getDb();
@@ -158,4 +216,3 @@ export async function pruneCandidateFeatures(params?: { keepDays?: number }) {
   const res = await d.prepare(`DELETE FROM candidate_features WHERE started_at < @cutoff`).run({ cutoff });
   return { keepDays, cutoff, deleted: res.changes };
 }
-

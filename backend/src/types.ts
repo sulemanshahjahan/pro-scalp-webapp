@@ -119,4 +119,7 @@ export interface Signal {
     firstFailedGate: string | null;
     gateScore: number;
   };
+
+  // Optional trace metadata
+  runId?: string | null;
 }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
 import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, thresholdsForPreset, type Preset } from './scanner.js';
 import { getLatestScanRuns, listScanRuns, getScanRunByRunId } from './scanStore.js';
-import { listCandidateFeatures } from './candidateFeaturesStore.js';
+import { listCandidateFeatures, listCandidateFeaturesMulti } from './candidateFeaturesStore.js';
 import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSim.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
@@ -25,6 +25,8 @@ import {
   getStatsMatrixBtc,
   getStatsSummary,
   listOutcomes,
+  listRecentOutcomes,
+  getOutcomesReport,
   listSignals,
   listStrategyVersions,
   getLoggedCategories,
@@ -459,30 +461,53 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const useLatest = body.useLatestFinishedIfMissing !== false;
     if (sourceMode === 'lastscan') runId = '';
     let scanRun = runId ? await getScanRunByRunId(runId) : null;
-    if (!runId && useLatest) {
-      const latest = await getLatestScanRuns();
-      scanRun = latest.lastFinished;
-      runId = scanRun?.runId ?? '';
+    let runIds: string[] | null = null;
+    let runMeta: Array<{ runId: string; startedAt: number }> = [];
+
+    if (sourceMode === 'lastn') {
+      const limitRaw = Number(source.limit ?? source.count ?? 25);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 25;
+      const runsRaw = await listScanRuns(limit);
+      const runs = runsRaw.filter((r): r is any => Boolean(r));
+      runIds = runs.map(r => r.runId);
+      runMeta = runs.map(r => ({ runId: r.runId, startedAt: r.startedAt }));
+      runId = runIds[0] || '';
+      if (!runIds.length) return res.status(404).json({ ok: false, error: 'No scan runs found' });
+    } else {
+      if (!runId && useLatest) {
+        const latest = await getLatestScanRuns();
+        scanRun = latest.lastFinished;
+        runId = scanRun?.runId ?? '';
+      }
+      if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+      if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
     }
-    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
-    if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
 
     const preset = parsePreset(body.preset ?? scanRun?.preset ?? 'BALANCED');
     const scope = body.scope || {};
     const limitRaw = Number(scope?.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(5000, limitRaw)) : 500;
+    const limitPerRun = Number.isFinite(limitRaw) ? Math.max(1, Math.min(5000, limitRaw)) : 500;
     const symbols = Array.isArray(scope?.symbols) ? scope.symbols : null;
     const includeExamples = Boolean(body.includeExamples);
     const examplesPerGate = body.examplesPerGate;
     const diffSymbolsLimitRaw = Number(body.diffSymbolsLimit ?? 200);
     const diffSymbolsLimit = Number.isFinite(diffSymbolsLimitRaw) ? Math.max(0, Math.min(2000, diffSymbolsLimitRaw)) : 200;
 
-    const rows = await listCandidateFeatures({
-      runId,
-      preset: body.preset ? preset : undefined,
-      limit,
-      symbols,
-    });
+    const useMulti = Array.isArray(runIds) && runIds.length > 1;
+    const effectiveLimit = useMulti ? Math.min(50000, limitPerRun * runIds!.length) : limitPerRun;
+    const rows = useMulti
+      ? await listCandidateFeaturesMulti({
+        runIds: runIds!,
+        preset: body.preset ? preset : undefined,
+        limit: effectiveLimit,
+        symbols,
+      })
+      : await listCandidateFeatures({
+        runId,
+        preset: body.preset ? preset : undefined,
+        limit: effectiveLimit,
+        symbols,
+      });
     if (!rows.length) return res.status(404).json({ ok: false, error: 'No candidate features found' });
 
     const variants = Array.isArray(body.variants) ? body.variants : [];
@@ -548,12 +573,26 @@ app.post('/api/tune/simBatch', async (req, res) => {
       };
     });
 
+    const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
+    const runIdsOut = useMulti ? runIds! : [runId].filter(Boolean);
+    const startedAtRange = runMeta.length
+      ? {
+        min: Math.min(...runMeta.map(r => r.startedAt)),
+        max: Math.max(...runMeta.map(r => r.startedAt)),
+      }
+      : null;
+
     res.json({
       meta: {
         preset,
         runId,
-        startedAt: scanRun?.startedAt ?? rows[0]?.startedAt ?? null,
+        runIds: runIdsOut,
+        runCount: runIdsOut.length,
+        startedAt,
+        startedAtRange,
         evaluated: rows.length,
+        limitPerRun,
+        effectiveLimit,
         baseOverrides: {
           applied: baseOverrideReport.appliedOverrides,
           unknownKeys: baseOverrideReport.unknownOverrideKeys,
@@ -561,6 +600,10 @@ app.post('/api/tune/simBatch', async (req, res) => {
           effectiveConfig: baseOverrideReport.config,
         },
         notes: buildOverrideNotes(body.baseOverrides),
+        source: {
+          mode: sourceMode || (useMulti ? 'lastN' : (runId ? 'runId' : 'lastScan')),
+          runIds: runIdsOut,
+        },
       },
       base: {
         counts: baseSim.counts,
@@ -1262,6 +1305,46 @@ app.get('/api/outcomes', async (req, res) => {
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// Recent outcomes feed (for tuning)
+app.get('/api/outcomes/recent', async (req, res) => {
+  try {
+    const hours = Number((req.query as any)?.hours);
+    const limit = Number((req.query as any)?.limit);
+    const filterRaw = String((req.query as any)?.filter || '').trim();
+    const resultRaw = String((req.query as any)?.result || '').trim();
+    const categoryRaw = String((req.query as any)?.category || '').trim();
+    const categoriesRaw = String((req.query as any)?.categories || '').trim();
+    const filter = filterRaw ? filterRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const result = resultRaw ? resultRaw.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const categories = categoriesRaw
+      ? categoriesRaw.split(',').map(s => s.trim()).filter(Boolean)
+      : (categoryRaw ? [categoryRaw] : undefined);
+    const rows = await listRecentOutcomes({
+      hours: Number.isFinite(hours) ? hours : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      filter,
+      result,
+      categories,
+    });
+    res.json({ ok: true, hours: Number.isFinite(hours) ? hours : 6, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Aggregated tuning report
+app.get('/api/outcomes/report', async (req, res) => {
+  try {
+    const hours = Number((req.query as any)?.hours);
+    const report = await getOutcomesReport({
+      hours: Number.isFinite(hours) ? hours : undefined,
+    });
+    res.json({ ok: true, ...report });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
   }
 });
 

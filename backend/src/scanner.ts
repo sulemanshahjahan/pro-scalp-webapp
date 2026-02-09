@@ -673,7 +673,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const sig = res?.signal ?? null;
       if (sig) {
         const candleCloseMs = getCandleCloseMs(last5, 5 * 60_000);
-        const withTime = { ...sig, time: candleCloseMs };
+        const withTime = { ...sig, time: candleCloseMs, runId: scanRun.runId };
         outs.push(withTime);
         if (withTime?.category) {
           const key = String(withTime.category);

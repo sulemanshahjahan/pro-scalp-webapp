@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS signals (
   gate_snapshot_json TEXT,
   ready_debug_json TEXT,
   best_debug_json TEXT,
+  entry_debug_json TEXT,
+  config_snapshot_json TEXT,
+  build_git_sha TEXT,
+  run_id TEXT,
   blocked_reasons_json TEXT,
   first_failed_gate TEXT,
   gate_score INTEGER,
@@ -147,6 +151,7 @@ CREATE TABLE IF NOT EXISTS signal_outcomes (
   resolved_at BIGINT NOT NULL DEFAULT 0,
   resolve_version TEXT,
   prev_snapshot TEXT,
+  outcome_debug_json TEXT,
 
   UNIQUE(signal_id, horizon_min),
   FOREIGN KEY(signal_id) REFERENCES signals(id) ON DELETE CASCADE
@@ -213,7 +218,12 @@ CREATE INDEX IF NOT EXISTS idx_outcome_skips_signal_horizon ON outcome_skips(sig
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_snapshot_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS ready_debug_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS best_debug_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS entry_debug_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_snapshot_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS build_git_sha TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS run_id TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS blocked_reasons_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS first_failed_gate TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_score INTEGER;
+ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS outcome_debug_json TEXT;
 `;

@@ -91,6 +91,8 @@ export default function TunePage() {
   const [scanRuns, setScanRuns] = useState<any[]>([]);
   const [runId, setRunId] = useState('');
   const [useLatest, setUseLatest] = useState(true);
+  const [batchSource, setBatchSource] = useState<'latest' | 'runId' | 'lastN'>('latest');
+  const [batchLastN, setBatchLastN] = useState(25);
   const [preset, setPreset] = useState<Preset>('BALANCED');
   const [limit, setLimit] = useState(500);
   const [symbolsText, setSymbolsText] = useState('');
@@ -121,7 +123,7 @@ export default function TunePage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const resp = await fetch(API('/api/scanRuns?limit=25')).then(r => r.json());
+        const resp = await fetch(API('/api/scanRuns?limit=100')).then(r => r.json());
         if (resp?.ok) setScanRuns(resp.rows ?? []);
       } catch {
         // ignore
@@ -301,8 +303,8 @@ export default function TunePage() {
 
       const body = {
         preset,
-        runId: useLatest ? '' : runId.trim(),
-        useLatestFinishedIfMissing: useLatest,
+        runId: batchSource === 'runId' ? runId.trim() : '',
+        useLatestFinishedIfMissing: batchSource !== 'runId',
         baseOverrides: baseParsed.value,
         variants: parsedVariants,
         scope: {
@@ -312,7 +314,9 @@ export default function TunePage() {
         includeExamples,
         examplesPerGate,
         diffSymbolsLimit,
-        source: { mode: useLatest ? 'lastScan' : 'runId', runId: runId.trim() },
+        source: batchSource === 'lastN'
+          ? { mode: 'lastN', limit: batchLastN }
+          : { mode: batchSource === 'latest' ? 'lastScan' : 'runId', runId: runId.trim() },
       };
       const resp = await fetch(API('/api/tune/simBatch'), {
         method: 'POST',
@@ -365,31 +369,83 @@ export default function TunePage() {
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="text-xs text-white/60">Run</div>
-            <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
-              <input type="checkbox" checked={useLatest} onChange={(e) => setUseLatest(e.target.checked)} />
-              Use latest finished run
-            </label>
-            <select
-              className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
-              value={useLatest ? '' : runId}
-              onChange={(e) => onPickRun(e.target.value)}
-              disabled={useLatest}
-            >
-              <option value="">Select runId</option>
-              {scanRuns.map((r) => (
-                <option key={r.runId} value={r.runId}>
-                  {r.runId} | {r.preset} | {dt(r.startedAt)}
-                </option>
-              ))}
-            </select>
-            {!useLatest ? (
-              <input
-                className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
-                placeholder="Or paste runId"
-                value={runId}
-                onChange={(e) => setRunId(e.target.value)}
-              />
-            ) : null}
+            {mode === 'single' ? (
+              <>
+                <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
+                  <input type="checkbox" checked={useLatest} onChange={(e) => setUseLatest(e.target.checked)} />
+                  Use latest finished run
+                </label>
+                <select
+                  className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
+                  value={useLatest ? '' : runId}
+                  onChange={(e) => onPickRun(e.target.value)}
+                  disabled={useLatest}
+                >
+                  <option value="">Select runId</option>
+                  {scanRuns.map((r) => (
+                    <option key={r.runId} value={r.runId}>
+                      {r.runId} | {r.preset} | {dt(r.startedAt)}
+                    </option>
+                  ))}
+                </select>
+                {!useLatest ? (
+                  <input
+                    className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
+                    placeholder="Or paste runId"
+                    value={runId}
+                    onChange={(e) => setRunId(e.target.value)}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-xs text-white/60">Source</label>
+                  <select
+                    value={batchSource}
+                    onChange={(e) => setBatchSource(e.target.value as any)}
+                    className="bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                  >
+                    <option value="latest">Latest finished run</option>
+                    <option value="runId">Specific run</option>
+                    <option value="lastN">Last N runs</option>
+                  </select>
+                </div>
+                {batchSource === 'runId' ? (
+                  <>
+                    <select
+                      className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
+                      value={runId}
+                      onChange={(e) => onPickRun(e.target.value)}
+                    >
+                      <option value="">Select runId</option>
+                      {scanRuns.map((r) => (
+                        <option key={r.runId} value={r.runId}>
+                          {r.runId} | {r.preset} | {dt(r.startedAt)}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="mt-2 w-full px-2 py-1 rounded bg-white/10 border border-white/10 text-sm"
+                      placeholder="Or paste runId"
+                      value={runId}
+                      onChange={(e) => setRunId(e.target.value)}
+                    />
+                  </>
+                ) : null}
+                {batchSource === 'lastN' ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <label className="text-xs text-white/60">Last N runs</label>
+                    <input
+                      type="number"
+                      value={batchLastN}
+                      onChange={(e) => setBatchLastN(Math.max(1, Math.min(200, Number(e.target.value))))}
+                      className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
+                    />
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -407,7 +463,9 @@ export default function TunePage() {
               </select>
             </div>
             <div className="mt-2 flex items-center gap-2">
-              <label className="text-xs text-white/60">Limit</label>
+              <label className="text-xs text-white/60">
+                {mode === 'batch' && batchSource === 'lastN' ? 'Limit / run' : 'Limit'}
+              </label>
               <input
                 type="number"
                 value={limit}
@@ -803,7 +861,13 @@ export default function TunePage() {
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold">Batch Results</div>
             <div className="text-xs text-white/60">
-              Run {batchResult?.meta?.runId || '--'} | {dt(batchResult?.meta?.startedAt)}
+              {batchResult?.meta?.runCount && batchResult.meta.runCount > 1
+                ? `Runs ${batchResult.meta.runCount}`
+                : `Run ${batchResult?.meta?.runId || '--'}`}
+              {' | '}
+              {batchResult?.meta?.runCount && batchResult.meta.runCount > 1 && batchResult?.meta?.startedAtRange
+                ? `${dt(batchResult.meta.startedAtRange.min)} → ${dt(batchResult.meta.startedAtRange.max)}`
+                : dt(batchResult?.meta?.startedAt)}
             </div>
           </div>
 
