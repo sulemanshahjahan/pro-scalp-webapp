@@ -341,6 +341,8 @@ export default function TunePage() {
                 <div>early_created: {simResult?.funnel?.early_created ?? 0}</div>
                 <div>ready_core_true: {simResult?.funnel?.ready_core_true ?? 0}</div>
                 <div>best_core_true: {simResult?.funnel?.best_core_true ?? 0}</div>
+                <div>ready_final_true: {simResult?.funnel?.ready_final_true ?? simResult?.counts?.ready ?? 0}</div>
+                <div>best_final_true: {simResult?.funnel?.best_final_true ?? simResult?.counts?.best ?? 0}</div>
               </div>
             </div>
 

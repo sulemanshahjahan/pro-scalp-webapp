@@ -23,6 +23,13 @@ export type TuneConfig = {
   EMA5_WATCH_SOFT_TOL: number;
   RR_MIN_BEST: number;
   READY_NO_SWEEP_VWAP_CAP: number;
+  READY_RECLAIM_REQUIRED: boolean;
+  READY_CONFIRM15_REQUIRED: boolean;
+  READY_TREND_REQUIRED: boolean;
+  READY_VOL_SPIKE_REQUIRED: boolean;
+  BEST_VWAP_MAX_PCT: number | null;
+  BEST_VWAP_EPS_PCT: number;
+  BEST_EMA_EPS_PCT: number;
 };
 
 export type EvalResult = {
@@ -48,7 +55,7 @@ export type CandidateFeatureInput = {
 
 export type OverrideReport = {
   config: TuneConfig;
-  appliedOverrides: Record<string, number>;
+  appliedOverrides: Record<string, number | boolean>;
   unknownOverrideKeys: string[];
   overrideTypeErrors: Record<string, string>;
 };
@@ -58,8 +65,20 @@ function num(v: any): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function parseBool(v: any): boolean | null {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return Number.isFinite(v) ? v !== 0 : null;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(s)) return true;
+    if (['false', '0', 'no', 'n'].includes(s)) return false;
+  }
+  return null;
+}
+
 export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
   const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
+  const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
   return {
     thresholds,
     RSI_BEST_MIN: parseFloat(process.env.RSI_BEST_MIN || '55'),
@@ -83,12 +102,19 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     EMA5_WATCH_SOFT_TOL: 0.25,
     RR_MIN_BEST: parseFloat(process.env.RR_MIN_BEST || '2.0'),
     READY_NO_SWEEP_VWAP_CAP: 0.20,
+    READY_RECLAIM_REQUIRED: (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    READY_CONFIRM15_REQUIRED: (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    READY_TREND_REQUIRED: (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    READY_VOL_SPIKE_REQUIRED: (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : null,
+    BEST_VWAP_EPS_PCT: parseFloat(process.env.BEST_VWAP_EPS_PCT || '0'),
+    BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
   };
 }
 
 export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>): OverrideReport {
   const out: TuneConfig = { ...cfg, thresholds: { ...cfg.thresholds } };
-  const appliedOverrides: Record<string, number> = {};
+  const appliedOverrides: Record<string, number | boolean> = {};
   const unknownOverrideKeys: string[] = [];
   const overrideTypeErrors: Record<string, string> = {};
 
@@ -97,14 +123,31 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
   }
 
   for (const [key, raw] of Object.entries(overrides)) {
+    if (key in out) {
+      const current = (out as any)[key];
+      if (typeof current === 'boolean') {
+        const b = parseBool(raw);
+        if (b == null) {
+          overrideTypeErrors[key] = `Expected boolean, got ${typeof raw}`;
+          continue;
+        }
+        (out as any)[key] = b;
+        appliedOverrides[key] = b;
+        continue;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
+        continue;
+      }
+      (out as any)[key] = n;
+      appliedOverrides[key] = n;
+      continue;
+    }
+
     const n = Number(raw);
     if (!Number.isFinite(n)) {
       overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
-      continue;
-    }
-    if (key in out) {
-      (out as any)[key] = n;
-      appliedOverrides[key] = n;
       continue;
     }
     if (key === 'THRESHOLD_VWAP_DISTANCE_PCT') {
@@ -179,7 +222,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const bullish = computed.bullish == null ? true : Boolean(computed.bullish);
 
   const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT) ? (cfg.READY_VWAP_MAX_PCT as number) : cfg.thresholds.vwapDistancePct;
-  const nearVwapBuy = Math.abs(vwapDistPct) <= cfg.thresholds.vwapDistancePct;
+  const bestVwapMax = Number.isFinite(cfg.BEST_VWAP_MAX_PCT) ? (cfg.BEST_VWAP_MAX_PCT as number) : cfg.thresholds.vwapDistancePct;
+  const nearVwapBuy = Math.abs(vwapDistPct) <= bestVwapMax;
   const nearVwapWatch = Math.abs(vwapDistPct) <= Math.max(cfg.thresholds.vwapDistancePct, cfg.VWAP_WATCH_MIN_PCT);
 
   const nearVwapReadyDist = Math.abs(vwapDistPct) <= readyVwapMax;
@@ -197,6 +241,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const nearVwapReady = nearVwapReadyDist && touchedVwapRecently;
 
   const priceAboveEma = emaDistPct >= -cfg.READY_EMA_EPS_PCT;
+  const bestPriceAboveEma = emaDistPct >= -cfg.BEST_EMA_EPS_PCT;
   const emaWatchOk =
     emaDistPct >= -cfg.WATCH_EMA_EPS_PCT ||
     emaDistPct >= -cfg.EMA5_WATCH_SOFT_TOL;
@@ -221,6 +266,9 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     readyPriceAboveVwapRelaxedEligible &&
     vwapDistPct >= -cfg.READY_VWAP_EPS_PCT;
   const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue;
+  const bestPriceAboveVwap =
+    vwapDistPct > 0 ||
+    (nearVwapBuy && vwapDistPct >= -cfg.BEST_VWAP_EPS_PCT);
 
   const volBestMin = Math.max(cfg.thresholds.volSpikeX, 1.4);
   const bestVolOk = volSpike >= Math.max(1.2, volBestMin);
@@ -242,18 +290,23 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const readyNoSweepVwapCap = cfg.READY_NO_SWEEP_VWAP_CAP;
   const nearVwapReadyNoSweep = Math.abs(vwapDistPct) <= readyNoSweepVwapCap;
 
+  const readyReclaimOk = cfg.READY_RECLAIM_REQUIRED ? reclaimOrTap : true;
+  const readyConfirmOk = cfg.READY_CONFIRM15_REQUIRED ? confirm15Ok : true;
+  const readyTrendOkReq = cfg.READY_TREND_REQUIRED ? readyTrendOk : true;
+  const readyVolOkReq = cfg.READY_VOL_SPIKE_REQUIRED ? readyVolOk : true;
+
   const readyCore =
     sessionOk &&
     readyPriceAboveVwap &&
     priceAboveEma &&
     rsiReadyOk &&
     nearVwapReady &&
-    reclaimOrTap &&
-    readyVolOk &&
+    readyReclaimOk &&
+    readyVolOkReq &&
     atrOkReady &&
-    confirm15Ok &&
+    readyConfirmOk &&
     strongBodyReady &&
-    readyTrendOk;
+    readyTrendOkReq;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -265,8 +318,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const readyOk = readyCore && readySweepOk && readyBtcOk;
 
   const bestCorePreSweep =
-    priceAboveEma &&
-    readyPriceAboveVwap &&
+    bestPriceAboveEma &&
+    bestPriceAboveVwap &&
     nearVwapBuy &&
     rsiBestOk &&
     strongBodyBest &&
@@ -320,17 +373,17 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
       priceAboveVwap: readyPriceAboveVwap,
       priceAboveEma,
       nearVwapReady,
-      reclaimOrTap,
-      readyVolOk,
+      reclaimOrTap: readyReclaimOk,
+      readyVolOk: readyVolOkReq,
       atrOkReady,
-      confirm15mOk: confirm15Ok,
+      confirm15mOk: readyConfirmOk,
       strongBody: strongBodyReady,
       rsiReadyOk,
-      readyTrendOk,
+      readyTrendOk: readyTrendOkReq,
     },
     bestFlags: {
-      priceAboveVwap: priceAboveVwapStrict,
-      priceAboveEma,
+      priceAboveVwap: bestPriceAboveVwap,
+      priceAboveEma: bestPriceAboveEma,
       nearVwapBuy,
       rsiBestOk,
       strongBody: strongBodyBest,

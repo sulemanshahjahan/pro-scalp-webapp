@@ -24,6 +24,14 @@ const READY_CLOSE_POS_MIN = parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'
 const READY_UPPER_WICK_MAX = parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'); // upper wick <= 40% of range
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
+const READY_RECLAIM_REQUIRED = (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false';
+
+const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
+const BEST_VWAP_EPS_PCT = parseFloat(process.env.BEST_VWAP_EPS_PCT || '0');
+const BEST_EMA_EPS_PCT = parseFloat(process.env.BEST_EMA_EPS_PCT || '0');
 const VWAP_TOUCH_SNAPSHOT_BARS = parseInt(process.env.VWAP_TOUCH_SNAPSHOT_BARS || '30', 10);
 
 const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
@@ -345,7 +353,8 @@ function analyzeSymbolInternal(
   const emaDistPct = ((price - emaNow) / emaNow) * 100;
 
   // BUY window = preset threshold (e.g. 0.30%)
-  const nearVwapBuy = Math.abs(distToVwapPct) <= thresholds.vwapDistancePct;
+  const bestVwapMax = Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : thresholds.vwapDistancePct;
+  const nearVwapBuy = Math.abs(distToVwapPct) <= bestVwapMax;
   const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
   const readyVwapMax = Number.isFinite(READY_VWAP_MAX_PCT) ? READY_VWAP_MAX_PCT : thresholds.vwapDistancePct;
   const READY_VWAP_TOUCH_PCT = parseFloat(process.env.READY_VWAP_TOUCH_PCT || '0.20');
@@ -378,6 +387,7 @@ function analyzeSymbolInternal(
   const READY_EMA_EPS_PCT = parseFloat(process.env.READY_EMA_EPS_PCT || '0');
   const WATCH_EMA_EPS_PCT = parseFloat(process.env.WATCH_EMA_EPS_PCT || '0');
   const priceAboveEma = price >= emaNow * (1 - READY_EMA_EPS_PCT / 100);
+  const bestPriceAboveEma = price >= emaNow * (1 - BEST_EMA_EPS_PCT / 100);
   const emaWatchOk =
     price >= emaNow * (1 - WATCH_EMA_EPS_PCT / 100) ||
     (((emaNow - price) / emaNow) * 100 <= EMA5_WATCH_SOFT_TOL);
@@ -418,6 +428,9 @@ function analyzeSymbolInternal(
     readyPriceAboveVwapRelaxedEligible &&
     price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
   const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue;
+  const bestPriceAboveVwap =
+    price > vwap_i ||
+    (nearVwapBuy && price >= vwap_i * (1 - BEST_VWAP_EPS_PCT / 100));
 
   const volBestMin  = Math.max(thresholds.volSpikeX, 1.4);
 
@@ -445,8 +458,8 @@ function analyzeSymbolInternal(
   /** ===================== BEST ENTRY ===================== */
   const bestVolOk = volSpikeNow >= Math.max(1.2, volBestMin);
   const bestCorePreSweep =
-    priceAboveEma &&
-    readyPriceAboveVwap &&
+    bestPriceAboveEma &&
+    bestPriceAboveVwap &&
     nearVwapBuy &&
     rsiBestOk &&
     strongBodyBest &&
@@ -461,8 +474,8 @@ function analyzeSymbolInternal(
   const bestCorePreRr = bestCorePreSweep && liq.ok;
 
   const bestCore =
-    priceAboveEma &&
-    readyPriceAboveVwap &&
+    bestPriceAboveEma &&
+    bestPriceAboveVwap &&
     nearVwapBuy &&
     rsiBestOk &&
     strongBodyBest &&
@@ -509,18 +522,22 @@ function analyzeSymbolInternal(
   const readyNoSweepVwapCap = 0.20;
   const nearVwapReadyNoSweep = Math.abs(distToVwapPct) <= readyNoSweepVwapCap;
   const readyTrendOk = ema50Now > emaNow && ema200Up;
+  const readyReclaimOk = READY_RECLAIM_REQUIRED ? reclaimOk : true;
+  const readyConfirmOk = READY_CONFIRM15_REQUIRED ? confirm15mOk : true;
+  const readyTrendOkReq = READY_TREND_REQUIRED ? readyTrendOk : true;
+  const readyVolOkReq = READY_VOL_SPIKE_REQUIRED ? readyVolOk : true;
   const readyCore =
     sessionOK &&
     readyPriceAboveVwap &&
     priceAboveEma &&
     rsiReadyOk &&
     nearVwapReady &&
-    (reclaim || tappedVwapPrev) &&
-    readyVolOk &&
+    readyReclaimOk &&
+    readyVolOkReq &&
     atrOkReady &&
-    confirm15mOk &&
+    readyConfirmOk &&
     strongBodyReady &&
-    readyTrendOk;
+    readyTrendOkReq;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -547,14 +564,14 @@ function analyzeSymbolInternal(
     { key: 'rsiReadyOk', ok: rsiReadyOk, reason: `RSI not in ${RSI_READY_MIN}–${RSI_READY_MAX} rising window` },
     {
       key: 'reclaimOrTap',
-      ok: reclaimOk,
+      ok: readyReclaimOk,
       reason: reclaimDayBlocked ? 'Reclaim/tap blocked by UTC day boundary' : 'No reclaim/tap pattern',
     },
-    { key: 'readyVolOk', ok: readyVolOk, reason: 'Volume spike not met' },
+    { key: 'readyVolOk', ok: readyVolOkReq, reason: 'Volume spike not met' },
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
-    { key: 'confirm15mOk', ok: confirm15mOk, reason: '15m confirmation not satisfied' },
+    { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
-    { key: 'trendOk', ok: readyTrendOk, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
+    { key: 'trendOk', ok: readyTrendOkReq, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
     { key: 'readySweep', ok: readySweepOk, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
     {
@@ -759,8 +776,8 @@ function analyzeSymbolInternal(
   }
 
   const bestGates: Gate[] = [
-    { key: 'price>VWAP', ok: price > vwap_i, reason: 'Price not above VWAP' },
-    { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
+    { key: 'price>VWAP', ok: bestPriceAboveVwap, reason: 'Price not above VWAP' },
+    { key: 'priceAboveEma', ok: bestPriceAboveEma, reason: 'Price not above EMA200' },
     { key: 'nearVwapBuy', ok: nearVwapBuy, reason: 'Too far from VWAP (extended)' },
     { key: 'rsiBestOk', ok: rsiBestOk, reason: `RSI not in ${RSI_BEST_MIN}–${RSI_BEST_MAX} rising window` },
     { key: 'strongBody', ok: strongBodyBest, reason: 'No strong bullish body candle' },

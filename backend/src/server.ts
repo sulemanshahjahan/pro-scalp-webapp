@@ -247,6 +247,8 @@ app.post('/api/tune/sim', async (req, res) => {
       early_created: 0,
       ready_core_true: 0,
       best_core_true: 0,
+      ready_final_true: 0,
+      best_final_true: 0,
     };
     const firstFailed: Record<string, Record<string, number>> = {
       watch: {},
@@ -327,6 +329,8 @@ app.post('/api/tune/sim', async (req, res) => {
       if (evalRes.earlyOk) funnel.early_created += 1;
       if (evalRes.readyCore) funnel.ready_core_true += 1;
       if (evalRes.bestCore) funnel.best_core_true += 1;
+      if (evalRes.readyOk) funnel.ready_final_true += 1;
+      if (evalRes.bestOk) funnel.best_final_true += 1;
 
       addGateTrue(gateTrue.watch, evalRes.watchFlags);
       addGateTrue(gateTrue.early, evalRes.earlyFlags);
