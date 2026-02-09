@@ -704,7 +704,8 @@ app.get('/api/tuning/bundles/latest', async (req, res) => {
   try {
     const hoursRaw = Number((req.query as any)?.hours);
     const hours = Number.isFinite(hoursRaw) ? Math.max(1, Math.min(168, hoursRaw)) : undefined;
-    const bundle = await getLatestTuningBundle({ windowHours: hours });
+    const configHash = String((req.query as any)?.configHash || '').trim();
+    const bundle = await getLatestTuningBundle({ windowHours: hours, configHash: configHash || undefined });
     if (!bundle) return res.status(404).json({ ok: false, error: 'No tuning bundle found' });
     res.json({ ok: true, bundle });
   } catch (e) {
@@ -717,7 +718,8 @@ app.get('/api/tuning/bundles/recent', async (req, res) => {
   try {
     const limitRaw = Number((req.query as any)?.limit);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
-    const bundles = await listRecentTuningBundles({ limit });
+    const configHash = String((req.query as any)?.configHash || '').trim();
+    const bundles = await listRecentTuningBundles({ limit, configHash: configHash || undefined });
     res.json({ ok: true, bundles });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });

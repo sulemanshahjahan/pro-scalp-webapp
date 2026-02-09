@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS signals (
   best_debug_json TEXT,
   entry_debug_json TEXT,
   config_snapshot_json TEXT,
+  config_hash TEXT,
   build_git_sha TEXT,
   run_id TEXT,
   blocked_reasons_json TEXT,
@@ -97,7 +98,7 @@ CREATE TABLE IF NOT EXISTS signals (
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
 
-  UNIQUE(symbol, category, time)
+  UNIQUE(symbol, category, time, config_hash)
 );
 
 CREATE TABLE IF NOT EXISTS signal_outcomes (
@@ -221,6 +222,18 @@ CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
 CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
+CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
+ALTER TABLE signals ALTER COLUMN config_hash SET DEFAULT 'legacy';
+UPDATE signals SET config_hash = 'legacy' WHERE config_hash IS NULL;
+ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_symbol_category_time_key;
+DELETE FROM signals a
+USING signals b
+WHERE a.id > b.id
+  AND a.symbol = b.symbol
+  AND a.category = b.category
+  AND a.time = b.time
+  AND COALESCE(a.config_hash,'') = COALESCE(b.config_hash,'');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_dedupe ON signals(symbol, category, time, config_hash);
 CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
 CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);
@@ -235,6 +248,7 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS ready_debug_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS best_debug_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS entry_debug_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_snapshot_json TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_hash TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS build_git_sha TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS run_id TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS blocked_reasons_json TEXT;

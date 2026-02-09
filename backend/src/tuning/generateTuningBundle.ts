@@ -2,11 +2,13 @@ import { getLatestScanRuns } from '../scanStore.js';
 import { getOutcomesReport, listRecentOutcomes } from '../signalStore.js';
 import { thresholdsForPreset, type Preset, getScanIntervalMs, getMaxScanMs } from '../scanner.js';
 import { insertTuningBundle, pruneTuningBundles } from '../tuningBundleStore.js';
+import { buildConfigSnapshot, computeConfigHash, safeEnvSnapshot } from '../configSnapshot.js';
 
 type TuningBundleParams = {
   hours?: number;
   limit?: number;
   categories?: string[];
+  configHash?: string;
 };
 
 type FailureDriver = { key: string; n: number };
@@ -18,46 +20,6 @@ const BUILD_GIT_SHA =
   process.env.RENDER_GIT_COMMIT ||
   null;
 
-const SECRET_ENV_RE = /(TOKEN|KEY|SECRET|PASSWORD|DATABASE|URL)/i;
-
-const SAFE_ENV_KEYS = [
-  'READY_BTC_REQUIRED',
-  'READY_CONFIRM15_REQUIRED',
-  'READY_TREND_REQUIRED',
-  'READY_VOL_SPIKE_REQUIRED',
-  'READY_SWEEP_REQUIRED',
-  'READY_RECLAIM_REQUIRED',
-  'READY_VWAP_MAX_PCT',
-  'READY_VWAP_EPS_PCT',
-  'READY_VWAP_TOUCH_PCT',
-  'READY_VWAP_TOUCH_BARS',
-  'READY_BODY_PCT',
-  'READY_CLOSE_POS_MIN',
-  'READY_UPPER_WICK_MAX',
-  'READY_EMA_EPS_PCT',
-  'WATCH_EMA_EPS_PCT',
-  'RSI_READY_MIN',
-  'RSI_READY_MAX',
-  'RSI_EARLY_MIN',
-  'RSI_EARLY_MAX',
-  'RSI_DELTA_STRICT',
-  'CONFIRM15_VWAP_EPS_PCT',
-  'CONFIRM15_VWAP_ROLL_BARS',
-  'BEST_BTC_REQUIRED',
-  'BEST_VWAP_MAX_PCT',
-  'BEST_VWAP_EPS_PCT',
-  'BEST_EMA_EPS_PCT',
-  'RSI_BEST_MIN',
-  'RSI_BEST_MAX',
-  'RR_MIN_BEST',
-  'MIN_BODY_PCT',
-  'MIN_ATR_PCT',
-  'MIN_RISK_PCT',
-  'SESSION_FILTER_ENABLED',
-  'SESSIONS_UTC',
-  'SCAN_INTERVAL_MS',
-];
-
 function parseList(raw: string | undefined, fallback: string[]) {
   const list = (raw || '').split(',').map(s => s.trim()).filter(Boolean);
   return list.length ? list : fallback;
@@ -66,21 +28,6 @@ function parseList(raw: string | undefined, fallback: string[]) {
 function num(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
-}
-
-function safeEnvSnapshot() {
-  const out: Record<string, string | number | boolean> = {};
-  for (const key of SAFE_ENV_KEYS) {
-    if (!(key in process.env)) continue;
-    if (SECRET_ENV_RE.test(key)) continue;
-    const raw = String(process.env[key]);
-    const lower = raw.toLowerCase();
-    if (lower === 'true') out[key] = true;
-    else if (lower === 'false') out[key] = false;
-    else if (Number.isFinite(Number(raw))) out[key] = Number(raw);
-    else out[key] = raw;
-  }
-  return out;
 }
 
 function computeRates(totals: any) {
@@ -103,6 +50,10 @@ function inferConfirm15Mode(row: any): string {
   if (readyUsed && readyUsed !== 'none') return readyUsed;
   const bestUsed = row.bestDebug?.confirm15?.used;
   if (bestUsed && bestUsed !== 'none') return bestUsed;
+  const strictFlag = row.confirm15Strict ?? row.confirm15_strict;
+  const softFlag = row.confirm15Soft ?? row.confirm15_soft;
+  if (strictFlag === true || strictFlag === 1) return 'strict';
+  if (softFlag === true || softFlag === 1) return 'soft';
   return 'unknown';
 }
 
@@ -130,14 +81,25 @@ function summarizeFailureDrivers(rows: any[], topN = 5): FailureDriver[] {
     .map(([key, n]) => ({ key, n }));
 }
 
+function normalizeTotals(raw: any) {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw)) {
+    const n = Number(v);
+    out[k] = Number.isFinite(n) ? n : 0;
+  }
+  return out;
+}
+
 function buildChecklistMd(input: {
   windowHours: number;
   buildSha: string | null;
+  configHash?: string | null;
   scanSummary: any;
   outcomesSummary: any;
   failureDrivers: FailureDriver[];
 }) {
-  const { windowHours, buildSha, scanSummary, outcomesSummary, failureDrivers } = input;
+  const { windowHours, buildSha, configHash, scanSummary, outcomesSummary, failureDrivers } = input;
   const totals = outcomesSummary?.totals ?? {};
   const rates = outcomesSummary?.rates ?? {};
   const now = new Date().toISOString();
@@ -147,6 +109,7 @@ function buildChecklistMd(input: {
     `Generated: ${now}`,
     `Window: last ${windowHours}h`,
     `Build: ${buildSha ?? 'unknown'}`,
+    `Config: ${configHash ?? 'unknown'}`,
     '',
     '## Scan summary',
     `- last run: ${scanSummary?.runId ?? 'n/a'} (${scanSummary?.status ?? 'n/a'})`,
@@ -189,16 +152,28 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
   const { lastFinished } = await getLatestScanRuns();
   const preset = (lastFinished?.preset ?? 'BALANCED') as Preset;
   const thresholds = thresholdsForPreset(preset);
+  const envSnapshot = safeEnvSnapshot();
+  const configSnapshot = buildConfigSnapshot({
+    preset,
+    thresholds,
+    buildGitSha: BUILD_GIT_SHA,
+    env: envSnapshot,
+  });
+  const configHash = String(params.configHash || '').trim() || computeConfigHash(configSnapshot);
+  (configSnapshot as any).configHash = configHash;
 
-  const report = await getOutcomesReport({ hours });
+  const report = await getOutcomesReport({ hours, configHash });
+  const normalizedTotals = normalizeTotals(report?.totals);
+  const reportOut = report ? { ...report, totals: normalizedTotals } : report;
   const recentOutcomes = await listRecentOutcomes({
     hours,
     limit,
     categories,
     result: resultsFilter,
+    configHash,
   });
 
-  const rates = computeRates(report?.totals ?? {});
+  const rates = computeRates(normalizedTotals);
 
   const byCategory: Record<string, { total: number; win: number; loss: number; none: number }> = {};
   for (const row of recentOutcomes) {
@@ -212,13 +187,25 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
 
   const failureDrivers = summarizeFailureDrivers(recentOutcomes);
 
-  const samples = recentOutcomes.slice(0, sampleLimit).map((row: any) => ({
+  const dedupedSamples: any[] = [];
+  const seenSignals = new Set<string>();
+  for (const row of recentOutcomes) {
+    const key = String(row.signalId ?? `${row.symbol ?? 'sym'}:${row.entryTime ?? row.time ?? ''}`);
+    if (seenSignals.has(key)) continue;
+    seenSignals.add(key);
+    dedupedSamples.push(row);
+    if (dedupedSamples.length >= sampleLimit) break;
+  }
+
+  const samples = dedupedSamples.map((row: any) => ({
     signalId: row.signalId,
     symbol: row.symbol,
     category: row.category,
     result: row.result,
     exitReason: row.exitReason ?? null,
     entryTime: row.entryTime ?? row.time,
+    horizonMin: row.horizonMin ?? null,
+    configHash: row.configHash ?? null,
     confirm15Mode: inferConfirm15Mode(row),
     atrPct: num(row.entryDebug?.metrics?.atrPct ?? row.readyDebug?.metrics?.atrPct),
     rr: num(row.entryDebug?.metrics?.rr ?? row.readyDebug?.metrics?.rr ?? row.bestDebug?.metrics?.rr),
@@ -252,6 +239,7 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
     windowHours: hours,
     windowStartMs,
     windowEndMs,
+    configHash,
     build: { gitSha: BUILD_GIT_SHA },
     scan: {
       summary: scanSummary,
@@ -262,7 +250,7 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
       confirm15: scanSummary?.gateStats?.confirm15 ?? null,
     },
     outcomes: {
-      report,
+      report: reportOut,
       rates,
       byCategory,
     },
@@ -270,8 +258,9 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
     samples,
     config: {
       preset,
-      env: safeEnvSnapshot(),
+      env: envSnapshot,
       thresholds,
+      configHash,
     },
     notes: {
       limit,
@@ -284,8 +273,9 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
   const reportMd = buildChecklistMd({
     windowHours: hours,
     buildSha: BUILD_GIT_SHA,
+    configHash,
     scanSummary,
-    outcomesSummary: { totals: report?.totals, rates },
+    outcomesSummary: { totals: normalizedTotals, rates },
     failureDrivers,
   });
 
@@ -293,6 +283,7 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
     windowHours: hours,
     windowStartMs,
     windowEndMs,
+    configHash,
     buildGitSha: BUILD_GIT_SHA,
     scanRunId: scanSummary?.runId ?? null,
     payload,
@@ -307,4 +298,3 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
     payload,
   };
 }
-

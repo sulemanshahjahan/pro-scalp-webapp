@@ -2,6 +2,7 @@
 import type { Signal } from './types.js';
 import { klinesFrom } from './binance.js';
 import { getDb } from './db/db.js';
+import { buildConfigSnapshot, computeConfigHash, parseEnvValue } from './configSnapshot.js';
 
 const OUTCOME_HORIZONS_MIN = [15, 30, 60, 120, 240] as const;
 const OUTCOME_GRACE_MS = 2 * 60_000;
@@ -37,72 +38,6 @@ const BUILD_GIT_SHA =
   process.env.VERCEL_GIT_COMMIT_SHA ||
   null;
 
-const CONFIG_ENV_KEYS = [
-  'READY_BTC_REQUIRED',
-  'READY_CONFIRM15_REQUIRED',
-  'READY_TREND_REQUIRED',
-  'READY_VOL_SPIKE_REQUIRED',
-  'READY_SWEEP_REQUIRED',
-  'READY_RECLAIM_REQUIRED',
-  'READY_VWAP_MAX_PCT',
-  'READY_VWAP_EPS_PCT',
-  'READY_VWAP_TOUCH_PCT',
-  'READY_VWAP_TOUCH_BARS',
-  'READY_BODY_PCT',
-  'READY_CLOSE_POS_MIN',
-  'READY_UPPER_WICK_MAX',
-  'READY_EMA_EPS_PCT',
-  'WATCH_EMA_EPS_PCT',
-  'RSI_READY_MIN',
-  'RSI_READY_MAX',
-  'RSI_EARLY_MIN',
-  'RSI_EARLY_MAX',
-  'RSI_DELTA_STRICT',
-  'CONFIRM15_VWAP_EPS_PCT',
-  'CONFIRM15_VWAP_ROLL_BARS',
-  'BEST_BTC_REQUIRED',
-  'BEST_VWAP_MAX_PCT',
-  'BEST_VWAP_EPS_PCT',
-  'BEST_EMA_EPS_PCT',
-  'RSI_BEST_MIN',
-  'RSI_BEST_MAX',
-  'RR_MIN_BEST',
-  'MIN_BODY_PCT',
-  'MIN_ATR_PCT',
-  'MIN_RISK_PCT',
-  'SESSION_FILTER_ENABLED',
-  'SESSIONS_UTC',
-  'SCAN_INTERVAL_MS',
-];
-
-function parseEnvValue(raw: string) {
-  const v = String(raw).trim();
-  if (!v) return v;
-  if (v.toLowerCase() === 'true') return true;
-  if (v.toLowerCase() === 'false') return false;
-  const n = Number(v);
-  if (Number.isFinite(n)) return n;
-  return v;
-}
-
-function buildConfigSnapshot(preset: string | null | undefined, sig: Signal) {
-  const env: Record<string, any> = {};
-  for (const key of CONFIG_ENV_KEYS) {
-    if (process.env[key] != null) {
-      env[key] = parseEnvValue(String(process.env[key]));
-    }
-  }
-  return {
-    preset: preset ?? sig.preset ?? null,
-    env,
-    thresholds: {
-      vwapDistancePct: sig.thresholdVwapDistancePct ?? null,
-      volSpikeX: sig.thresholdVolSpikeX ?? null,
-      atrGuardPct: sig.thresholdAtrGuardPct ?? null,
-    },
-    build: { gitSha: BUILD_GIT_SHA },
-  };
-}
 
 function buildReadyDebugSnapshot(sig: Signal) {
   const vwap = Number.isFinite(sig.vwap as number) ? Number(sig.vwap) : null;
@@ -167,8 +102,20 @@ function buildEntrySnapshot(params: {
   entryTimeAligned: number;
   entryRule: string;
   entryCandleOpenTime: number;
+  configSnapshot?: any;
+  configHash?: string | null;
 }) {
   const { sig, preset, entryTimeAligned, entryRule, entryCandleOpenTime } = params;
+  const configSnapshot = params.configSnapshot ?? buildConfigSnapshot({
+    preset: preset ?? sig.preset ?? null,
+    thresholds: {
+      vwapDistancePct: sig.thresholdVwapDistancePct ?? null,
+      volSpikeX: sig.thresholdVolSpikeX ?? null,
+      atrGuardPct: sig.thresholdAtrGuardPct ?? null,
+    },
+    buildGitSha: BUILD_GIT_SHA,
+  });
+  const configHash = params.configHash ?? computeConfigHash(configSnapshot);
   return {
     version: sig.strategyVersion ?? STRATEGY_VERSION,
     build: { gitSha: BUILD_GIT_SHA },
@@ -180,7 +127,8 @@ function buildEntrySnapshot(params: {
       rule: entryRule,
       price: sig.price,
     },
-    config: buildConfigSnapshot(preset, sig),
+    config: configSnapshot,
+    configHash,
     metrics: {
       price: sig.price,
       vwap5: sig.vwap ?? null,
@@ -270,6 +218,7 @@ async function ensureSchema() {
       best_debug_json TEXT,
       entry_debug_json TEXT,
       config_snapshot_json TEXT,
+      config_hash TEXT,
       build_git_sha TEXT,
       run_id TEXT,
       blocked_reasons_json TEXT,
@@ -355,6 +304,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
     CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
     CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
+    CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
     CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
     CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);
@@ -362,6 +312,18 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_outcomes_resolve_state_horizon ON signal_outcomes(resolve_version, outcome_state, horizon_min);
     CREATE INDEX IF NOT EXISTS idx_outcomes_resolved_at ON signal_outcomes(resolved_at);
   `);
+
+  try {
+    await d.exec(`
+      DELETE FROM signals
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM signals
+        GROUP BY symbol, category, time, COALESCE(config_hash, '')
+      )
+    `);
+  } catch {}
+  try { await d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_dedupe ON signals(symbol, category, time, config_hash)`); } catch {}
 
   schemaReady = true;
 
@@ -392,6 +354,8 @@ async function ensureSchema() {
   try { await d.exec(`ALTER TABLE signals ADD COLUMN best_debug_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN entry_debug_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN config_snapshot_json TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN config_hash TEXT`); } catch {}
+  try { await d.exec(`UPDATE signals SET config_hash = 'legacy' WHERE config_hash IS NULL`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN build_git_sha TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN run_id TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN blocked_reasons_json TEXT`); } catch {}
@@ -731,6 +695,32 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
   }
   const entryTimeAligned = alignDown(entryTime, signalIntervalMs);
 
+  const configSnapshot = buildConfigSnapshot({
+    preset: preset ?? sig.preset ?? null,
+    thresholds: {
+      vwapDistancePct: sig.thresholdVwapDistancePct ?? null,
+      volSpikeX: sig.thresholdVolSpikeX ?? null,
+      atrGuardPct: sig.thresholdAtrGuardPct ?? null,
+    },
+    buildGitSha: BUILD_GIT_SHA,
+  });
+  const configHash = computeConfigHash(configSnapshot);
+  (configSnapshot as any).configHash = configHash;
+
+  const entrySnapshot = buildEntrySnapshot({
+    sig,
+    preset,
+    entryTimeAligned,
+    entryRule: ENTRY_RULE,
+    entryCandleOpenTime,
+    configSnapshot,
+    configHash,
+  });
+
+  const conflictTarget = d.driver === 'sqlite'
+    ? '(symbol, category, time)'
+    : '(symbol, category, time, config_hash)';
+
   await d.prepare(`
     INSERT INTO signals (
       symbol, category, time, preset, strategy_version,
@@ -740,7 +730,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       confirm15_strict, confirm15_soft, rr_est,
       stop, tp1, tp2, target, rr, riskPct,
       session_ok, sweep_ok, trend_ok, blocked_by_btc, would_be_category, btc_gate, btc_gate_reason,
-      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json, build_git_sha, run_id, blocked_reasons_json, first_failed_gate, gate_score,
+      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json, config_hash, build_git_sha, run_id, blocked_reasons_json, first_failed_gate, gate_score,
       btc_bull, btc_bear, btc_close, btc_vwap, btc_ema200, btc_rsi, btc_delta_vwap,
       market_json, reasons_json,
       created_at, updated_at
@@ -752,12 +742,12 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       @confirm15_strict, @confirm15_soft, @rr_est,
       @stop, @tp1, @tp2, @target, @rr, @riskPct,
       @session_ok, @sweep_ok, @trend_ok, @blocked_by_btc, @would_be_category, @btc_gate, @btc_gate_reason,
-      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json, @build_git_sha, @run_id, @blocked_reasons_json, @first_failed_gate, @gate_score,
+      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json, @config_hash, @build_git_sha, @run_id, @blocked_reasons_json, @first_failed_gate, @gate_score,
       @btc_bull, @btc_bear, @btc_close, @btc_vwap, @btc_ema200, @btc_rsi, @btc_delta_vwap,
       @market_json, @reasons_json,
       @created_at, @updated_at
     )
-    ON CONFLICT(symbol, category, time) DO UPDATE SET
+    ON CONFLICT ${conflictTarget} DO UPDATE SET
       preset=excluded.preset,
       strategy_version=excluded.strategy_version,
       threshold_vwap_distance_pct=excluded.threshold_vwap_distance_pct,
@@ -795,6 +785,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       best_debug_json=excluded.best_debug_json,
       entry_debug_json=excluded.entry_debug_json,
       config_snapshot_json=excluded.config_snapshot_json,
+      config_hash=excluded.config_hash,
       build_git_sha=excluded.build_git_sha,
       run_id=excluded.run_id,
       blocked_reasons_json=excluded.blocked_reasons_json,
@@ -851,14 +842,9 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     gate_snapshot_json: sig.gateSnapshot ? JSON.stringify(sig.gateSnapshot) : null,
     ready_debug_json: JSON.stringify(buildReadyDebugSnapshot(sig)),
     best_debug_json: JSON.stringify(buildBestDebugSnapshot(sig)),
-    entry_debug_json: JSON.stringify(buildEntrySnapshot({
-      sig,
-      preset,
-      entryTimeAligned,
-      entryRule: ENTRY_RULE,
-      entryCandleOpenTime,
-    })),
-    config_snapshot_json: JSON.stringify(buildConfigSnapshot(preset, sig)),
+    entry_debug_json: JSON.stringify(entrySnapshot),
+    config_snapshot_json: JSON.stringify(configSnapshot),
+    config_hash: configHash,
     build_git_sha: BUILD_GIT_SHA,
     run_id: sig.runId ?? null,
     blocked_reasons_json: sig.blockedReasons ? JSON.stringify(sig.blockedReasons) : null,
@@ -880,8 +866,8 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
   });
 
   const row = await d
-    .prepare(`SELECT id FROM signals WHERE symbol=? AND category=? AND time=?`)
-    .get(sig.symbol, sig.category, sig.time) as { id: number } | undefined;
+    .prepare(`SELECT id FROM signals WHERE symbol=? AND category=? AND time=? AND config_hash=?`)
+    .get(sig.symbol, sig.category, sig.time, configHash) as { id: number } | undefined;
 
   return row?.id ?? null;
 }
@@ -2517,6 +2503,7 @@ export async function listRecentOutcomes(params: {
   result?: string[];
   category?: string;
   categories?: string[];
+  configHash?: string;
 }) {
   const d = await getDbReady();
   const hours = Math.max(1, Math.min(168, Number(params.hours) || 6));
@@ -2526,6 +2513,7 @@ export async function listRecentOutcomes(params: {
   const categories = params.categories?.length
     ? params.categories
     : (params.category ? [params.category] : []);
+  const configHash = String(params.configHash || '').trim();
 
   const where: string[] = [`COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start`];
   const bind: Record<string, any> = { start, limit };
@@ -2546,6 +2534,10 @@ export async function listRecentOutcomes(params: {
       OR o.outcome_state IN (${keys.join(',')})
     )`);
   }
+  if (configHash) {
+    where.push(`s.config_hash = @configHash`);
+    bind.configHash = configHash;
+  }
 
   const rows = await d.prepare(`
     SELECT
@@ -2561,6 +2553,9 @@ export async function listRecentOutcomes(params: {
       s.tp1,
       s.tp2,
       s.target,
+      s.config_hash as configHash,
+      s.confirm15_strict as confirm15Strict,
+      s.confirm15_soft as confirm15Soft,
       s.gate_snapshot_json as gateSnapshotJson,
       s.ready_debug_json as readyDebugJson,
       s.best_debug_json as bestDebugJson,
@@ -2595,10 +2590,18 @@ export async function listRecentOutcomes(params: {
   }));
 }
 
-export async function getOutcomesReport(params: { hours?: number }) {
+export async function getOutcomesReport(params: { hours?: number; configHash?: string }) {
   const d = await getDbReady();
   const hours = Math.max(1, Math.min(168, Number(params.hours) || 6));
   const start = Date.now() - hours * 60 * 60_000;
+  const configHash = String(params.configHash || '').trim();
+
+  const where: string[] = [`COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start`];
+  const bind: any = { start };
+  if (configHash) {
+    where.push(`s.config_hash = @configHash`);
+    bind.configHash = configHash;
+  }
 
   const totals = await d.prepare(`
     SELECT
@@ -2615,20 +2618,20 @@ export async function getOutcomesReport(params: { hours?: number }) {
       AVG(CASE WHEN o.window_status = 'COMPLETE' THEN o.r_close END) as avgR
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
-    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
-  `).get({ start }) as any;
+    WHERE ${where.join(' AND ')}
+  `).get(bind) as any;
 
   const exitReasons = await d.prepare(`
     SELECT o.exit_reason as reason, COUNT(1) as n
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
-    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+    WHERE ${where.join(' AND ')}
       AND o.window_status = 'COMPLETE'
       AND o.exit_reason IS NOT NULL
     GROUP BY o.exit_reason
     ORDER BY n DESC
     LIMIT 10
-  `).all({ start }) as any[];
+  `).all(bind) as any[];
 
   const byConfirm15 = await d.prepare(`
     SELECT
@@ -2639,10 +2642,10 @@ export async function getOutcomesReport(params: { hours?: number }) {
       COUNT(1) as total
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
-    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+    WHERE ${where.join(' AND ')}
       AND o.window_status = 'COMPLETE'
     GROUP BY s.confirm15_strict
-  `).all({ start }) as any[];
+  `).all(bind) as any[];
 
   const vwapByResult = await d.prepare(`
     SELECT
@@ -2651,9 +2654,9 @@ export async function getOutcomesReport(params: { hours?: number }) {
       AVG(CASE WHEN o.result = 'NONE' THEN s.deltaVwapPct END) as noneAvgDeltaVwap
     FROM signal_outcomes o
     JOIN signals s ON s.id = o.signal_id
-    WHERE COALESCE(NULLIF(s.entry_time, 0), s.time) >= @start
+    WHERE ${where.join(' AND ')}
       AND o.window_status = 'COMPLETE'
-  `).get({ start }) as any;
+  `).get(bind) as any;
 
   return {
     hours,

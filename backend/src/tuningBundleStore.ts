@@ -6,6 +6,7 @@ export type TuningBundleRow = {
   windowHours: number;
   windowStartMs: number;
   windowEndMs: number;
+  configHash: string | null;
   buildGitSha: string | null;
   scanRunId: string | null;
   payload: any;
@@ -33,6 +34,7 @@ async function ensureSchema() {
         window_hours INTEGER NOT NULL,
         window_start_ms INTEGER NOT NULL,
         window_end_ms INTEGER NOT NULL,
+        config_hash TEXT,
         build_git_sha TEXT,
         scan_run_id TEXT,
         payload_json TEXT NOT NULL,
@@ -41,7 +43,9 @@ async function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_tuning_bundles_created_at ON tuning_bundles(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tuning_bundles_window_end ON tuning_bundles(window_end_ms DESC);
+      CREATE INDEX IF NOT EXISTS idx_tuning_bundles_config_hash ON tuning_bundles(config_hash);
     `);
+    try { await d.exec(`ALTER TABLE tuning_bundles ADD COLUMN config_hash TEXT`); } catch {}
   } else {
     await d.exec(`
       CREATE TABLE IF NOT EXISTS tuning_bundles (
@@ -50,6 +54,7 @@ async function ensureSchema() {
         window_hours INTEGER NOT NULL,
         window_start_ms BIGINT NOT NULL,
         window_end_ms BIGINT NOT NULL,
+        config_hash TEXT,
         build_git_sha TEXT,
         scan_run_id TEXT,
         payload_json JSONB NOT NULL,
@@ -58,7 +63,9 @@ async function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_tuning_bundles_created_at ON tuning_bundles(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tuning_bundles_window_end ON tuning_bundles(window_end_ms DESC);
+      CREATE INDEX IF NOT EXISTS idx_tuning_bundles_config_hash ON tuning_bundles(config_hash);
     `);
+    try { await d.exec(`ALTER TABLE tuning_bundles ADD COLUMN config_hash TEXT`); } catch {}
   }
   schemaReady = true;
 }
@@ -67,6 +74,7 @@ export async function insertTuningBundle(input: {
   windowHours: number;
   windowStartMs: number;
   windowEndMs: number;
+  configHash?: string | null;
   buildGitSha?: string | null;
   scanRunId?: string | null;
   payload: any;
@@ -80,6 +88,7 @@ export async function insertTuningBundle(input: {
     windowHours: input.windowHours,
     windowStartMs: input.windowStartMs,
     windowEndMs: input.windowEndMs,
+    configHash: input.configHash ?? null,
     buildGitSha: input.buildGitSha ?? null,
     scanRunId: input.scanRunId ?? null,
     payloadJson,
@@ -93,6 +102,7 @@ export async function insertTuningBundle(input: {
         window_hours,
         window_start_ms,
         window_end_ms,
+        config_hash,
         build_git_sha,
         scan_run_id,
         payload_json,
@@ -103,6 +113,7 @@ export async function insertTuningBundle(input: {
         @windowHours,
         @windowStartMs,
         @windowEndMs,
+        @configHash,
         @buildGitSha,
         @scanRunId,
         @payloadJson,
@@ -117,6 +128,7 @@ export async function insertTuningBundle(input: {
       window_hours,
       window_start_ms,
       window_end_ms,
+      config_hash,
       build_git_sha,
       scan_run_id,
       payload_json,
@@ -127,6 +139,7 @@ export async function insertTuningBundle(input: {
       @windowHours,
       @windowStartMs,
       @windowEndMs,
+      @configHash,
       @buildGitSha,
       @scanRunId,
       @payloadJson::jsonb,
@@ -144,6 +157,7 @@ function normalizeBundleRow(row: any): TuningBundleRow | null {
     windowHours: Number(row.windowHours ?? row.window_hours ?? 0),
     windowStartMs: Number(row.windowStartMs ?? row.window_start_ms ?? 0),
     windowEndMs: Number(row.windowEndMs ?? row.window_end_ms ?? 0),
+    configHash: row.configHash ?? row.config_hash ?? null,
     buildGitSha: row.buildGitSha ?? row.build_git_sha ?? null,
     scanRunId: row.scanRunId ?? row.scan_run_id ?? null,
     payload: parseJsonField<any>(row.payloadJson ?? row.payload_json) ?? {},
@@ -152,7 +166,7 @@ function normalizeBundleRow(row: any): TuningBundleRow | null {
   };
 }
 
-export async function getLatestTuningBundle(params?: { windowHours?: number }) {
+export async function getLatestTuningBundle(params?: { windowHours?: number; configHash?: string }) {
   await ensureSchema();
   const d = getDb();
   const where: string[] = [];
@@ -161,6 +175,10 @@ export async function getLatestTuningBundle(params?: { windowHours?: number }) {
     where.push(`window_hours = @windowHours`);
     bind.windowHours = params!.windowHours;
   }
+  if (params?.configHash) {
+    where.push(`config_hash = @configHash`);
+    bind.configHash = params.configHash;
+  }
   const row = await d.prepare(`
     SELECT
       id,
@@ -168,6 +186,7 @@ export async function getLatestTuningBundle(params?: { windowHours?: number }) {
       window_hours as "windowHours",
       window_start_ms as "windowStartMs",
       window_end_ms as "windowEndMs",
+      config_hash as "configHash",
       build_git_sha as "buildGitSha",
       scan_run_id as "scanRunId",
       payload_json as "payloadJson",
@@ -181,10 +200,16 @@ export async function getLatestTuningBundle(params?: { windowHours?: number }) {
   return normalizeBundleRow(row);
 }
 
-export async function listRecentTuningBundles(params?: { limit?: number }) {
+export async function listRecentTuningBundles(params?: { limit?: number; configHash?: string }) {
   await ensureSchema();
   const d = getDb();
   const limit = Math.max(1, Math.min(200, params?.limit ?? 50));
+  const where: string[] = [];
+  const bind: any = { limit };
+  if (params?.configHash) {
+    where.push(`config_hash = @configHash`);
+    bind.configHash = params.configHash;
+  }
   const rows = await d.prepare(`
     SELECT
       id,
@@ -192,15 +217,17 @@ export async function listRecentTuningBundles(params?: { limit?: number }) {
       window_hours as "windowHours",
       window_start_ms as "windowStartMs",
       window_end_ms as "windowEndMs",
+      config_hash as "configHash",
       build_git_sha as "buildGitSha",
       scan_run_id as "scanRunId",
       payload_json as "payloadJson",
       report_md as "reportMd",
       error
     FROM tuning_bundles
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY created_at DESC
     LIMIT @limit
-  `).all({ limit });
+  `).all(bind);
   return rows.map(normalizeBundleRow).filter(Boolean) as TuningBundleRow[];
 }
 
@@ -214,6 +241,7 @@ export async function getTuningBundleById(id: number) {
       window_hours as "windowHours",
       window_start_ms as "windowStartMs",
       window_end_ms as "windowEndMs",
+      config_hash as "configHash",
       build_git_sha as "buildGitSha",
       scan_run_id as "scanRunId",
       payload_json as "payloadJson",
