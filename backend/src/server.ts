@@ -12,6 +12,7 @@ import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
 import { getLatestTuningBundle, listRecentTuningBundles, getTuningBundleById } from './tuningBundleStore.js';
+import { generateTuningBundle } from './tuning/generateTuningBundle.js';
 import {
   clearAllSignalsData,
   deleteOutcomesBulk,
@@ -734,6 +735,22 @@ app.get('/api/tuning/bundles/:id', async (req, res) => {
     const bundle = await getTuningBundleById(id);
     if (!bundle) return res.status(404).json({ ok: false, error: 'Not found' });
     res.json({ ok: true, bundle });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Admin: generate a fresh bundle on demand
+app.post('/api/tuning/bundles/generate', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const hoursRaw = Number((req.query as any)?.hours);
+    const limitRaw = Number((req.query as any)?.limit);
+    const hours = Number.isFinite(hoursRaw) ? Math.max(1, Math.min(168, hoursRaw)) : undefined;
+    const limit = Number.isFinite(limitRaw) ? Math.max(50, Math.min(1000, limitRaw)) : undefined;
+    const configHash = String((req.query as any)?.configHash || '').trim() || undefined;
+    const result = await generateTuningBundle({ hours, limit, configHash });
+    res.json({ ok: true, bundle: result?.payload ?? null });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }

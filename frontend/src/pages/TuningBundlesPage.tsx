@@ -71,6 +71,29 @@ export default function TuningBundlesPage() {
     }
   }
 
+  async function generateBundleNow() {
+    setBundleError('');
+    setBundleLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (Number.isFinite(bundleHours)) qs.set('hours', String(bundleHours));
+      const resp = await fetch(API(`/api/tuning/bundles/generate?${qs.toString()}`), {
+        method: 'POST',
+        headers: authHeaders(),
+      }).then(r => r.json());
+      if (resp?.ok === false) {
+        setBundleError(resp?.error || 'Failed to generate bundle');
+        return;
+      }
+      await loadBundleLatest();
+      await loadBundleRecent();
+    } catch (e: any) {
+      setBundleError(String(e?.message || e));
+    } finally {
+      setBundleLoading(false);
+    }
+  }
+
   async function loadBundleRecent() {
     setBundleError('');
     setBundleLoading(true);
@@ -175,6 +198,9 @@ export default function TuningBundlesPage() {
           </div>
           <button onClick={loadBundleLatest} className="px-2 py-1 rounded bg-white/10 hover:bg-white/15">
             {bundleLoading ? 'Loading...' : 'Load latest'}
+          </button>
+          <button onClick={generateBundleNow} className="px-2 py-1 rounded bg-emerald-400/20 hover:bg-emerald-400/30">
+            {bundleLoading ? 'Generating...' : 'Generate now'}
           </button>
           <button onClick={loadBundleRecent} className="px-2 py-1 rounded bg-white/10 hover:bg-white/15">
             Load recent
