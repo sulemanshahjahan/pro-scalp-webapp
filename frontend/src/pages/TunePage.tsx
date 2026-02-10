@@ -556,7 +556,7 @@ export default function TunePage() {
                     <input
                       type="number"
                       value={batchLastN}
-                      onChange={(e) => setBatchLastN(Math.max(1, Math.min(200, Number(e.target.value))))}
+                      onChange={(e) => setBatchLastN(Math.max(1, Math.min(400, Number(e.target.value))))}
                       className="w-24 bg-white/10 border border-white/10 rounded px-2 py-1 text-sm"
                     />
                   </div>
