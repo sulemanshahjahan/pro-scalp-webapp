@@ -22,6 +22,7 @@ export type TuneConfig = {
   WATCH_EMA_EPS_PCT: number;
   EMA5_WATCH_SOFT_TOL: number;
   RR_MIN_BEST: number;
+  READY_MIN_RR: number;
   READY_NO_SWEEP_VWAP_CAP: number;
   READY_RECLAIM_REQUIRED: boolean;
   READY_CONFIRM15_REQUIRED: boolean;
@@ -108,6 +109,7 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     WATCH_EMA_EPS_PCT: parseFloat(process.env.WATCH_EMA_EPS_PCT || '0'),
     EMA5_WATCH_SOFT_TOL: 0.25,
     RR_MIN_BEST: parseFloat(process.env.RR_MIN_BEST || '2.0'),
+    READY_MIN_RR: parseFloat(process.env.READY_MIN_RR || '1.0'),
     READY_NO_SWEEP_VWAP_CAP: 0.20,
     READY_RECLAIM_REQUIRED: (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_CONFIRM15_REQUIRED: (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
@@ -228,6 +230,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const confirm15Ok = computed.confirm15Ok == null ? (confirm15Strict || confirm15Soft) : Boolean(computed.confirm15Ok);
   const sweepOk = Boolean(computed.sweepOk);
   const rrOk = Boolean(computed.rrOk);
+  const rrReadyOk = computed.rrReadyOk == null ? true : Boolean(computed.rrReadyOk);
   const hasMarket = Boolean(computed.hasMarket);
   const btcBull = Boolean(computed.btcBull);
   const btcBear = Boolean(computed.btcBear);
@@ -318,7 +321,8 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     atrOkReady &&
     readyConfirmOk &&
     strongBodyReady &&
-    readyTrendOkReq;
+    readyTrendOkReq &&
+    rrReadyOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -393,6 +397,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
       atrOkReady,
       confirm15mOk: readyConfirmOk,
       strongBody: strongBodyReady,
+      rrOk: rrReadyOk,
       rsiReadyOk,
       readyTrendOk: readyTrendOkReq,
     },

@@ -57,6 +57,7 @@ const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
 
 const LIQ_LOOKBACK = parseInt(process.env.LIQ_LOOKBACK || '20', 10);
 const RR_MIN_BEST  = parseFloat(process.env.RR_MIN_BEST || '2.0');
+const READY_MIN_RR = parseFloat(process.env.READY_MIN_RR || '1.0');
 const BEAR_GATE_ENABLED = (process.env.BEAR_GATE_ENABLED ?? 'true').toLowerCase() !== 'false';
 const BEAR_GATE_HOLD_CANDLES = parseInt(process.env.BEAR_GATE_HOLD_CANDLES || '2', 10);
 const BEAR_GATE_VOL_MULT = parseFloat(process.env.BEAR_GATE_VOL_MULT || '1.2');
@@ -361,6 +362,7 @@ export type CandidateFeatureSnapshot = {
     confirm15Ok: boolean;
     sweepOk: boolean;
     rrOk: boolean;
+    rrReadyOk: boolean;
     hasMarket: boolean;
     btcBull: boolean;
     btcBear: boolean;
@@ -563,6 +565,52 @@ function analyzeSymbolInternal(
   const reasons: string[] = [];
   let category: Signal['category'] | null = null;
 
+  // Trade plan (spot-friendly)
+  let stop: number | null = null;
+  let tp1: number | null = null;
+  let tp2: number | null = null;
+  let target: number | null = null;
+  let rr: number | null = null;
+  let riskPct: number | null = null;
+
+  const ATR_STOP_MULT = parseFloat(process.env.STOP_ATR_MULT || '1.5');
+
+  // Prefer sweep wick as stop
+  const stopCandidate = liq.ok ? liq.sweptLow : null;
+  if (stopCandidate != null && Number.isFinite(stopCandidate) && price > stopCandidate) {
+    stop = stopCandidate;
+  } else {
+    // Fallback to recent lowest low
+    const recentLow = swingLow(data5, Math.max(0, i - LIQ_LOOKBACK), i).price;
+    if (Number.isFinite(recentLow) && price > recentLow) {
+      stop = recentLow;
+    } else {
+      // Final fallback: ATR-based stop
+      const atrPrice = price * (atrNow / 100);
+      const atrStop = price - (atrPrice * ATR_STOP_MULT);
+      if (Number.isFinite(atrStop) && atrStop > 0 && price > atrStop) {
+        stop = atrStop;
+      }
+    }
+  }
+
+  if (stop != null && price > stop) {
+    const risk = price - stop;
+    riskPct = (risk / price) * 100;
+    tp1 = price + risk;
+    tp2 = price + risk * 2;
+    target = tp2;
+
+    // Prefer real upside liquidity only if above price; otherwise keep 2R target.
+    const targetCandidate = nearestUpsideLiquidity(data5, LIQ_LOOKBACK);
+    if (Number.isFinite(targetCandidate) && targetCandidate > price) {
+      target = targetCandidate;
+    }
+
+    const reward = (target ?? tp2) - price;
+    if (reward > 0) rr = reward / risk;
+  }
+
   /** ===================== BEST ENTRY ===================== */
   const bestVolOk = volSpikeNow >= Math.max(1.2, volBestMin);
   const bestCorePreSweep =
@@ -635,6 +683,7 @@ function analyzeSymbolInternal(
   const readyConfirmOk = READY_CONFIRM15_REQUIRED ? confirm15mOk : true;
   const readyTrendOkReq = READY_TREND_REQUIRED ? readyTrendOk : true;
   const readyVolOkReq = READY_VOL_SPIKE_REQUIRED ? readyVolOk : true;
+  const rrReadyOk = Number.isFinite(rr ?? NaN) && (rr ?? 0) >= READY_MIN_RR;
   const readyCore =
     sessionOK &&
     readyPriceAboveVwap &&
@@ -646,7 +695,8 @@ function analyzeSymbolInternal(
     atrOkReady &&
     readyConfirmOk &&
     strongBodyReady &&
-    readyTrendOkReq;
+    readyTrendOkReq &&
+    rrReadyOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -682,6 +732,7 @@ function analyzeSymbolInternal(
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
+    { key: 'rrOk', ok: rrReadyOk, reason: `R:R below ${READY_MIN_RR.toFixed(2)}` },
     { key: 'trendOk', ok: readyTrendOkReq, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
     { key: 'readySweep', ok: readySweepOkReq, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
@@ -788,52 +839,6 @@ function analyzeSymbolInternal(
     },
   };
 
-  // Trade plan (spot-friendly)
-  let stop: number | null = null;
-  let tp1: number | null = null;
-  let tp2: number | null = null;
-  let target: number | null = null;
-  let rr: number | null = null;
-  let riskPct: number | null = null;
-
-  const ATR_STOP_MULT = parseFloat(process.env.STOP_ATR_MULT || '1.5');
-
-  // Prefer sweep wick as stop
-  const stopCandidate = liq.ok ? liq.sweptLow : null;
-  if (stopCandidate != null && Number.isFinite(stopCandidate) && price > stopCandidate) {
-    stop = stopCandidate;
-  } else {
-    // Fallback to recent lowest low
-    const recentLow = swingLow(data5, Math.max(0, i - LIQ_LOOKBACK), i).price;
-    if (Number.isFinite(recentLow) && price > recentLow) {
-      stop = recentLow;
-    } else {
-      // Final fallback: ATR-based stop
-      const atrPrice = price * (atrNow / 100);
-      const atrStop = price - (atrPrice * ATR_STOP_MULT);
-      if (Number.isFinite(atrStop) && atrStop > 0 && price > atrStop) {
-        stop = atrStop;
-      }
-    }
-  }
-
-  if (stop != null && price > stop) {
-    const risk = price - stop;
-    riskPct = (risk / price) * 100;
-    tp1 = price + risk;
-    tp2 = price + risk * 2;
-    target = tp2;
-
-    // Prefer real upside liquidity only if above price; otherwise keep 2R target.
-    const targetCandidate = nearestUpsideLiquidity(data5, LIQ_LOOKBACK);
-    if (Number.isFinite(targetCandidate) && targetCandidate > price) {
-      target = targetCandidate;
-    }
-
-    const reward = (target ?? tp2) - price;
-    if (reward > 0) rr = reward / risk;
-  }
-
   const planOk =
     stop != null &&
     riskPct != null &&
@@ -924,6 +929,7 @@ function analyzeSymbolInternal(
       strongBody: strongBodyReady,
       reclaimOrTap: reclaimOk,
       rsiReadyOk,
+      rrOk: rrReadyOk,
       hasMarket,
       btc: readyBtcOkReq,
       core: readyCore,
@@ -974,6 +980,7 @@ function analyzeSymbolInternal(
       confirm15Ok: confirm15mOk,
       sweepOk: liq.ok,
       rrOk: rrOK,
+      rrReadyOk,
       hasMarket,
       btcBull,
       btcBear,

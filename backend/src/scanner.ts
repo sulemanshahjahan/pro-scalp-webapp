@@ -612,6 +612,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           atrOkReady: Boolean(ready.atr),
           confirm15mOk: Boolean(ready.confirm15),
           strongBody: Boolean(ready.strongBody),
+          rrOk: Boolean(ready.rrOk),
           rsiReadyOk: Boolean(ready.rsiReadyOk),
           readyTrendOk: Boolean(ready.trend),
         };
@@ -632,6 +633,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           'atrOkReady',
           'confirm15mOk',
           'strongBody',
+          'rrOk',
           'rsiReadyOk',
           'readyTrendOk',
         ];
@@ -648,6 +650,10 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
               (gateStats.ready.ready_core_flag_true[k] ?? 0) + 1;
           }
         }
+
+        const rrFailed = !coreFlags.rrOk
+          && coreOrder.filter(k => k !== 'rrOk').every((k) => coreFlags[k]);
+        if (rrFailed) gateStats.ready.failed_rr += 1;
 
         const shadowRelaxReclaim = !coreFlags.reclaimOrTap
           && coreOrder.filter(k => k !== 'reclaimOrTap').every((k) => coreFlags[k]);

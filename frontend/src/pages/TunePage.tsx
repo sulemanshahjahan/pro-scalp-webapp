@@ -74,6 +74,7 @@ const SWEEP_KEYS = [
   'RSI_BEST_MIN',
   'RSI_BEST_MAX',
   'RR_MIN_BEST',
+  'READY_MIN_RR',
 ];
 
 const BOOLEAN_GATES = [

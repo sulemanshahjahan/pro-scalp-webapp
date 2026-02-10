@@ -30,6 +30,7 @@ export const CONFIG_ENV_KEYS = [
   'RSI_BEST_MIN',
   'RSI_BEST_MAX',
   'RR_MIN_BEST',
+  'READY_MIN_RR',
   'MIN_BODY_PCT',
   'MIN_ATR_PCT',
   'MIN_RISK_PCT',
