@@ -10,6 +10,10 @@ To avoid lookahead from partially-formed candles (and to make historical recompu
 - `NO_LOOKAHEAD_LOG`: if `true`, logs only when trimming removes candles. Default `false`.
 - `NO_LOOKAHEAD_LOG_BUDGET`: cap on trim logs before silence. Default `0` (unlimited). Example `50`.
 
+**READY Filters**
+- `READY_MIN_RISK_PCT`: minimum risk% (entry-stop)/entry*100 required for READY signals. Default `0` (disabled).
+- `READY_VOL_SPIKE_MAX`: maximum volume spike allowed for READY signals. Default unset (disabled).
+
 **Tuning Bundle Automation**
 Generate a periodic “tuning bundle” (JSON + Markdown) for monitoring outcomes.
 

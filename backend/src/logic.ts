@@ -24,10 +24,12 @@ const READY_CLOSE_POS_MIN = parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'
 const READY_UPPER_WICK_MAX = parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'); // upper wick <= 40% of range
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
+const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '0');
 const READY_RECLAIM_REQUIRED = (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_VOL_SPIKE_MAX = parseFloat(process.env.READY_VOL_SPIKE_MAX || '');
 const READY_SWEEP_REQUIRED = (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_BTC_REQUIRED = (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const BEST_BTC_REQUIRED = (process.env.BEST_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
@@ -347,6 +349,7 @@ export type CandidateFeatureSnapshot = {
     rsiDelta: number;
     atrPct: number;
     rr: number | null;
+    riskPct: number | null;
     volSpike: number;
     bodyPct: number;
     closePos: number;
@@ -676,15 +679,21 @@ function analyzeSymbolInternal(
     isBalancedPreset && nearVwapReady && reclaimOk
       ? 1.2
       : readyVolMinBase;
-  const readyVolOk = volSpikeNow >= readyVolMin;
+  const readyVolMinOk = volSpikeNow >= readyVolMin;
+  const readyVolMax = Number.isFinite(READY_VOL_SPIKE_MAX) ? READY_VOL_SPIKE_MAX : null;
+  const readyVolMaxOk = readyVolMax == null ? true : volSpikeNow <= readyVolMax;
+  const readyVolOkReq = READY_VOL_SPIKE_REQUIRED ? readyVolMinOk : true;
+  const readyVolOk = readyVolOkReq && readyVolMaxOk;
   const readyNoSweepVwapCap = 0.20;
   const nearVwapReadyNoSweep = Math.abs(distToVwapPct) <= readyNoSweepVwapCap;
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyReclaimOk = READY_RECLAIM_REQUIRED ? reclaimOk : true;
   const readyConfirmOk = READY_CONFIRM15_REQUIRED ? confirm15mOk : true;
   const readyTrendOkReq = READY_TREND_REQUIRED ? readyTrendOk : true;
-  const readyVolOkReq = READY_VOL_SPIKE_REQUIRED ? readyVolOk : true;
   const rrReadyOk = Number.isFinite(rr ?? NaN) && (rr ?? 0) >= READY_MIN_RR;
+  const readyRiskOk = READY_MIN_RISK_PCT > 0
+    ? Number.isFinite(riskPct ?? NaN) && (riskPct ?? 0) >= READY_MIN_RISK_PCT
+    : true;
   const readyCore =
     sessionOK &&
     readyPriceAboveVwap &&
@@ -692,12 +701,13 @@ function analyzeSymbolInternal(
     rsiReadyOk &&
     nearVwapReady &&
     readyReclaimOk &&
-    readyVolOkReq &&
+    readyVolOk &&
     atrOkReady &&
     readyConfirmOk &&
     strongBodyReady &&
     readyTrendOkReq &&
-    rrReadyOk;
+    rrReadyOk &&
+    readyRiskOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -729,11 +739,18 @@ function analyzeSymbolInternal(
       ok: readyReclaimOk,
       reason: reclaimDayBlocked ? 'Reclaim/tap blocked by UTC day boundary' : 'No reclaim/tap pattern',
     },
-    { key: 'readyVolOk', ok: readyVolOkReq, reason: 'Volume spike not met' },
+    {
+      key: 'readyVolOk',
+      ok: readyVolOk,
+      reason: !readyVolMaxOk
+        ? `Vol spike > ${readyVolMax?.toFixed(2) ?? 'max'}x`
+        : 'Volume spike not met',
+    },
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
     { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
     { key: 'rrOk', ok: rrReadyOk, reason: `R:R below ${READY_MIN_RR.toFixed(2)}` },
+    { key: 'riskOk', ok: readyRiskOk, reason: `Risk% below ${READY_MIN_RISK_PCT.toFixed(2)}` },
     { key: 'trendOk', ok: readyTrendOkReq, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
     { key: 'readySweep', ok: readySweepOkReq, reason: `Sweep missing (alt requires strict 15m + trend + ≤${readyNoSweepVwapCap.toFixed(2)}% VWAP)` },
     { key: 'hasMarket', ok: hasMarket, reason: 'BTC market data missing' },
@@ -929,6 +946,7 @@ function analyzeSymbolInternal(
       sweepFallback: readySweepFallbackOk,
       strongBody: strongBodyReady,
       reclaimOrTap: reclaimOk,
+      riskOk: readyRiskOk,
       rsiReadyOk,
       rrOk: rrReadyOk,
       hasMarket,
@@ -966,6 +984,7 @@ function analyzeSymbolInternal(
       rsiDelta,
       atrPct: atrNow,
       rr,
+      riskPct,
       volSpike: volSpikeNow,
       bodyPct,
       closePos,

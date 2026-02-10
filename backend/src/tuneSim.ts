@@ -23,6 +23,8 @@ export type TuneConfig = {
   EMA5_WATCH_SOFT_TOL: number;
   RR_MIN_BEST: number;
   READY_MIN_RR: number;
+  READY_MIN_RISK_PCT: number;
+  READY_VOL_SPIKE_MAX: number | null;
   READY_NO_SWEEP_VWAP_CAP: number;
   READY_RECLAIM_REQUIRED: boolean;
   READY_CONFIRM15_REQUIRED: boolean;
@@ -110,6 +112,10 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     EMA5_WATCH_SOFT_TOL: 0.25,
     RR_MIN_BEST: parseFloat(process.env.RR_MIN_BEST || '2.0'),
     READY_MIN_RR: parseFloat(process.env.READY_MIN_RR || '1.0'),
+    READY_MIN_RISK_PCT: parseFloat(process.env.READY_MIN_RISK_PCT || '0'),
+    READY_VOL_SPIKE_MAX: Number.isFinite(parseFloat(process.env.READY_VOL_SPIKE_MAX || ''))
+      ? parseFloat(process.env.READY_VOL_SPIKE_MAX || '')
+      : null,
     READY_NO_SWEEP_VWAP_CAP: 0.20,
     READY_RECLAIM_REQUIRED: (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_CONFIRM15_REQUIRED: (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
@@ -217,6 +223,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
 
   const atrPct = num(metrics.atrPct);
   const rrMetric = num(metrics.rr);
+  const riskPct = num(metrics.riskPct);
   const volSpike = num(metrics.volSpike);
   const bodyPct = num(metrics.bodyPct);
   const closePos = num(metrics.closePos);
@@ -303,7 +310,10 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     isBalancedPreset && nearVwapReady && reclaimOrTap
       ? 1.2
       : readyVolMinBase;
-  const readyVolOk = volSpike >= readyVolMin;
+  const readyVolMinOk = volSpike >= readyVolMin;
+  const readyVolMaxOk = Number.isFinite(num(cfg.READY_VOL_SPIKE_MAX))
+    ? volSpike <= num(cfg.READY_VOL_SPIKE_MAX)
+    : true;
 
   const readyNoSweepVwapCap = cfg.READY_NO_SWEEP_VWAP_CAP;
   const nearVwapReadyNoSweep = Math.abs(vwapDistPct) <= readyNoSweepVwapCap;
@@ -311,7 +321,11 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const readyReclaimOk = cfg.READY_RECLAIM_REQUIRED ? reclaimOrTap : true;
   const readyConfirmOk = cfg.READY_CONFIRM15_REQUIRED ? confirm15Ok : true;
   const readyTrendOkReq = cfg.READY_TREND_REQUIRED ? readyTrendOk : true;
-  const readyVolOkReq = cfg.READY_VOL_SPIKE_REQUIRED ? readyVolOk : true;
+  const readyVolOkReq = cfg.READY_VOL_SPIKE_REQUIRED ? readyVolMinOk : true;
+  const readyVolOk = readyVolOkReq && readyVolMaxOk;
+  const readyRiskOk = cfg.READY_MIN_RISK_PCT > 0
+    ? Number.isFinite(riskPct) && riskPct >= cfg.READY_MIN_RISK_PCT
+    : true;
 
   const readyCore =
     sessionOk &&
@@ -320,12 +334,13 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
     rsiReadyOk &&
     nearVwapReady &&
     readyReclaimOk &&
-    readyVolOkReq &&
+    readyVolOk &&
     atrOkReady &&
     readyConfirmOk &&
     strongBodyReady &&
     readyTrendOkReq &&
-    rrReadyOk;
+    rrReadyOk &&
+    readyRiskOk;
 
   const readyBtcOk = hasMarket && (
     btcBull ||
@@ -396,11 +411,12 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
       priceAboveEma,
       nearVwapReady,
       reclaimOrTap: readyReclaimOk,
-      readyVolOk: readyVolOkReq,
+      readyVolOk,
       atrOkReady,
       confirm15mOk: readyConfirmOk,
       strongBody: strongBodyReady,
       rrOk: rrReadyOk,
+      riskOk: readyRiskOk,
       rsiReadyOk,
       readyTrendOk: readyTrendOkReq,
     },

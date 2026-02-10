@@ -613,6 +613,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           confirm15mOk: Boolean(ready.confirm15),
           strongBody: Boolean(ready.strongBody),
           rrOk: Boolean(ready.rrOk),
+          riskOk: Boolean(ready.riskOk),
           rsiReadyOk: Boolean(ready.rsiReadyOk),
           readyTrendOk: Boolean(ready.trend),
         };
@@ -634,6 +635,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           'confirm15mOk',
           'strongBody',
           'rrOk',
+          'riskOk',
           'rsiReadyOk',
           'readyTrendOk',
         ];
