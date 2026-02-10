@@ -14,6 +14,10 @@ To avoid lookahead from partially-formed candles (and to make historical recompu
 - `READY_MIN_RISK_PCT`: minimum risk% (entry-stop)/entry*100 required for READY signals. Default `0` (disabled).
 - `READY_VOL_SPIKE_MAX`: maximum volume spike allowed for READY signals. Default unset (disabled).
 
+**Stops**
+- `STOP_ATR_FLOOR_MULT`: minimum ATR multiple used as a floor for swing-low stops (prevents micro-stops). Default `1.0`.
+- `STOP_ATR_MULT`: ATR multiple for ATR-based fallback stop. Default `1.5`.
+
 **Tuning Bundle Automation**
 Generate a periodic “tuning bundle” (JSON + Markdown) for monitoring outcomes.
 

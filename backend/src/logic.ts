@@ -587,6 +587,7 @@ function analyzeSymbolInternal(
   let riskPct: number | null = null;
 
   const ATR_STOP_MULT = parseFloat(process.env.STOP_ATR_MULT || '1.5');
+  const ATR_STOP_FLOOR_MULT = parseFloat(process.env.STOP_ATR_FLOOR_MULT || '1.0');
 
   // Prefer sweep wick as stop
   const stopCandidate = liq.ok ? liq.sweptLow : null;
@@ -596,13 +597,18 @@ function analyzeSymbolInternal(
     stopReason = 'sweep_low';
   } else {
     // Fallback to recent lowest low
-    const recentLow = swingLow(data5, Math.max(0, i - LIQ_LOOKBACK), i).price;
-    if (Number.isFinite(recentLow) && price > recentLow) {
-      stop = recentLow;
-      stopReason = 'swing_low';
+    const recentLowStart = Math.max(0, i - LIQ_LOOKBACK);
+    const recentLowEnd = Math.max(recentLowStart, i - 1); // exclude current candle
+    const recentLow = swingLow(data5, recentLowStart, recentLowEnd).price;
+    const atrPrice = price * (atrNow / 100);
+    const minStopByAtr = price - (atrPrice * ATR_STOP_FLOOR_MULT);
+    const swingStop = recentLow;
+    const finalStop = Math.min(swingStop, minStopByAtr);
+    if (Number.isFinite(finalStop) && finalStop > 0 && price > finalStop) {
+      stop = finalStop;
+      stopReason = finalStop === swingStop ? 'swing_low' : 'atr_floor';
     } else {
       // Final fallback: ATR-based stop
-      const atrPrice = price * (atrNow / 100);
       const atrStop = price - (atrPrice * ATR_STOP_MULT);
       if (Number.isFinite(atrStop) && atrStop > 0 && price > atrStop) {
         stop = atrStop;
