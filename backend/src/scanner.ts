@@ -686,7 +686,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           signalsByCategory[key] = (signalsByCategory[key] ?? 0) + 1;
         }
 
-        if (['BEST_ENTRY','READY_TO_BUY','EARLY_READY'].includes(withTime.category)) {
+        if (['BEST_ENTRY','READY_TO_BUY'].includes(withTime.category)) {
           const title = withTime.category === 'BEST_ENTRY' ? '⭐ Best Entry'
             : withTime.category === 'READY_TO_BUY' ? '✅ Ready to BUY'
             : '⚡ Early Ready (½ size)';
