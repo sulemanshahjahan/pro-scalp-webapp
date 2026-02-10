@@ -84,13 +84,38 @@ function summarizeFailureDrivers(rows: any[], topN = 5): FailureDriver[] {
 }
 
 function normalizeTotals(raw: any) {
-  const out: Record<string, number> = {};
-  if (!raw || typeof raw !== 'object') return out;
-  for (const [k, v] of Object.entries(raw)) {
-    const n = Number(v);
-    out[k] = Number.isFinite(n) ? n : 0;
+  if (!raw || typeof raw !== 'object') return {};
+  const lower = new Map<string, any>();
+  for (const [k, v] of Object.entries(raw)) lower.set(k.toLowerCase(), v);
+
+  function getNum(keys: string[]) {
+    for (const key of keys) {
+      if (key in raw) {
+        const n = Number((raw as any)[key]);
+        return Number.isFinite(n) ? n : 0;
+      }
+      const v = lower.get(key.toLowerCase());
+      if (v !== undefined) {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      }
+    }
+    return 0;
   }
-  return out;
+
+  return {
+    total: getNum(['total']),
+    completeN: getNum(['completeN', 'completen', 'complete_n']),
+    partialN: getNum(['partialN', 'partialn', 'partial_n']),
+    invalidN: getNum(['invalidN', 'invalidn', 'invalid_n']),
+    winN: getNum(['winN', 'winn', 'win_n']),
+    lossN: getNum(['lossN', 'lossn', 'loss_n']),
+    noneN: getNum(['noneN', 'nonen', 'none_n', 'timeoutN', 'timeoutn', 'timeout_n']),
+    avgMfePct: getNum(['avgMfePct', 'avgmfepct', 'avg_mfe_pct']),
+    avgMaePct: getNum(['avgMaePct', 'avgmaepct', 'avg_mae_pct']),
+    avgBars: getNum(['avgBars', 'avgbars', 'avg_bars']),
+    avgR: getNum(['avgR', 'avgr', 'avg_r']),
+  };
 }
 
 async function getWindowSignalsByCategory(params: {
