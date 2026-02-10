@@ -340,6 +340,7 @@ export type CandidateDebug = {
 export type CandidateFeatureSnapshot = {
   metrics: {
     price: number;
+    entryPrice: number;
     vwap: number;
     ema200: number;
     vwapDistPct: number;
@@ -350,6 +351,8 @@ export type CandidateFeatureSnapshot = {
     atrPct: number;
     rr: number | null;
     riskPct: number | null;
+    stopPrice: number | null;
+    absRisk: number | null;
     volSpike: number;
     bodyPct: number;
     closePos: number;
@@ -367,10 +370,16 @@ export type CandidateFeatureSnapshot = {
     sweepOk: boolean;
     rrOk: boolean;
     rrReadyOk: boolean;
+    readyCore: boolean;
+    readyFirstFailedGate: string | null;
+    readyBlockedReasons: string[];
+    readyGateSnapshot: Record<string, any> | null;
+    readyMinRiskPct: number;
     hasMarket: boolean;
     btcBull: boolean;
     btcBear: boolean;
     bullish: boolean;
+    stopReason?: string | null;
   };
 };
 
@@ -581,19 +590,23 @@ function analyzeSymbolInternal(
 
   // Prefer sweep wick as stop
   const stopCandidate = liq.ok ? liq.sweptLow : null;
+  let stopReason: string | null = null;
   if (stopCandidate != null && Number.isFinite(stopCandidate) && price > stopCandidate) {
     stop = stopCandidate;
+    stopReason = 'sweep_low';
   } else {
     // Fallback to recent lowest low
     const recentLow = swingLow(data5, Math.max(0, i - LIQ_LOOKBACK), i).price;
     if (Number.isFinite(recentLow) && price > recentLow) {
       stop = recentLow;
+      stopReason = 'swing_low';
     } else {
       // Final fallback: ATR-based stop
       const atrPrice = price * (atrNow / 100);
       const atrStop = price - (atrPrice * ATR_STOP_MULT);
       if (Number.isFinite(atrStop) && atrStop > 0 && price > atrStop) {
         stop = atrStop;
+        stopReason = 'atr';
       }
     }
   }
@@ -972,9 +985,13 @@ function analyzeSymbolInternal(
   const vwapLowDistPctLast = lows5
     .slice(lowDistStart, i + 1)
     .map((low) => ((low - vwap_i) / vwap_i) * 100);
+  const absRisk = stop != null && Number.isFinite(stop) && Number.isFinite(price)
+    ? Math.max(0, price - stop)
+    : null;
   const features: CandidateFeatureSnapshot = {
     metrics: {
       price,
+      entryPrice: price,
       vwap: vwap_i,
       ema200: emaNow,
       vwapDistPct: distToVwapPct,
@@ -985,6 +1002,8 @@ function analyzeSymbolInternal(
       atrPct: atrNow,
       rr,
       riskPct,
+      stopPrice: stop ?? null,
+      absRisk,
       volSpike: volSpikeNow,
       bodyPct,
       closePos,
@@ -1002,10 +1021,16 @@ function analyzeSymbolInternal(
       sweepOk: liq.ok,
       rrOk: rrOK,
       rrReadyOk,
+      readyCore,
+      readyFirstFailedGate: readyDebug.firstFailedGate ?? null,
+      readyBlockedReasons: readyDebug.blockedReasons ?? [],
+      readyGateSnapshot: gateSnapshot?.ready ?? null,
+      readyMinRiskPct: READY_MIN_RISK_PCT,
       hasMarket,
       btcBull,
       btcBear,
       bullish,
+      stopReason,
     },
   };
   const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug };
