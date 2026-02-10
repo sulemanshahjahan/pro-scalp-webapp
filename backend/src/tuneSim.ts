@@ -216,6 +216,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
       : NaN;
 
   const atrPct = num(metrics.atrPct);
+  const rrMetric = num(metrics.rr);
   const volSpike = num(metrics.volSpike);
   const bodyPct = num(metrics.bodyPct);
   const closePos = num(metrics.closePos);
@@ -230,7 +231,9 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const confirm15Ok = computed.confirm15Ok == null ? (confirm15Strict || confirm15Soft) : Boolean(computed.confirm15Ok);
   const sweepOk = Boolean(computed.sweepOk);
   const rrOk = Boolean(computed.rrOk);
-  const rrReadyOk = computed.rrReadyOk == null ? true : Boolean(computed.rrReadyOk);
+  const rrReadyOk = Number.isFinite(rrMetric)
+    ? rrMetric >= cfg.READY_MIN_RR
+    : (computed.rrReadyOk == null ? true : Boolean(computed.rrReadyOk));
   const hasMarket = Boolean(computed.hasMarket);
   const btcBull = Boolean(computed.btcBull);
   const btcBear = Boolean(computed.btcBear);

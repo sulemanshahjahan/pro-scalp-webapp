@@ -346,6 +346,7 @@ export type CandidateFeatureSnapshot = {
     rsiPrev: number;
     rsiDelta: number;
     atrPct: number;
+    rr: number | null;
     volSpike: number;
     bodyPct: number;
     closePos: number;
@@ -964,6 +965,7 @@ function analyzeSymbolInternal(
       rsiPrev,
       rsiDelta,
       atrPct: atrNow,
+      rr,
       volSpike: volSpikeNow,
       bodyPct,
       closePos,
