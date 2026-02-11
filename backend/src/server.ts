@@ -373,7 +373,7 @@ app.get('/api/system/health', async (req, res) => {
 app.get('/api/scanRuns', async (req, res) => {
   try {
     const limitRaw = Number((req.query as any)?.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(400, limitRaw)) : 50;
     const rows = await listScanRuns(limit);
     res.json({ ok: true, limit, rows });
   } catch (e) {
@@ -483,7 +483,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
       if (!runIds.length) return res.status(404).json({ ok: false, error: 'No scan runs found' });
     } else if (sourceMode === 'lastn') {
       const limitRaw = Number(source.limit ?? source.count ?? 25);
-      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 25;
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(400, limitRaw)) : 25;
       const runsRaw = await listScanRuns(limit);
       const runs = runsRaw.filter((r): r is any => Boolean(r));
       runIds = runs.map(r => r.runId);
