@@ -780,6 +780,10 @@ function analyzeSymbolInternal(
     },
   ];
   const readyDebug = buildGateDebug(readyGates);
+  const readyBlockedReasons = [...(readyDebug.blockedReasons ?? [])];
+  if (blockedByBtc && !readyBlockedReasons.includes('BTC_BLOCK')) {
+    readyBlockedReasons.push('BTC_BLOCK');
+  }
 
   if (!category && readyOk) {
     let ok = true;
@@ -1029,7 +1033,7 @@ function analyzeSymbolInternal(
       rrReadyOk,
       readyCore,
       readyFirstFailedGate: readyDebug.firstFailedGate ?? null,
-      readyBlockedReasons: readyDebug.blockedReasons ?? [],
+      readyBlockedReasons,
       readyGateSnapshot: gateSnapshot?.ready ?? null,
       readyMinRiskPct: READY_MIN_RISK_PCT,
       hasMarket,
@@ -1078,7 +1082,7 @@ function analyzeSymbolInternal(
     btcGate,
     btcGateReason,
     gateSnapshot,
-    blockedReasons: readyDebug.blockedReasons,
+    blockedReasons: readyBlockedReasons,
     firstFailedGate: readyDebug.firstFailedGate,
     gateScore: readyDebug.gateScore,
     readyDebug,

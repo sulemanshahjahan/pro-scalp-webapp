@@ -1339,7 +1339,7 @@ async function computeOneOutcome(
   }
 
   const canCompute = windowStatus === 'COMPLETE' && !invalidLevels;
-  const out = canCompute ? (expiredOut ?? calcOutcomeFromCandles({
+  let out = canCompute ? (expiredOut ?? calcOutcomeFromCandles({
     entry,
     stop,
     tp1,
@@ -1378,6 +1378,30 @@ async function computeOneOutcome(
     ambiguous: 0,
     exitIndex: -1,
   };
+
+  // Normalize non-hit exits to correct boundary times (prevents -1 candle stamps).
+  if (canCompute) {
+    const hitExit =
+      out.exitReason === 'TP1' ||
+      out.exitReason === 'TP2' ||
+      out.exitReason === 'STOP';
+    if (!hitExit) {
+      const capMinutes = 15;
+      const capMs = capMinutes * 60_000;
+      const capBars = Math.max(1, Math.ceil(capMinutes / OUTCOME_INTERVAL_MIN));
+      if (out.exitReason === 'EXPIRED_AFTER_15M' || expiredAfter15m) {
+        out.exitReason = 'EXPIRED_AFTER_15M' as const;
+        out.exitTime = entryTime + capMs;
+        out.barsToExit = capBars;
+      } else {
+        out.exitReason = 'TIMEOUT' as const;
+        out.exitTime = endTime;
+        if (!Number.isFinite(out.exitIndex)) {
+          out.exitIndex = nCandles > 0 ? (nCandles - 1) : -1;
+        }
+      }
+    }
+  }
 
   const exitCandle = (canCompute && out.exitIndex >= 0 && out.exitIndex < windowSlice.length)
     ? windowSlice[out.exitIndex]
@@ -1970,6 +1994,43 @@ export async function getStatsHealth(params: { days?: number } = {}) {
       ${resolvedWhere}
   `).get(bind) as { n: number };
 
+  const badTimeoutExitTime = await d.prepare(`
+    SELECT COUNT(*) AS n
+    FROM signal_outcomes
+    WHERE outcome_state = 'COMPLETE_TIMEOUT_NO_HIT'
+      AND exit_time <> end_time
+      ${resolvedWhere}
+  `).get(bind) as { n: number };
+
+  const badTimeoutMinusOneCandle = await d.prepare(`
+    SELECT COUNT(*) AS n
+    FROM signal_outcomes
+    WHERE exit_reason = 'TIMEOUT'
+      AND ABS(((exit_time - entry_time) / 60000.0) - (horizon_min - interval_min)) < 0.0001
+      ${resolvedWhere}
+  `).get(bind) as { n: number };
+
+  const badExpired15mMinusOneCandle = await d.prepare(`
+    SELECT COUNT(*) AS n
+    FROM signal_outcomes
+    WHERE exit_reason = 'EXPIRED_AFTER_15M'
+      AND ABS(((exit_time - entry_time) / 60000.0) - (15 - interval_min)) < 0.0001
+      ${resolvedWhere}
+  `).get(bind) as { n: number };
+
+  const bindSignals: any = days ? { start } : {};
+  const blockedBtcMissingReason = await d.prepare(`
+    SELECT COUNT(*) AS n
+    FROM signals
+    WHERE blocked_by_btc = 1
+      AND (
+        blocked_reasons_json IS NULL
+        OR blocked_reasons_json = ''
+        OR blocked_reasons_json NOT LIKE '%BTC%'
+      )
+      ${days ? 'AND time >= @start' : ''}
+  `).get(bindSignals) as { n: number };
+
   const badAmbiguous = await d.prepare(`
     SELECT COUNT(*) AS n
     FROM signal_outcomes
@@ -1992,8 +2053,12 @@ export async function getStatsHealth(params: { days?: number } = {}) {
     missing_resolve_version: Number(missing?.missing_resolve_version || 0),
     bad_bars_to_exit: badBars?.n ?? 0,
     bad_timeout_rows: badTimeout?.n ?? 0,
+    bad_timeout_exit_time: badTimeoutExitTime?.n ?? 0,
+    bad_timeout_minus_one_candle: badTimeoutMinusOneCandle?.n ?? 0,
+    bad_expired15m_minus_one_candle: badExpired15mMinusOneCandle?.n ?? 0,
     bad_ambiguous_rows: badAmbiguous?.n ?? 0,
     bad_ambiguous_missing_hits: badAmbiguousMissingHits?.n ?? 0,
+    blocked_btc_missing_reason: blockedBtcMissingReason?.n ?? 0,
   };
 
   const ok = Object.values(checks).every(n => n === 0);

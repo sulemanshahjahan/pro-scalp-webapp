@@ -34,7 +34,6 @@ Run manually:
 **Env Snapshots (User-Provided)**
 ```env
 previous logic:
-DATABASE_URL="<redacted>"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
@@ -71,7 +70,6 @@ READY_VOL_SPIKE_MAX="2.5"
 STOP_ATR_FLOOR_MULT="1.0"
 
 current logic:
-DATABASE_URL="<redacted>"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
@@ -129,3 +127,7 @@ current logic:
   "READY_VOL_SPIKE_MAX": 3.5
 }
 ```
+
+**Outcome Engine (Horizon Resolution)**
+- `OUTCOME_EXPIRE_AFTER_15M`: if `true`, horizons > 15m can be forced to expire based on the 15m outcome (drift/structure/stop). Default `true`.
+  - Set `false` to enforce **true horizons** (60m/120m/240m can run their full window unless TP/SL hits).
