@@ -278,6 +278,7 @@ async function ensureSchema() {
       mae_pct REAL NOT NULL,
       result TEXT NOT NULL DEFAULT 'NONE',
       exit_reason TEXT,
+      outcome_driver TEXT,
       trade_state TEXT NOT NULL DEFAULT 'PENDING',
       exit_price REAL NOT NULL DEFAULT 0,
       exit_time INTEGER NOT NULL DEFAULT 0,
@@ -390,6 +391,7 @@ async function ensureSchema() {
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN r_realized REAL NOT NULL DEFAULT 0`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN result TEXT NOT NULL DEFAULT 'NONE'`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN exit_reason TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN outcome_driver TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN trade_state TEXT NOT NULL DEFAULT 'PENDING'`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN exit_price REAL NOT NULL DEFAULT 0`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN exit_time INTEGER NOT NULL DEFAULT 0`); } catch {}
@@ -1191,6 +1193,18 @@ async function computeOneOutcome(
   now: number
 ) {
   const d = await getDbReady();
+  const configSnapshot = safeJsonParse<any>(signalRow.config_snapshot_json) ?? null;
+  const configEnv = (configSnapshot?.env ?? {}) as Record<string, any>;
+  const configThresholds = (configSnapshot?.thresholds ?? {}) as Record<string, any>;
+  const envNum = (key: string, fallback?: number) => {
+    const raw = configEnv[key];
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(Number(fallback))) return Number(fallback);
+    const fromProcess = Number(process.env[key]);
+    return Number.isFinite(fromProcess) ? fromProcess : NaN;
+  };
+  const category = String(signalRow.category || '');
   const entryRule = String(signalRow.entry_rule || ENTRY_RULE);
   const intervalMs = OUTCOME_INTERVAL_MIN * 60_000;
   const entryTimeRaw = Number(signalRow.entry_time) || Number(signalRow.time);
@@ -1470,6 +1484,50 @@ async function computeOneOutcome(
     outcomeState = 'PARTIAL_NOT_ENOUGH_BARS';
   }
 
+  let outcomeDriver: string | null = null;
+  if (windowStatus === 'COMPLETE' && !invalidLevels && tradeState === 'FAILED_SL') {
+    const rr = Number(signalRow.rr);
+    const deltaVwapPct = Number(signalRow.deltaVwapPct);
+    const volSpike = Number(signalRow.volSpike);
+    const rsi = Number(signalRow.rsi9);
+    const sweepOk = signalRow.sweep_ok != null ? Boolean(signalRow.sweep_ok) : null;
+    const sessionOk = signalRow.session_ok != null ? Boolean(signalRow.session_ok) : null;
+    const btcBear = signalRow.btc_bear != null ? Boolean(signalRow.btc_bear) : null;
+
+    const rrMin = category === 'BEST_ENTRY'
+      ? envNum('RR_MIN_BEST', Number(signalRow.rr_est))
+      : envNum('READY_MIN_RR');
+    const vwapMax = category === 'BEST_ENTRY'
+      ? envNum('BEST_VWAP_MAX_PCT')
+      : envNum('READY_VWAP_MAX_PCT');
+    const rsiMin = category === 'BEST_ENTRY'
+      ? envNum('RSI_BEST_MIN')
+      : envNum('RSI_READY_MIN');
+    const rsiMax = category === 'BEST_ENTRY'
+      ? envNum('RSI_BEST_MAX')
+      : envNum('RSI_READY_MAX');
+    const volSpikeMin = Number.isFinite(Number(configThresholds.volSpikeX))
+      ? Number(configThresholds.volSpikeX)
+      : envNum('THRESHOLD_VOL_SPIKE_X');
+
+    const rrBelowMin = Number.isFinite(rr) && Number.isFinite(rrMin) && rr < rrMin;
+    const vwapTooFar = Number.isFinite(deltaVwapPct) && Number.isFinite(vwapMax) && Math.abs(deltaVwapPct) > vwapMax;
+    const noSweep = sweepOk === false;
+    const volSpikeNotMet = Number.isFinite(volSpikeMin) && Number.isFinite(volSpike) && volSpike < volSpikeMin;
+    const rsiNotInWindow = Number.isFinite(rsi) && Number.isFinite(rsiMin) && Number.isFinite(rsiMax) && (rsi < rsiMin || rsi > rsiMax);
+    const btcContra = btcBear === true && (category === 'READY_TO_BUY' || category === 'BEST_ENTRY');
+    const sessionOff = sessionOk === false;
+
+    if (rrBelowMin) outcomeDriver = 'RR_BELOW_MIN';
+    else if (vwapTooFar) outcomeDriver = 'VWAP_TOO_FAR';
+    else if (noSweep) outcomeDriver = 'NO_SWEEP';
+    else if (volSpikeNotMet) outcomeDriver = 'VOL_SPIKE_NOT_MET';
+    else if (rsiNotInWindow) outcomeDriver = 'RSI_NOT_IN_WINDOW';
+    else if (btcContra) outcomeDriver = 'BTC_CONTRA_TREND';
+    else if (sessionOff) outcomeDriver = 'SESSION_OFF';
+    else outcomeDriver = 'OTHER';
+  }
+
   const resolvedAt = (windowStatus === 'COMPLETE' && !invalidLevels) ? Date.now() : 0;
 
   const attemptedAt = Date.now();
@@ -1485,7 +1543,7 @@ async function computeOneOutcome(
       tp1_hit_time, sl_hit_time, tp2_hit_time, time_to_first_hit_ms,
       bars_to_exit,
       mfe_pct, mae_pct,
-      result, exit_reason, trade_state, exit_price, exit_time,
+      result, exit_reason, outcome_driver, trade_state, exit_price, exit_time,
       window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
       expired_after_15m, expired_reason,
       attempted_at, computed_at, resolved_at, resolve_version,
@@ -1499,7 +1557,7 @@ async function computeOneOutcome(
       @tp1_hit_time, @sl_hit_time, @tp2_hit_time, @time_to_first_hit_ms,
       @bars_to_exit,
       @mfe_pct, @mae_pct,
-      @result, @exit_reason, @trade_state, @exit_price, @exit_time,
+      @result, @exit_reason, @outcome_driver, @trade_state, @exit_price, @exit_time,
       @window_status, @outcome_state, @invalid_levels, @invalid_reason, @ambiguous,
       @expired_after_15m, @expired_reason,
       @attempted_at, @computed_at, @resolved_at, @resolve_version,
@@ -1538,6 +1596,7 @@ async function computeOneOutcome(
       mae_pct=excluded.mae_pct,
       result=excluded.result,
       exit_reason=excluded.exit_reason,
+      outcome_driver=excluded.outcome_driver,
       trade_state=excluded.trade_state,
       exit_price=excluded.exit_price,
       exit_time=excluded.exit_time,
@@ -1592,6 +1651,7 @@ async function computeOneOutcome(
     mae_pct: out.maePct,
     result: canCompute ? out.result : 'PENDING',
     exit_reason: canCompute ? out.exitReason : null,
+    outcome_driver: outcomeDriver,
     trade_state: tradeState,
     exit_price: canCompute ? out.exitPrice : entry,
     exit_time: canCompute ? out.exitTime : startTime,
@@ -2145,6 +2205,171 @@ export async function getStatsSummary(params: {
   const medianR = median(rVals);
   const medianTimeToTp1 = median(tp1Times);
 
+  const winLossAgg = await d.prepare(`
+    SELECT
+      AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN o.r_close END) as "avgWinR",
+      AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
+        AND o.trade_state = 'FAILED_SL' THEN o.r_close END) as "avgLossR",
+      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
+        AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN o.r_close END) as "sumWinR",
+      SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
+        AND o.trade_state = 'FAILED_SL' THEN o.r_close END) as "sumLossR"
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${whereOutcomes.join(' AND ')}
+  `).get(bind) as any;
+
+  const seriesRows = await d.prepare(`
+    SELECT
+      s.entry_time as "entryTime",
+      o.r_close as "rClose",
+      o.trade_state as "tradeState"
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${whereOutcomes.join(' AND ')}
+      AND o.outcome_state LIKE 'COMPLETE_%'
+      AND o.invalid_levels = 0
+      AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED')
+    ORDER BY s.entry_time ASC
+  `).all(bind) as Array<{ entryTime: number; rClose: number; tradeState: string }>;
+
+  let equity = 0;
+  let peak = 0;
+  let maxDrawdown = 0;
+  let winStreak = 0;
+  let lossStreak = 0;
+  let maxWinStreak = 0;
+  let maxLossStreak = 0;
+
+  for (const row of seriesRows) {
+    const r = Number(row.rClose);
+    if (Number.isFinite(r)) {
+      equity += r;
+      if (equity > peak) peak = equity;
+      const dd = peak - equity;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+
+    if (row.tradeState === 'COMPLETED_TP1' || row.tradeState === 'COMPLETED_TP2') {
+      winStreak += 1;
+      lossStreak = 0;
+    } else if (row.tradeState === 'FAILED_SL') {
+      lossStreak += 1;
+      winStreak = 0;
+    } else {
+      winStreak = 0;
+      lossStreak = 0;
+    }
+    if (winStreak > maxWinStreak) maxWinStreak = winStreak;
+    if (lossStreak > maxLossStreak) maxLossStreak = lossStreak;
+  }
+
+  const lossRows = await d.prepare(`
+    SELECT
+      o.r_close as "rClose",
+      o.outcome_driver as "outcomeDriver",
+      o.exit_reason as "exitReason",
+      s.first_failed_gate as "firstFailedGate",
+      s.blocked_reasons_json as "blockedReasonsJson"
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${whereOutcomes.join(' AND ')}
+      AND o.outcome_state LIKE 'COMPLETE_%'
+      AND o.invalid_levels = 0
+      AND o.trade_state = 'FAILED_SL'
+  `).all(bind) as Array<{ rClose: number; outcomeDriver?: string | null; exitReason?: string | null; firstFailedGate?: string | null; blockedReasonsJson?: string | null }>;
+
+  const driverPriority = [
+    'RR_BELOW_MIN',
+    'VWAP_TOO_FAR',
+    'NO_SWEEP',
+    'VOL_SPIKE_NOT_MET',
+    'RSI_NOT_IN_WINDOW',
+    'BTC_CONTRA_TREND',
+    'SESSION_OFF',
+    'OTHER',
+  ];
+  const driverMatch = (reasons: string[] | null) => {
+    if (!reasons?.length) return null;
+    const joined = reasons.join(' | ').toLowerCase();
+    const has = (s: string) => joined.includes(s);
+    if (has('r:r') || has('rr')) return 'RR_BELOW_MIN';
+    if (has('vwap')) return 'VWAP_TOO_FAR';
+    if (has('sweep')) return 'NO_SWEEP';
+    if (has('vol')) return 'VOL_SPIKE_NOT_MET';
+    if (has('rsi')) return 'RSI_NOT_IN_WINDOW';
+    if (has('btc')) return 'BTC_CONTRA_TREND';
+    if (has('session')) return 'SESSION_OFF';
+    return null;
+  };
+  const driverFromGate = (gate: string | null | undefined) => {
+    if (!gate) return null;
+    const g = gate.toLowerCase();
+    if (g.includes('rr')) return 'RR_BELOW_MIN';
+    if (g.includes('vwap')) return 'VWAP_TOO_FAR';
+    if (g.includes('sweep')) return 'NO_SWEEP';
+    if (g.includes('vol')) return 'VOL_SPIKE_NOT_MET';
+    if (g.includes('rsi')) return 'RSI_NOT_IN_WINDOW';
+    if (g.includes('btc')) return 'BTC_CONTRA_TREND';
+    if (g.includes('session')) return 'SESSION_OFF';
+    return null;
+  };
+
+  const lossDriverMap = new Map<string, { driver: string; count: number; netR: number }>();
+  for (const row of lossRows) {
+    const reasons = safeJsonParse<string[]>(row.blockedReasonsJson) ?? null;
+    const driver =
+      row.outcomeDriver ||
+      driverMatch(reasons) ||
+      driverFromGate(row.firstFailedGate ?? null) ||
+      row.exitReason ||
+      'OTHER';
+    const key = driverPriority.includes(driver) ? driver : String(driver || 'OTHER');
+    const entry = lossDriverMap.get(key) ?? { driver: key, count: 0, netR: 0 };
+    entry.count += 1;
+    entry.netR += Number.isFinite(Number(row.rClose)) ? Number(row.rClose) : 0;
+    lossDriverMap.set(key, entry);
+  }
+  const lossDrivers = Array.from(lossDriverMap.values())
+    .map((d) => ({ ...d, avgR: d.count ? d.netR / d.count : 0 }))
+    .sort((a, b) => (b.count - a.count) || (b.netR - a.netR));
+
+  const btcOverrideRows = await d.prepare(`
+    SELECT
+      CASE WHEN s.category = 'READY_TO_BUY' AND s.btc_bear = 1 THEN 1 ELSE 0 END as "overrideOn",
+      COUNT(*) as n,
+      SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1 ELSE 0 END) as winN,
+      SUM(CASE WHEN o.trade_state = 'FAILED_SL' THEN 1 ELSE 0 END) as lossN,
+      SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as netR,
+      AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as avgR
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${whereOutcomes.join(' AND ')}
+      AND o.outcome_state LIKE 'COMPLETE_%'
+      AND o.invalid_levels = 0
+      AND s.category = 'READY_TO_BUY'
+    GROUP BY overrideOn
+  `).all(bind) as any[];
+
+  const perfByHourRows = await d.prepare(`
+    SELECT
+      CAST(s.entry_time / 3600000 AS BIGINT) * 3600000 as "hourStart",
+      COUNT(*) as n,
+      SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1 ELSE 0 END) as winN,
+      SUM(CASE WHEN o.trade_state = 'FAILED_SL' THEN 1 ELSE 0 END) as lossN,
+      SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as netR,
+      AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as avgR
+    FROM signal_outcomes o
+    JOIN signals s ON s.id = o.signal_id
+    WHERE ${whereOutcomes.join(' AND ')}
+      AND o.outcome_state LIKE 'COMPLETE_%'
+      AND o.invalid_levels = 0
+      AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED')
+    GROUP BY hourStart
+    ORDER BY hourStart
+  `).all(bind) as any[];
+
   const signalsPerHour = await d.prepare(`
     SELECT
       CAST(s.time / 3600000 AS BIGINT) * 3600000 as "hourStart",
@@ -2174,8 +2399,22 @@ export async function getStatsSummary(params: {
       medianTimeToTp1Ms: medianTimeToTp1,
       avgMfePct: agg?.avgMfePct ?? null,
       avgMaePct: agg?.avgMaePct ?? null,
+      winRate: (agg?.completeN ?? 0) ? (Number(agg?.winN ?? 0) / Number(agg?.completeN ?? 0)) : 0,
+      avgWinR: winLossAgg?.avgWinR ?? null,
+      avgLossR: winLossAgg?.avgLossR ?? null,
+      expectancy: agg?.avgR ?? null,
+      profitFactor: (Number(winLossAgg?.sumLossR) < 0)
+        ? (Number(winLossAgg?.sumWinR) / Math.abs(Number(winLossAgg?.sumLossR)))
+        : null,
+      maxDrawdownR: maxDrawdown,
+      longestWinStreak: maxWinStreak,
+      longestLossStreak: maxLossStreak,
+      tradesN: seriesRows.length,
     },
     signalsPerHour,
+    lossDrivers,
+    btcOverride: btcOverrideRows,
+    performanceByHour: perfByHourRows,
   };
 }
 
@@ -2516,6 +2755,7 @@ export async function listOutcomes(params: {
       o.mae_pct as "maePct",
       o.result as "result",
       o.exit_reason as "exitReason",
+      o.outcome_driver as "outcomeDriver",
       o.trade_state as "tradeState",
       o.exit_price as "exitPrice",
       o.exit_time as "exitTime",
@@ -3099,6 +3339,7 @@ export async function getSignalById(id: number) {
       mae_pct as maePct,
       result as result,
       exit_reason as exitReason,
+      outcome_driver as outcomeDriver,
       trade_state as tradeState,
       exit_price as exitPrice,
       exit_time as exitTime,

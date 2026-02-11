@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS signal_outcomes (
   mae_pct DOUBLE PRECISION NOT NULL,
   result TEXT NOT NULL DEFAULT 'NONE',
   exit_reason TEXT,
+  outcome_driver TEXT,
   trade_state TEXT NOT NULL DEFAULT 'PENDING',
   exit_price DOUBLE PRECISION NOT NULL DEFAULT 0,
   exit_time BIGINT NOT NULL DEFAULT 0,

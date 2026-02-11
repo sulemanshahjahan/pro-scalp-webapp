@@ -391,7 +391,8 @@ export default function StatsPage() {
   const lossN = Number(outcomeStats?.lossN) || 0;
   const noneN = Number(outcomeStats?.noneN) || 0;
   const totalOutcomes = completeN + partialN + invalidN;
-  const completePct = totalOutcomes ? (completeN / totalOutcomes) : 0;
+  const pendingN = Math.max(0, totalSignals - totalOutcomes);
+  const coveragePct = totalSignals ? (totalOutcomes / totalSignals) : 0;
   const currentResolveVersion = summary?.currentResolveVersion ?? null;
 
   const btcMarket = health?.btc?.market ?? null;
@@ -428,6 +429,7 @@ export default function StatsPage() {
   }, [matrix]);
 
   const signalsPerHour = summary?.signalsPerHour ?? [];
+  const lossDrivers = summary?.lossDrivers ?? [];
   const maxSignalsPerHour = Math.max(1, ...signalsPerHour.map((x: any) => Number(x?.n) || 0));
 
   const outcomesRows = outcomes?.rows ?? [];
@@ -535,7 +537,8 @@ export default function StatsPage() {
       <section className="grid grid-cols-1 lg:grid-cols-6 gap-3 fade-up">
         <div className="lg:col-span-4 grid grid-cols-2 md:grid-cols-3 gap-3">
           <KpiCard label="Total Signals" value={totalSignals} sub="All categories" />
-          <KpiCard label="Complete %" value={fmtRate(completePct, 1)} sub={`${completeN}/${totalOutcomes}`} />
+          <KpiCard label="Outcome Coverage" value={fmtRate(coveragePct, 1)} sub={`${totalOutcomes}/${totalSignals}`} />
+          <KpiCard label="Pending" value={pendingN} sub="Awaiting outcomes" />
           <KpiCard label="Win / Loss / No Hit" value={`${winN} / ${lossN} / ${noneN}`} sub="Complete only" />
           <KpiCard label="Net R (Risk)" value={fmt(outcomeStats?.netR, 2)} sub={`Avg ${fmt(outcomeStats?.avgR, 2)} - Median ${fmt(outcomeStats?.medianR, 2)}`} />
           <KpiCard label="Median Time to TP1" value={fmtMs(outcomeStats?.medianTimeToTp1Ms)} sub={`Horizon ${horizon}m`} />
@@ -649,6 +652,28 @@ export default function StatsPage() {
             ))}
             {!(buckets?.buckets?.[bucketTab] ?? []).length ? <div className="text-xs text-white/50">No bucket data.</div> : null}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-3 fade-up">
+        <div className="text-xs text-white/60 uppercase tracking-widest">Top Loss Drivers</div>
+        <div className="mt-3 space-y-2 text-xs">
+          {lossDrivers.slice(0, 12).map((d: any, idx: number) => (
+            <div
+              key={`loss-driver-${idx}`}
+              className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
+            >
+              <div className="text-white/80">{shortGateLabel(d.driver)}</div>
+              <div className="flex items-center gap-3 text-white/60">
+                <span>n {d.count ?? 0}</span>
+                <span>avgR {fmt(d.avgR, 2)}</span>
+                <span>netR {fmt(d.netR, 2)}</span>
+              </div>
+            </div>
+          ))}
+          {!lossDrivers.length ? (
+            <div className="text-xs text-white/50">No loss driver data in this range.</div>
+          ) : null}
         </div>
       </section>
 
