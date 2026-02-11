@@ -34,7 +34,7 @@ Run manually:
 **Env Snapshots (User-Provided)**
 ```env
 previous logic:
-DATABASE_URL="postgresql://postgres:KGboQAfuQthAtTRENDCVPcaLVzQzahiJ@switchyard.proxy.rlwy.net:21356/railway"
+DATABASE_URL="<redacted>"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
@@ -71,7 +71,7 @@ READY_VOL_SPIKE_MAX="2.5"
 STOP_ATR_FLOOR_MULT="1.0"
 
 current logic:
-DATABASE_URL="postgresql://postgres:KGboQAfuQthAtTRENDCVPcaLVzQzahiJ@switchyard.proxy.rlwy.net:21356/railway"
+DATABASE_URL="<redacted>"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
