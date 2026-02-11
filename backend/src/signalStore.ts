@@ -2349,7 +2349,7 @@ export async function getStatsSummary(params: {
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
       AND s.category = 'READY_TO_BUY'
-    GROUP BY overrideOn
+    GROUP BY 1
   `).all(bind) as any[];
 
   const perfByHourRows = await d.prepare(`
@@ -2366,8 +2366,8 @@ export async function getStatsSummary(params: {
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
       AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED')
-    GROUP BY hourStart
-    ORDER BY hourStart
+    GROUP BY 1
+    ORDER BY 1
   `).all(bind) as any[];
 
   const signalsPerHour = await d.prepare(`
@@ -2376,8 +2376,8 @@ export async function getStatsSummary(params: {
       COUNT(*) as n
     FROM signals s
     WHERE ${whereSignals.join(' AND ')}
-    GROUP BY "hourStart"
-    ORDER BY "hourStart"
+    GROUP BY 1
+    ORDER BY 1
   `).all(bind);
 
     return {
