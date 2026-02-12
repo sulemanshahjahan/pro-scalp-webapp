@@ -2153,6 +2153,30 @@ export async function getStatsSummary(params: {
   whereOutcomes.push(`o.resolve_version = @resolveVersion`);
   bind.resolveVersion = OUTCOME_RESOLVE_VERSION;
 
+  const totalSignalsRow = await d.prepare(`
+    SELECT COUNT(*) as n
+    FROM signals s
+    WHERE ${whereSignals.join(' AND ')}
+  `).get(bind) as { n: number } | undefined;
+  const totalSignals = Number(totalSignalsRow?.n ?? 0);
+
+  let eligibleSignals: number | null = null;
+  let immatureSignals: number | null = null;
+  let eligibleCutoff: number | null = null;
+  if (Number.isFinite(params.horizonMin)) {
+    const horizonMin = Number(params.horizonMin);
+    const rangeEnd = Math.min(end, Date.now());
+    eligibleCutoff = rangeEnd - horizonMin * 60_000;
+    const eligibleWhere = [...whereSignals, `s.time <= @eligibleCutoff`];
+    const eligibleRow = await d.prepare(`
+      SELECT COUNT(*) as n
+      FROM signals s
+      WHERE ${eligibleWhere.join(' AND ')}
+    `).get({ ...bind, eligibleCutoff }) as { n: number } | undefined;
+    eligibleSignals = Number(eligibleRow?.n ?? 0);
+    immatureSignals = Math.max(0, totalSignals - eligibleSignals);
+  }
+
   const totals = await d.prepare(`
     SELECT s.category as category, COUNT(*) as n
     FROM signals s
@@ -2381,12 +2405,16 @@ export async function getStatsSummary(params: {
   `).all(bind);
 
     return {
-      start,
-      end,
-      days,
-      currentResolveVersion: OUTCOME_RESOLVE_VERSION,
-      totals,
-      outcomes: {
+    start,
+    end,
+    days,
+    currentResolveVersion: OUTCOME_RESOLVE_VERSION,
+    totalSignals,
+    eligibleSignals,
+    immatureSignals,
+    eligibleCutoff,
+    totals,
+    outcomes: {
       completeN: agg?.completeN ?? 0,
       partialN: agg?.partialN ?? 0,
       invalidN: agg?.invalidN ?? 0,

@@ -383,7 +383,13 @@ export default function StatsPage() {
 
   const summaryTotals = summary?.totals ?? [];
   const outcomeStats = summary?.outcomes;
-  const totalSignals = summaryTotals.reduce((acc: number, r: any) => acc + (Number(r?.n) || 0), 0);
+  const totalSignals = Number(summary?.totalSignals) || summaryTotals.reduce((acc: number, r: any) => acc + (Number(r?.n) || 0), 0);
+  const eligibleSignals = Number(summary?.eligibleSignals);
+  const immatureSignals = Number(summary?.immatureSignals);
+  const hasEligibleSignals = Number.isFinite(eligibleSignals);
+  const eligibleBase = hasEligibleSignals ? eligibleSignals : totalSignals;
+  const eligibleDisplay = hasEligibleSignals ? String(eligibleSignals) : '--';
+  const immatureDisplay = Number.isFinite(immatureSignals) ? String(Math.max(0, immatureSignals)) : '--';
   const completeN = Number(outcomeStats?.completeN) || 0;
   const partialN = Number(outcomeStats?.partialN) || 0;
   const invalidN = Number(outcomeStats?.invalidN) || 0;
@@ -391,8 +397,8 @@ export default function StatsPage() {
   const lossN = Number(outcomeStats?.lossN) || 0;
   const noneN = Number(outcomeStats?.noneN) || 0;
   const totalOutcomes = completeN + partialN + invalidN;
-  const pendingN = Math.max(0, totalSignals - totalOutcomes);
-  const coveragePct = totalSignals ? (totalOutcomes / totalSignals) : 0;
+  const pendingN = Math.max(0, eligibleBase - totalOutcomes);
+  const coveragePct = eligibleBase ? (totalOutcomes / eligibleBase) : 0;
   const currentResolveVersion = summary?.currentResolveVersion ?? null;
 
   const btcMarket = health?.btc?.market ?? null;
@@ -537,7 +543,8 @@ export default function StatsPage() {
       <section className="grid grid-cols-1 lg:grid-cols-6 gap-3 fade-up">
         <div className="lg:col-span-4 grid grid-cols-2 md:grid-cols-3 gap-3">
           <KpiCard label="Total Signals" value={totalSignals} sub="All categories" />
-          <KpiCard label="Outcome Coverage" value={fmtRate(coveragePct, 1)} sub={`${totalOutcomes}/${totalSignals}`} />
+          <KpiCard label="Eligible / Immature" value={`${eligibleDisplay} / ${immatureDisplay}`} sub={`Horizon ${horizon}m`} />
+          <KpiCard label="Outcome Coverage" value={fmtRate(coveragePct, 1)} sub={`${totalOutcomes}/${eligibleBase}`} />
           <KpiCard label="Pending" value={pendingN} sub="Awaiting outcomes" />
           <KpiCard label="Win / Loss / No Hit" value={`${winN} / ${lossN} / ${noneN}`} sub="Complete only" />
           <KpiCard label="Net R (Risk)" value={fmt(outcomeStats?.netR, 2)} sub={`Avg ${fmt(outcomeStats?.avgR, 2)} - Median ${fmt(outcomeStats?.medianR, 2)}`} />
