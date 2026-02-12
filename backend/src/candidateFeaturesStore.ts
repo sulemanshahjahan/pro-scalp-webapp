@@ -34,6 +34,7 @@ async function ensureCandidateSchema() {
         PRIMARY KEY (run_id, symbol)
       );
       CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
+      CREATE INDEX IF NOT EXISTS idx_candidate_features_created_at ON candidate_features(created_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
     `);
   } else {
@@ -49,6 +50,7 @@ async function ensureCandidateSchema() {
         PRIMARY KEY (run_id, symbol)
       );
       CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
+      CREATE INDEX IF NOT EXISTS idx_candidate_features_created_at ON candidate_features(created_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
     `);
   }
@@ -208,11 +210,33 @@ export async function listCandidateFeaturesMulti(params: {
   }));
 }
 
-export async function pruneCandidateFeatures(params?: { keepDays?: number }) {
+export async function pruneCandidateFeatures(params?: { keepDays?: number; keepRows?: number }) {
   await ensureCandidateSchema();
   const d = getDb();
   const keepDays = Math.max(1, Math.min(365, params?.keepDays ?? parseInt(process.env.CANDIDATE_FEATURES_RETENTION_DAYS || '3', 10)));
+  const keepRowsRaw = params && 'keepRows' in params
+    ? Number((params as any).keepRows)
+    : Number(process.env.CANDIDATE_FEATURES_MAX_ROWS || '100000');
+  const keepRows = Number.isFinite(keepRowsRaw) && keepRowsRaw > 0 ? Math.floor(keepRowsRaw) : 0;
   const cutoff = Date.now() - keepDays * 24 * 60 * 60_000;
   const res = await d.prepare(`DELETE FROM candidate_features WHERE started_at < @cutoff`).run({ cutoff });
-  return { keepDays, cutoff, deleted: res.changes };
+  let deletedByRows = 0;
+  let rowCutoff: any = null;
+  if (keepRows > 0) {
+    const row = await d.prepare(`
+      SELECT MIN(created_at) as cutoff
+      FROM (
+        SELECT created_at
+        FROM candidate_features
+        ORDER BY created_at DESC
+        LIMIT @keepRows
+      ) t
+    `).get({ keepRows }) as { cutoff?: any } | undefined;
+    rowCutoff = row?.cutoff ?? null;
+    if (rowCutoff != null) {
+      const resRows = await d.prepare(`DELETE FROM candidate_features WHERE created_at < @rowCutoff`).run({ rowCutoff });
+      deletedByRows = resRows.changes;
+    }
+  }
+  return { keepDays, keepRows, cutoff, rowCutoff, deleted: res.changes + deletedByRows, deletedByRows };
 }

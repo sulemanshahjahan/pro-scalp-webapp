@@ -18,6 +18,10 @@ To avoid lookahead from partially-formed candles (and to make historical recompu
 - `STOP_ATR_FLOOR_MULT`: minimum ATR multiple used as a floor for swing-low stops (prevents micro-stops). Default `1.0`.
 - `STOP_ATR_MULT`: ATR multiple for ATR-based fallback stop. Default `1.5`.
 
+**Candidate Features Retention**
+- CANDIDATE_FEATURES_RETENTION_DAYS: days to keep candidate feature snapshots. Default 3.
+- CANDIDATE_FEATURES_MAX_ROWS: hard cap on candidate feature rows (newest rows kept). Default 100000.
+
 **Tuning Bundle Automation**
 Generate a periodic “tuning bundle” (JSON + Markdown) for monitoring outcomes.
 
@@ -34,6 +38,7 @@ Run manually:
 **Env Snapshots (User-Provided)**
 ```env
 previous logic:
+net:21356/railway"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
@@ -70,6 +75,7 @@ READY_VOL_SPIKE_MAX="2.5"
 STOP_ATR_FLOOR_MULT="1.0"
 
 current logic:
+net:21356/railway"
 DB_DRIVER="postgres"
 SCAN_INTERVAL_MS="90000"
 SESSION_FILTER_ENABLED="false"
@@ -127,7 +133,3 @@ current logic:
   "READY_VOL_SPIKE_MAX": 3.5
 }
 ```
-
-**Outcome Engine (Horizon Resolution)**
-- `OUTCOME_EXPIRE_AFTER_15M`: if `true`, horizons > 15m can be forced to expire based on the 15m outcome (drift/structure/stop). Default `true`.
-  - Set `false` to enforce **true horizons** (60m/120m/240m can run their full window unless TP/SL hits).

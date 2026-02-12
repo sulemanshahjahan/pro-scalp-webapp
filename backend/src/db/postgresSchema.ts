@@ -216,6 +216,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
 CREATE INDEX IF NOT EXISTS idx_tuning_bundles_created_at ON tuning_bundles(created_at);
 CREATE INDEX IF NOT EXISTS idx_tuning_bundles_window_end ON tuning_bundles(window_end_ms);
 CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
+CREATE INDEX IF NOT EXISTS idx_candidate_features_created_at ON candidate_features(created_at);
 CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
 
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_hash TEXT;
