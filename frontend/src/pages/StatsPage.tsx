@@ -470,10 +470,13 @@ export default function StatsPage() {
       return out;
     };
     for (const o of base) {
-      merged.set(Number(o.horizonMin), o);
+      const h = Number(o.horizonMin);
+      if (!Number.isFinite(h)) continue;
+      merged.set(h, o);
     }
     for (const o of fallback) {
       const h = Number(o.horizonMin);
+      if (!Number.isFinite(h)) continue;
       const existing = merged.get(h);
       merged.set(h, existing ? merge(existing, o) : o);
     }
