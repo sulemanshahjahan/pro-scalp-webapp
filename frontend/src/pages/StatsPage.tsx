@@ -310,9 +310,21 @@ export default function StatsPage() {
     }
   }
 
+  function hasOutcomeDetails(outcomes: any[] | null | undefined) {
+    if (!Array.isArray(outcomes) || outcomes.length === 0) return false;
+    return outcomes.some((o) => o && (
+      o.windowStatus ||
+      o.outcomeState ||
+      o.exitReason ||
+      Number.isFinite(Number(o.rClose)) ||
+      Number.isFinite(Number(o.mfePct)) ||
+      Number.isFinite(Number(o.maePct))
+    ));
+  }
+
   async function fetchSignal(id: number) {
     const cached = signalCacheRef.current[id];
-    if (cached) return cached;
+    if (cached && hasOutcomeDetails(cached.outcomes)) return cached;
     const resp = await fetch(API(`/api/signal/${id}`)).then(r => r.json());
     if (resp?.ok) {
       signalCacheRef.current[id] = resp.signal;
@@ -440,6 +452,33 @@ export default function StatsPage() {
 
   const outcomesRows = outcomes?.rows ?? [];
   const totalPages = outcomes?.total ? Math.ceil(outcomes.total / limit) : 1;
+  const selectedOutcomes = useMemo(() => {
+    if (!selected) return [];
+    const base = Array.isArray(selected.outcomes) ? selected.outcomes : [];
+    const fallback = outcomesRows
+      .filter((o: any) => Number(o.signalId) === Number(selected.id))
+      .map((o: any) => ({ ...o }));
+    if (!base.length) return fallback;
+    const merged = new Map<number, any>();
+    const merge = (primary: any, secondary: any) => {
+      const out = { ...secondary, ...primary };
+      if (secondary) {
+        for (const [k, v] of Object.entries(secondary)) {
+          if (out[k] == null) out[k] = v;
+        }
+      }
+      return out;
+    };
+    for (const o of base) {
+      merged.set(Number(o.horizonMin), o);
+    }
+    for (const o of fallback) {
+      const h = Number(o.horizonMin);
+      const existing = merged.get(h);
+      merged.set(h, existing ? merge(existing, o) : o);
+    }
+    return Array.from(merged.values()).sort((a, b) => Number(a.horizonMin) - Number(b.horizonMin));
+  }, [selected, outcomesRows]);
 
   return (
     <div className="mt-4 space-y-6">
@@ -1113,7 +1152,7 @@ export default function StatsPage() {
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                   <div className="text-sm text-white/60">Outcomes</div>
-                  {(selected.outcomes ?? []).map((o: any) => (
+                  {selectedOutcomes.map((o: any) => (
                     <div key={o.horizonMin} className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2 text-xs">
                       <div className="flex items-center justify-between">
                         <div className="font-semibold">{o.horizonMin}m</div>
