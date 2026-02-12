@@ -11,7 +11,7 @@ To avoid lookahead from partially-formed candles (and to make historical recompu
 - `NO_LOOKAHEAD_LOG_BUDGET`: cap on trim logs before silence. Default `0` (unlimited). Example `50`.
 
 **READY Filters**
-- `READY_MIN_RISK_PCT`: minimum risk% (entry-stop)/entry*100 required for READY signals. Default `0` (disabled).
+- `READY_MIN_RISK_PCT`: minimum risk% (entry-stop)/entry*100 required for READY signals. Default `0` (disabled); recommended live value `0.15`.
 - `READY_VOL_SPIKE_MAX`: maximum volume spike allowed for READY signals. Default unset (disabled).
 
 **Stops**
@@ -53,7 +53,7 @@ READY_BTC_REQUIRED="false"
 READY_CONFIRM15_REQUIRED="true"
 READY_VOL_SPIKE_REQUIRED="false"
 READY_SWEEP_REQUIRED="false"
-CONFIRM15_VWAP_EPS_PCT="0.30"
+CONFIRM15_VWAP_EPS_PCT="0.25"
 CONFIRM15_VWAP_ROLL_BARS="96"
 CLOCK_SKEW_MS="1500"
 STRICT_NO_LOOKAHEAD="false"
@@ -90,7 +90,7 @@ READY_BTC_REQUIRED="false"
 READY_CONFIRM15_REQUIRED="true"
 READY_VOL_SPIKE_REQUIRED="false"
 READY_SWEEP_REQUIRED="false"
-CONFIRM15_VWAP_EPS_PCT="0.30"
+CONFIRM15_VWAP_EPS_PCT="0.25"
 CONFIRM15_VWAP_ROLL_BARS="96"
 CLOCK_SKEW_MS="1500"
 STRICT_NO_LOOKAHEAD="false"
@@ -102,12 +102,12 @@ READY_VWAP_MAX_PCT="0.90"
 THRESHOLD_VOL_SPIKE_X="1.6"
 READY_BODY_PCT="0.06"
 READY_CLOSE_POS_MIN="0.55"
-READY_UPPER_WICK_MAX="0.48"
+READY_UPPER_WICK_MAX="0.35"
 RSI_DELTA_STRICT="0.20"
 RSI_READY_MIN="40"
 RSI_READY_MAX="82"
 READY_MIN_RR="1.35"
-READY_MIN_RISK_PCT="0"
+READY_MIN_RISK_PCT="0.15"
 READY_VOL_SPIKE_MAX="3.5"
 STOP_ATR_FLOOR_MULT="1.0"
 READY_VWAP_EPS_PCT="0.25"
@@ -124,12 +124,12 @@ current logic:
   "READY_VWAP_EPS_PCT": 0.25,
   "READY_BODY_PCT": 0.06,
   "READY_CLOSE_POS_MIN": 0.55,
-  "READY_UPPER_WICK_MAX": 0.48,
+  "READY_UPPER_WICK_MAX": 0.35,
   "RSI_READY_MIN": 40,
   "RSI_READY_MAX": 82,
   "RSI_DELTA_STRICT": 0.20,
   "READY_MIN_RR": 1.35,
-  "READY_MIN_RISK_PCT": 0,
+  "READY_MIN_RISK_PCT": 0.15,
   "READY_VOL_SPIKE_MAX": 3.5
 }
 ```

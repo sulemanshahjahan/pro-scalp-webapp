@@ -290,7 +290,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const readyPriceAboveVwapRelaxedTrue =
     readyPriceAboveVwapRelaxedEligible &&
     vwapDistPct >= -cfg.READY_VWAP_EPS_PCT;
-  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue;
+  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOrTap;
   const bestPriceAboveVwap =
     vwapDistPct > 0 ||
     (nearVwapBuy && vwapDistPct >= -cfg.BEST_VWAP_EPS_PCT);

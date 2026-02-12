@@ -477,7 +477,12 @@ function analyzeSymbolInternal(
   const touchStart = Math.max(0, i - READY_VWAP_TOUCH_BARS + 1);
   const touchedVwapRecently = lows5
     .slice(touchStart, i + 1)
-    .some((low) => low <= vwap_i * (1 + READY_VWAP_TOUCH_PCT / 100));
+    .some((low, offset) => {
+      const j = touchStart + offset;
+      const aj = dayAnchorIndexAt(data5, j, 288);
+      const vwap_j = anchoredVwapAt(cumPV5, cumV5, aj, j);
+      return Number.isFinite(vwap_j) && vwap_j > 0 && low <= vwap_j * (1 + READY_VWAP_TOUCH_PCT / 100);
+    });
   const nearVwapReadyDist = Math.abs(distToVwapPct) <= readyVwapMax;
   const nearVwapReady = nearVwapReadyDist && touchedVwapRecently;
 
@@ -550,7 +555,7 @@ function analyzeSymbolInternal(
   const readyPriceAboveVwapRelaxedTrue =
     readyPriceAboveVwapRelaxedEligible &&
     price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
-  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue;
+  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOk;
   const bestPriceAboveVwap =
     price > vwap_i ||
     (nearVwapBuy && price >= vwap_i * (1 - BEST_VWAP_EPS_PCT / 100));
@@ -588,22 +593,26 @@ function analyzeSymbolInternal(
 
   const ATR_STOP_MULT = parseFloat(process.env.STOP_ATR_MULT || '1.5');
   const ATR_STOP_FLOOR_MULT = parseFloat(process.env.STOP_ATR_FLOOR_MULT || '1.0');
+  const atrPrice = price * (atrNow / 100);
+  const maxStopPriceByFloor = price - (atrPrice * ATR_STOP_FLOOR_MULT);
 
   // Prefer sweep wick as stop
   const stopCandidate = liq.ok ? liq.sweptLow : null;
   let stopReason: string | null = null;
   if (stopCandidate != null && Number.isFinite(stopCandidate) && price > stopCandidate) {
-    stop = stopCandidate;
-    stopReason = 'sweep_low';
+    const sweptStop = stopCandidate;
+    const flooredStop = Math.min(sweptStop, maxStopPriceByFloor);
+    if (Number.isFinite(flooredStop) && flooredStop > 0 && price > flooredStop) {
+      stop = flooredStop;
+      stopReason = flooredStop === sweptStop ? 'sweep_low' : 'sweep_low_atr_floor';
+    }
   } else {
     // Fallback to recent lowest low
     const recentLowStart = Math.max(0, i - LIQ_LOOKBACK);
     const recentLowEnd = Math.max(recentLowStart, i - 1); // exclude current candle
     const recentLow = swingLow(data5, recentLowStart, recentLowEnd).price;
-    const atrPrice = price * (atrNow / 100);
-    const minStopByAtr = price - (atrPrice * ATR_STOP_FLOOR_MULT);
     const swingStop = recentLow;
-    const finalStop = Math.min(swingStop, minStopByAtr);
+    const finalStop = Math.min(swingStop, maxStopPriceByFloor);
     if (Number.isFinite(finalStop) && finalStop > 0 && price > finalStop) {
       stop = finalStop;
       stopReason = finalStop === swingStop ? 'swing_low' : 'atr_floor';
@@ -735,7 +744,7 @@ function analyzeSymbolInternal(
     (btcBear && confirm15mStrict && trendOk && strongBodyReady && readyVolOk)
   );
   const readyBtcOkReq = READY_BTC_REQUIRED ? readyBtcOk : true;
-  const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOk && nearVwapReadyNoSweep;
+  const readySweepFallbackOk = reclaimOk && confirm15mStrict && readyTrendOkReq && nearVwapReadyNoSweep;
   const readySweepOk = liq.ok || readySweepFallbackOk;
   const readySweepOkReq = READY_SWEEP_REQUIRED ? readySweepOk : true;
   const readyOk = readyCore && readySweepOkReq && readyBtcOkReq;
@@ -743,7 +752,7 @@ function analyzeSymbolInternal(
 
   const readyGates: Gate[] = [
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
-    { key: 'price>VWAP', ok: readyPriceAboveVwap, reason: 'Price not above VWAP' },
+    { key: 'price>VWAP', ok: readyPriceAboveVwap, reason: 'Price not above VWAP and no reclaim/tap' },
     { key: 'priceAboveEma', ok: priceAboveEma, reason: 'Price not above EMA200' },
     {
       key: 'nearVwapReady',
