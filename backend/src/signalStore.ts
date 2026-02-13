@@ -314,7 +314,6 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
     CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
     CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
-    CREATE INDEX IF NOT EXISTS idx_signals_instance_id ON signals(instance_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
     CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);

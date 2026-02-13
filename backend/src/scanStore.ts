@@ -57,8 +57,6 @@ async function ensureScanSchema() {
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
-      CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
-      CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id);
     `);
   } else {
     await d.exec(`
@@ -90,8 +88,6 @@ async function ensureScanSchema() {
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
-      CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
-      CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id);
     `);
   }
   try { await d.exec(`ALTER TABLE scan_runs ADD COLUMN config_hash TEXT`); } catch {}
