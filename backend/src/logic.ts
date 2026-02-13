@@ -58,6 +58,7 @@ const EMA5_WATCH_SOFT_TOL = 0.25;  // allow up to 0.25% below EMA200 on WATCH
 const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
 
 const LIQ_LOOKBACK = parseInt(process.env.LIQ_LOOKBACK || '20', 10);
+const SWEEP_MIN_DEPTH_ATR_MULT = parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.5');
 const RR_MIN_BEST  = parseFloat(process.env.RR_MIN_BEST || '2.0');
 const READY_MIN_RR = parseFloat(process.env.READY_MIN_RR || '1.0');
 const BEAR_GATE_ENABLED = (process.env.BEAR_GATE_ENABLED ?? 'true').toLowerCase() !== 'false';
@@ -66,6 +67,7 @@ const BEAR_GATE_VOL_MULT = parseFloat(process.env.BEAR_GATE_VOL_MULT || '1.2');
 const BEAR_GATE_RSI_MIN = parseFloat(process.env.BEAR_GATE_RSI_MIN || String(RSI_READY_MIN));
 
 const SESSION_FILTER_ENABLED = (process.env.SESSION_FILTER_ENABLED ?? 'true').toLowerCase() !== 'false';
+const READY_REQUIRE_DAILY_VWAP = (process.env.READY_REQUIRE_DAILY_VWAP ?? 'false').toLowerCase() === 'true';
 // Default UTC windows (approx London & NY opens). Format: "start-end,start-end" 24h UTC
 const SESSIONS_UTC = process.env.SESSIONS_UTC || '07-11,13-20';
 /** ===================================================== */
@@ -290,7 +292,7 @@ function detectLiquiditySweepLong(data5: OHLCV[], vwap_i: number, atrPctNow: num
   }
   const lastClose = data5[i].close;
   const sweepDepthPct = swept ? ((prior.price - sweptLow) / prior.price) * 100 : 0;
-  const minDepthPct = Math.max(0.03, atrPctNow * 0.15);
+  const minDepthPct = Math.max(0.10, atrPctNow * SWEEP_MIN_DEPTH_ATR_MULT);
   const reclaimed = lastClose > prior.price && lastClose > vwap_i;
   const ok = swept && sweepDepthPct >= minDepthPct && reclaimed;
   return { ok, sweptLow, priorLow: prior.price, sweepDepthPct, minDepthPct };
@@ -717,6 +719,7 @@ function analyzeSymbolInternal(
   const readyTrendOk = ema50Now > emaNow && ema200Up;
   const readyReclaimOk = READY_RECLAIM_REQUIRED ? reclaimOk : true;
   const readyConfirmOk = READY_CONFIRM15_REQUIRED ? confirm15mOk : true;
+const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price > vwap_i) : true;
   const readyTrendOkReq = READY_TREND_REQUIRED ? readyTrendOk : true;
   const rrReadyOk = Number.isFinite(rr ?? NaN) && (rr ?? 0) >= READY_MIN_RR;
   const readyRiskOk = READY_MIN_RISK_PCT > 0
@@ -732,6 +735,7 @@ function analyzeSymbolInternal(
     readyVolOk &&
     atrOkReady &&
     readyConfirmOk &&
+    readyDailyVwapOk &&
     strongBodyReady &&
     readyTrendOkReq &&
     rrReadyOk &&
@@ -776,6 +780,7 @@ function analyzeSymbolInternal(
     },
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
+    { key: 'dailyVwapOk', ok: readyDailyVwapOk, reason: 'Price below daily VWAP (soft path blocked)' },
     { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
     { key: 'rrOk', ok: rrReadyOk, reason: `R:R below ${READY_MIN_RR.toFixed(2)}` },
     { key: 'riskOk', ok: readyRiskOk, reason: `Risk% below ${READY_MIN_RISK_PCT.toFixed(2)}` },

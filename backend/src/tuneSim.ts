@@ -246,7 +246,10 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const btcBear = Boolean(computed.btcBear);
   const bullish = computed.bullish == null ? true : Boolean(computed.bullish);
 
-  const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT) ? (cfg.READY_VWAP_MAX_PCT as number) : cfg.thresholds.vwapDistancePct;
+  // Use explicit env config or default to 0.80% (not preset threshold to avoid sim/live drift)
+const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT) 
+  ? (cfg.READY_VWAP_MAX_PCT as number) 
+  : 0.80;
   const bestVwapMax = Number.isFinite(cfg.BEST_VWAP_MAX_PCT) ? (cfg.BEST_VWAP_MAX_PCT as number) : cfg.thresholds.vwapDistancePct;
   const nearVwapBuy = Math.abs(vwapDistPct) <= bestVwapMax;
   const nearVwapWatch = Math.abs(vwapDistPct) <= Math.max(cfg.thresholds.vwapDistancePct, cfg.VWAP_WATCH_MIN_PCT);
