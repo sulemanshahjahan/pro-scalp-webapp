@@ -58,7 +58,8 @@ const EMA5_WATCH_SOFT_TOL = 0.25;  // allow up to 0.25% below EMA200 on WATCH
 const RSI_WATCH_FLOOR = 48;        // WATCH can start earlier
 
 const LIQ_LOOKBACK = parseInt(process.env.LIQ_LOOKBACK || '20', 10);
-const SWEEP_MIN_DEPTH_ATR_MULT = parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.5');
+const SWEEP_MIN_DEPTH_ATR_MULT = parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.35');
+const SWEEP_MAX_DEPTH_CAP = parseFloat(process.env.SWEEP_MAX_DEPTH_CAP || '0.25');
 const RR_MIN_BEST  = parseFloat(process.env.RR_MIN_BEST || '2.0');
 const READY_MIN_RR = parseFloat(process.env.READY_MIN_RR || '1.0');
 const BEAR_GATE_ENABLED = (process.env.BEAR_GATE_ENABLED ?? 'true').toLowerCase() !== 'false';
@@ -292,7 +293,8 @@ function detectLiquiditySweepLong(data5: OHLCV[], vwap_i: number, atrPctNow: num
   }
   const lastClose = data5[i].close;
   const sweepDepthPct = swept ? ((prior.price - sweptLow) / prior.price) * 100 : 0;
-  const minDepthPct = Math.max(0.10, atrPctNow * SWEEP_MIN_DEPTH_ATR_MULT);
+  const calculatedDepth = atrPctNow * SWEEP_MIN_DEPTH_ATR_MULT;
+  const minDepthPct = Math.max(0.10, Math.min(SWEEP_MAX_DEPTH_CAP, calculatedDepth));
   const reclaimed = lastClose > prior.price && lastClose > vwap_i;
   const ok = swept && sweepDepthPct >= minDepthPct && reclaimed;
   return { ok, sweptLow, priorLow: prior.price, sweepDepthPct, minDepthPct };
