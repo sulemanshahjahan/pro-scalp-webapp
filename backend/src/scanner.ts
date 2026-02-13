@@ -5,6 +5,7 @@ import { analyzeSymbolDetailed } from './logic.js';
 import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
+import { buildConfigSnapshot, computeConfigHash } from './configSnapshot.js';
 import type { MarketInfo, OHLCV } from './types.js';
 
 // Configuration
@@ -135,8 +136,14 @@ type ScanHealth = {
 };
 
 let lastScanHealth: ScanHealth | null = null;
-let currentScan: { runId: string; preset: string; startedAt: number } | null = null;
+let currentScan: { runId: string; preset: string; configHash: string; instanceId: string; startedAt: number } | null = null;
 let lastSymbols: string[] | null = null;
+const INSTANCE_ID = String(
+  process.env.INSTANCE_ID ||
+  process.env.RAILWAY_REPLICA_ID ||
+  process.env.HOSTNAME ||
+  'unknown'
+).trim() || 'unknown';
 export function getLastScanHealth() {
   return lastScanHealth;
 }
@@ -359,8 +366,20 @@ function computeBtcMarket(data15: OHLCV[]): MarketInfo | null {
 export async function scanOnce(preset: Preset = 'BALANCED') {
   const t0 = Date.now();
   const thresholds = thresholdsForPreset(preset);
+  const runConfigSnapshot = buildConfigSnapshot({
+    preset,
+    thresholds: {
+      vwapDistancePct: thresholds.vwapDistancePct,
+      volSpikeX: thresholds.volSpikeX,
+      atrGuardPct: thresholds.atrGuardPct,
+    },
+  });
+  const runConfigHash = computeConfigHash(runConfigSnapshot);
   const now = Date.now();
-  const scanRun = await tryStartScanRun(preset, MAX_SCAN_MS);
+  const scanRun = await tryStartScanRun(preset, MAX_SCAN_MS, {
+    configHash: runConfigHash,
+    instanceId: INSTANCE_ID,
+  });
   if (!scanRun) {
     console.log('[scan] skip: another scan is already running');
     return [];
@@ -681,7 +700,13 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const sig = res?.signal ?? null;
       if (sig) {
         const candleCloseMs = getCandleCloseMs(last5, 5 * 60_000);
-        const withTime = { ...sig, time: candleCloseMs, runId: scanRun.runId };
+        const withTime = {
+          ...sig,
+          time: candleCloseMs,
+          runId: scanRun.runId,
+          configHash: scanRun.configHash,
+          instanceId: scanRun.instanceId,
+        };
         outs.push(withTime);
         if (withTime?.category) {
           const key = String(withTime.category);

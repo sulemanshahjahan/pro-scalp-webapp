@@ -6,6 +6,8 @@ export type ScanRun = {
   id: number;
   runId: string;
   preset: string;
+  configHash: string | null;
+  instanceId: string | null;
   status: ScanRunStatus;
   startedAt: number;
   finishedAt: number | null;
@@ -31,6 +33,8 @@ async function ensureScanSchema() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL UNIQUE,
         preset TEXT NOT NULL,
+        config_hash TEXT,
+        instance_id TEXT,
         status TEXT NOT NULL,
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
@@ -53,6 +57,8 @@ async function ensureScanSchema() {
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
+      CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id);
     `);
   } else {
     await d.exec(`
@@ -60,6 +66,8 @@ async function ensureScanSchema() {
         id BIGSERIAL PRIMARY KEY,
         run_id TEXT NOT NULL UNIQUE,
         preset TEXT NOT NULL,
+        config_hash TEXT,
+        instance_id TEXT,
         status TEXT NOT NULL,
         started_at BIGINT NOT NULL,
         finished_at BIGINT,
@@ -82,8 +90,16 @@ async function ensureScanSchema() {
       CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
       CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
+      CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id);
     `);
   }
+  try { await d.exec(`ALTER TABLE scan_runs ADD COLUMN config_hash TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE scan_runs ADD COLUMN instance_id TEXT`); } catch {}
+  try { await d.exec(`UPDATE scan_runs SET config_hash = 'legacy' WHERE config_hash IS NULL OR trim(config_hash) = ''`); } catch {}
+  try { await d.exec(`UPDATE scan_runs SET instance_id = 'legacy' WHERE instance_id IS NULL OR trim(instance_id) = ''`); } catch {}
+  try { await d.exec(`CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash)`); } catch {}
+  try { await d.exec(`CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id)`); } catch {}
   schemaReady = true;
 }
 
@@ -98,6 +114,8 @@ function normalizeScanRow(row: any | undefined): ScanRun | null {
     id: Number(row.id),
     runId: String(row.runId ?? row.run_id ?? ''),
     preset: String(row.preset ?? ''),
+    configHash: row.configHash == null ? null : String(row.configHash ?? row.config_hash),
+    instanceId: row.instanceId == null ? null : String(row.instanceId ?? row.instance_id),
     status: String(row.status ?? '') as ScanRunStatus,
     startedAt: Number(row.startedAt ?? row.started_at ?? 0),
     finishedAt: row.finishedAt == null ? null : Number(row.finishedAt ?? row.finished_at),
@@ -113,23 +131,34 @@ function normalizeScanRow(row: any | undefined): ScanRun | null {
   };
 }
 
-export async function startScanRun(preset: string) {
+export async function startScanRun(
+  preset: string,
+  opts?: { configHash?: string | null; instanceId?: string | null }
+) {
   await ensureScanSchema();
   const d = getDb();
   const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = Date.now();
+  const configHash = String(opts?.configHash || '').trim() || 'legacy';
+  const instanceId = String(opts?.instanceId || process.env.INSTANCE_ID || process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || 'unknown').trim() || 'unknown';
   await d.prepare(`
-    INSERT INTO scan_runs (run_id, preset, status, started_at)
-    VALUES (@runId, @preset, 'RUNNING', @startedAt)
-  `).run({ runId, preset, startedAt });
-  return { runId, preset, startedAt };
+    INSERT INTO scan_runs (run_id, preset, config_hash, instance_id, status, started_at)
+    VALUES (@runId, @preset, @configHash, @instanceId, 'RUNNING', @startedAt)
+  `).run({ runId, preset, configHash, instanceId, startedAt });
+  return { runId, preset, configHash, instanceId, startedAt };
 }
 
-export async function tryStartScanRun(preset: string, lockMs: number) {
+export async function tryStartScanRun(
+  preset: string,
+  lockMs: number,
+  opts?: { configHash?: string | null; instanceId?: string | null }
+) {
   await ensureScanSchema();
   const d = getDb();
   const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = Date.now();
+  const configHash = String(opts?.configHash || '').trim() || 'legacy';
+  const instanceId = String(opts?.instanceId || process.env.INSTANCE_ID || process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || 'unknown').trim() || 'unknown';
   const lockedUntil = startedAt + Math.max(10_000, lockMs);
 
   const acquire = d.transaction(async () => {
@@ -150,11 +179,11 @@ export async function tryStartScanRun(preset: string, lockMs: number) {
     if (!res.changes) return null;
 
     await d.prepare(`
-      INSERT INTO scan_runs (run_id, preset, status, started_at)
-      VALUES (@runId, @preset, 'RUNNING', @startedAt)
-    `).run({ runId, preset, startedAt });
+      INSERT INTO scan_runs (run_id, preset, config_hash, instance_id, status, started_at)
+      VALUES (@runId, @preset, @configHash, @instanceId, 'RUNNING', @startedAt)
+    `).run({ runId, preset, configHash, instanceId, startedAt });
 
-    return { runId, preset, startedAt };
+    return { runId, preset, configHash, instanceId, startedAt };
   });
 
   return acquire();
@@ -263,6 +292,8 @@ export async function getLatestScanRuns() {
       id,
       run_id as "runId",
       preset,
+      config_hash as "configHash",
+      instance_id as "instanceId",
       status,
       started_at as "startedAt",
       finished_at as "finishedAt",
@@ -286,6 +317,8 @@ export async function getLatestScanRuns() {
       id,
       run_id as "runId",
       preset,
+      config_hash as "configHash",
+      instance_id as "instanceId",
       status,
       started_at as "startedAt",
       finished_at as "finishedAt",
@@ -318,6 +351,8 @@ export async function listScanRuns(limit = 50) {
       id,
       run_id as "runId",
       preset,
+      config_hash as "configHash",
+      instance_id as "instanceId",
       status,
       started_at as "startedAt",
       finished_at as "finishedAt",
@@ -347,6 +382,8 @@ export async function getScanRunByRunId(runId: string) {
       id,
       run_id as "runId",
       preset,
+      config_hash as "configHash",
+      instance_id as "instanceId",
       status,
       started_at as "startedAt",
       finished_at as "finishedAt",

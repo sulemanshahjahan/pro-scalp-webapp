@@ -122,4 +122,6 @@ export interface Signal {
 
   // Optional trace metadata
   runId?: string | null;
+  configHash?: string | null;
+  instanceId?: string | null;
 }

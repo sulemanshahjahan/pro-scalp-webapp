@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS signals (
   config_hash TEXT,
   build_git_sha TEXT,
   run_id TEXT,
+  instance_id TEXT,
   blocked_reasons_json TEXT,
   first_failed_gate TEXT,
   gate_score INTEGER,
@@ -172,6 +173,8 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   id BIGSERIAL PRIMARY KEY,
   run_id TEXT NOT NULL UNIQUE,
   preset TEXT NOT NULL,
+  config_hash TEXT,
+  instance_id TEXT,
   status TEXT NOT NULL,
   started_at BIGINT NOT NULL,
   finished_at BIGINT,
@@ -213,6 +216,8 @@ CREATE TABLE IF NOT EXISTS candidate_features (
 CREATE INDEX IF NOT EXISTS idx_scan_runs_started_at ON scan_runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_finished_at ON scan_runs(finished_at);
 CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_instance_id ON scan_runs(instance_id);
 CREATE INDEX IF NOT EXISTS idx_tuning_bundles_created_at ON tuning_bundles(created_at);
 CREATE INDEX IF NOT EXISTS idx_tuning_bundles_window_end ON tuning_bundles(window_end_ms);
 CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
@@ -237,6 +242,7 @@ CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
 CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
 CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
+CREATE INDEX IF NOT EXISTS idx_signals_instance_id ON signals(instance_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
 CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);
@@ -253,8 +259,13 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS entry_debug_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_snapshot_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS build_git_sha TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS instance_id TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS blocked_reasons_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS first_failed_gate TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_score INTEGER;
 ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS outcome_debug_json TEXT;
+ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS config_hash TEXT;
+ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS instance_id TEXT;
+UPDATE scan_runs SET config_hash = 'legacy' WHERE config_hash IS NULL OR BTRIM(config_hash) = '';
+UPDATE scan_runs SET instance_id = 'legacy' WHERE instance_id IS NULL OR BTRIM(instance_id) = '';
 `;

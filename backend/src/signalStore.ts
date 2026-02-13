@@ -37,6 +37,12 @@ const BUILD_GIT_SHA =
   process.env.GIT_SHA ||
   process.env.VERCEL_GIT_COMMIT_SHA ||
   null;
+const INSTANCE_ID = String(
+  process.env.INSTANCE_ID ||
+  process.env.RAILWAY_REPLICA_ID ||
+  process.env.HOSTNAME ||
+  'unknown'
+).trim() || 'unknown';
 
 
 function buildReadyDebugSnapshot(sig: Signal) {
@@ -120,6 +126,7 @@ function buildEntrySnapshot(params: {
     version: sig.strategyVersion ?? STRATEGY_VERSION,
     build: { gitSha: BUILD_GIT_SHA },
     runId: sig.runId ?? null,
+    instanceId: sig.instanceId ?? null,
     preset: preset ?? sig.preset ?? null,
     entry: {
       time: entryTimeAligned,
@@ -221,6 +228,7 @@ async function ensureSchema() {
       config_hash TEXT,
       build_git_sha TEXT,
       run_id TEXT,
+      instance_id TEXT,
       blocked_reasons_json TEXT,
       first_failed_gate TEXT,
       gate_score INTEGER,
@@ -306,6 +314,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
     CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
     CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
+    CREATE INDEX IF NOT EXISTS idx_signals_instance_id ON signals(instance_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
     CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);
@@ -359,6 +368,9 @@ async function ensureSchema() {
   try { await d.exec(`UPDATE signals SET config_hash = 'legacy' WHERE config_hash IS NULL`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN build_git_sha TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN run_id TEXT`); } catch {}
+  try { await d.exec(`ALTER TABLE signals ADD COLUMN instance_id TEXT`); } catch {}
+  try { await d.exec(`UPDATE signals SET instance_id = 'legacy' WHERE instance_id IS NULL OR trim(instance_id) = ''`); } catch {}
+  try { await d.exec(`CREATE INDEX IF NOT EXISTS idx_signals_instance_id ON signals(instance_id)`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN blocked_reasons_json TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN first_failed_gate TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signals ADD COLUMN gate_score INTEGER`); } catch {}
@@ -706,8 +718,9 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     },
     buildGitSha: BUILD_GIT_SHA,
   });
-  const configHash = computeConfigHash(configSnapshot);
+  const configHash = String(sig.configHash || '').trim() || computeConfigHash(configSnapshot);
   (configSnapshot as any).configHash = configHash;
+  const instanceId = String(sig.instanceId || INSTANCE_ID || '').trim() || 'unknown';
 
   const entrySnapshot = buildEntrySnapshot({
     sig,
@@ -732,7 +745,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       confirm15_strict, confirm15_soft, rr_est,
       stop, tp1, tp2, target, rr, riskPct,
       session_ok, sweep_ok, trend_ok, blocked_by_btc, would_be_category, btc_gate, btc_gate_reason,
-      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json, config_hash, build_git_sha, run_id, blocked_reasons_json, first_failed_gate, gate_score,
+      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json, config_hash, build_git_sha, run_id, instance_id, blocked_reasons_json, first_failed_gate, gate_score,
       btc_bull, btc_bear, btc_close, btc_vwap, btc_ema200, btc_rsi, btc_delta_vwap,
       market_json, reasons_json,
       created_at, updated_at
@@ -744,7 +757,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       @confirm15_strict, @confirm15_soft, @rr_est,
       @stop, @tp1, @tp2, @target, @rr, @riskPct,
       @session_ok, @sweep_ok, @trend_ok, @blocked_by_btc, @would_be_category, @btc_gate, @btc_gate_reason,
-      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json, @config_hash, @build_git_sha, @run_id, @blocked_reasons_json, @first_failed_gate, @gate_score,
+      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json, @config_hash, @build_git_sha, @run_id, @instance_id, @blocked_reasons_json, @first_failed_gate, @gate_score,
       @btc_bull, @btc_bear, @btc_close, @btc_vwap, @btc_ema200, @btc_rsi, @btc_delta_vwap,
       @market_json, @reasons_json,
       @created_at, @updated_at
@@ -790,6 +803,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
       config_hash=excluded.config_hash,
       build_git_sha=excluded.build_git_sha,
       run_id=excluded.run_id,
+      instance_id=excluded.instance_id,
       blocked_reasons_json=excluded.blocked_reasons_json,
       first_failed_gate=excluded.first_failed_gate,
       gate_score=excluded.gate_score,
@@ -849,6 +863,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     config_hash: configHash,
     build_git_sha: BUILD_GIT_SHA,
     run_id: sig.runId ?? null,
+    instance_id: instanceId,
     blocked_reasons_json: sig.blockedReasons ? JSON.stringify(sig.blockedReasons) : null,
     first_failed_gate: sig.firstFailedGate ?? null,
     gate_score: sig.gateScore ?? null,
@@ -2896,6 +2911,7 @@ export async function listRecentOutcomes(params: {
       s.config_snapshot_json as "configSnapshotJson",
       s.build_git_sha as "buildGitSha",
       s.run_id as "runId",
+      s.instance_id as "instanceId",
       o.horizon_min as "horizonMin",
       o.window_status as "windowStatus",
       o.outcome_state as "outcomeState",
@@ -3426,6 +3442,7 @@ export async function getSignalById(id: number) {
     configSnapshot: safeJsonParse<any>(s.config_snapshot_json),
     buildGitSha: s.build_git_sha ?? null,
     runId: s.run_id ?? null,
+    instanceId: s.instance_id ?? null,
     blockedReasons: safeJsonParse<string[]>(s.blocked_reasons_json) ?? null,
     firstFailedGate: s.first_failed_gate ?? null,
     gateScore: s.gate_score ?? null,
