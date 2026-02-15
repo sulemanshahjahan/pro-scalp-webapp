@@ -158,7 +158,45 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
     return { config: out, appliedOverrides, unknownOverrideKeys, overrideTypeErrors };
   }
 
+  // Handle nested thresholds object first
+  if (overrides.thresholds && typeof overrides.thresholds === 'object') {
+    for (const [tKey, tVal] of Object.entries(overrides.thresholds)) {
+      if (tKey in out.thresholds) {
+        const n = Number(tVal);
+        if (Number.isFinite(n)) {
+          (out.thresholds as any)[tKey] = n;
+          appliedOverrides[`thresholds.${tKey}`] = n;
+        } else {
+          overrideTypeErrors[`thresholds.${tKey}`] = `Expected number, got ${typeof tVal}`;
+        }
+      } else {
+        unknownOverrideKeys.push(`thresholds.${tKey}`);
+      }
+    }
+  }
+
+  // Handle top-level keys
   for (const [key, raw] of Object.entries(overrides)) {
+    if (key === 'thresholds') continue; // Already handled above
+
+    // Handle THRESHOLD_* keys that map to nested thresholds
+    if (key === 'THRESHOLD_VWAP_DISTANCE_PCT' || key === 'THRESHOLD_VOL_SPIKE_X' || key === 'THRESHOLD_ATR_GUARD_PCT') {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
+        continue;
+      }
+      if (key === 'THRESHOLD_VWAP_DISTANCE_PCT') {
+        out.thresholds.vwapDistancePct = n;
+      } else if (key === 'THRESHOLD_VOL_SPIKE_X') {
+        out.thresholds.volSpikeX = n;
+      } else if (key === 'THRESHOLD_ATR_GUARD_PCT') {
+        out.thresholds.atrGuardPct = n;
+      }
+      appliedOverrides[key] = n;
+      continue;
+    }
+
     if (key in out) {
       const current = (out as any)[key];
       if (typeof current === 'boolean') {
@@ -181,26 +219,6 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
       continue;
     }
 
-    const n = Number(raw);
-    if (!Number.isFinite(n)) {
-      overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
-      continue;
-    }
-    if (key === 'THRESHOLD_VWAP_DISTANCE_PCT') {
-      out.thresholds.vwapDistancePct = n;
-      appliedOverrides[key] = n;
-      continue;
-    }
-    if (key === 'THRESHOLD_VOL_SPIKE_X') {
-      out.thresholds.volSpikeX = n;
-      appliedOverrides[key] = n;
-      continue;
-    }
-    if (key === 'THRESHOLD_ATR_GUARD_PCT') {
-      out.thresholds.atrGuardPct = n;
-      appliedOverrides[key] = n;
-      continue;
-    }
     unknownOverrideKeys.push(key);
   }
 
