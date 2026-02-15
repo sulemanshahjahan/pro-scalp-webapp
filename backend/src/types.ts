@@ -14,7 +14,14 @@ export type OHLCV = {
   volume: number;
 };
 
-export type ScanCategory = 'EARLY_READY' | 'BEST_ENTRY' | 'READY_TO_BUY' | 'WATCH';
+export type ScanCategory = 
+  | 'EARLY_READY' 
+  | 'BEST_ENTRY' 
+  | 'READY_TO_BUY' 
+  | 'WATCH'
+  | 'EARLY_READY_SHORT'
+  | 'BEST_SHORT_ENTRY'
+  | 'READY_TO_SELL';
 
 export interface MarketInfo {
   btcBull15m: boolean;

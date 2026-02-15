@@ -77,6 +77,28 @@ const SESSION_FILTER_ENABLED = (process.env.SESSION_FILTER_ENABLED ?? 'true').to
 const READY_REQUIRE_DAILY_VWAP = (process.env.READY_REQUIRE_DAILY_VWAP ?? 'false').toLowerCase() === 'true';
 // Default UTC windows (approx London & NY opens). Format: "start-end,start-end" 24h UTC
 const SESSIONS_UTC = process.env.SESSIONS_UTC || '07-11,13-20';
+
+/** =================== Short Signal Config =================== */
+const ENABLE_SHORT_SIGNALS = (process.env.ENABLE_SHORT_SIGNALS ?? 'false').toLowerCase() === 'true';
+const SHORT_VWAP_MAX_PCT = parseFloat(process.env.SHORT_VWAP_MAX_PCT || '1.50');
+const SHORT_VWAP_TOUCH_PCT = parseFloat(process.env.SHORT_VWAP_TOUCH_PCT || '0.50');
+const SHORT_VWAP_TOUCH_BARS = parseInt(process.env.SHORT_VWAP_TOUCH_BARS || '10', 10);
+const SHORT_TREND_REQUIRED = (process.env.SHORT_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const SHORT_CONFIRM15_REQUIRED = (process.env.SHORT_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const SHORT_RSI_MIN = parseFloat(process.env.SHORT_RSI_MIN || '30');
+const SHORT_RSI_MAX = parseFloat(process.env.SHORT_RSI_MAX || '60');
+const SHORT_RSI_DELTA_STRICT = parseFloat(process.env.SHORT_RSI_DELTA_STRICT || '-0.20');
+const SHORT_BODY_ATR_MULT = parseFloat(process.env.SHORT_BODY_ATR_MULT || '0.40');
+const SHORT_BODY_MIN_PCT = parseFloat(process.env.SHORT_BODY_MIN_PCT || '0.008');
+const SHORT_CLOSE_POS_MAX = parseFloat(process.env.SHORT_CLOSE_POS_MAX || '0.40'); // Close in bottom 40%
+const SHORT_LOWER_WICK_MAX = parseFloat(process.env.SHORT_LOWER_WICK_MAX || '0.40');
+const SHORT_MIN_RR = parseFloat(process.env.SHORT_MIN_RR || '1.35');
+const SHORT_MIN_RISK_PCT = parseFloat(process.env.SHORT_MIN_RISK_PCT || '0.25');
+const SHORT_SWEEP_REQUIRED = (process.env.SHORT_SWEEP_REQUIRED ?? 'false').toLowerCase() !== 'false';
+const SHORT_BTC_REQUIRED = (process.env.SHORT_BTC_REQUIRED ?? 'false').toLowerCase() !== 'false';
+const BEST_SHORT_BTC_REQUIRED = (process.env.BEST_SHORT_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const SHORT_STOP_ATR_MULT = parseFloat(process.env.SHORT_STOP_ATR_MULT || '1.5');
+const SHORT_ATR_FLOOR_MULT = parseFloat(process.env.SHORT_ATR_FLOOR_MULT || '1.2');
 /** ===================================================== */
 
 /** ----- Helpers: daily-anchored VWAP (fallback = last N bars) ----- */
@@ -183,6 +205,50 @@ export function checkBodyQuality(
     score: Math.round(totalScore),
     details: `${pass ? 'PASS' : 'FAIL'} body:${(bodyPct * 100).toFixed(2)}% vs req:${(requiredBody / candle.close * 100).toFixed(2)}% ` +
              `closePos:${(closePos * 100).toFixed(0)}% wick:${(upperWickPct * 100).toFixed(0)}% score:${Math.round(totalScore)}`
+  };
+}
+
+/** Short-side body quality (mirror of long) */
+export function checkBodyQualityShort(
+  candle: { open: number; high: number; low: number; close: number },
+  atrPct: number
+): BodyQualityResult {
+  const bodySize = Math.abs(candle.close - candle.open);
+  const bodyPct = bodySize / candle.close;
+  const range = candle.high - candle.low;
+  const upperWick = candle.high - Math.max(candle.open, candle.close);
+  const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+
+  // Dynamic thresholds (short uses same mult/pct)
+  const atrBasedBody = (candle.close * atrPct / 100) * SHORT_BODY_ATR_MULT;
+  const staticFloor = candle.close * SHORT_BODY_MIN_PCT;
+  const requiredBody = Math.max(atrBasedBody, staticFloor);
+
+  // For shorts: close in LOWER part of range (inverted)
+  const closePos = range > 0 ? (candle.close - candle.low) / range : 0;
+  const closePosShort = 1 - closePos; // Invert: 0 = bottom, 1 = top
+  const lowerWickPct = range > 0 ? lowerWick / range : 0;
+
+  // Calculate quality score (0-100)
+  const bodyScore = Math.min(100, (bodySize / requiredBody) * 50);
+  const closeScore = closePosShort >= (1 - SHORT_CLOSE_POS_MAX) ? 30 : (closePosShort * 50);
+  const wickScore = lowerWickPct <= SHORT_LOWER_WICK_MAX ? 20 : Math.max(0, 20 - (lowerWickPct - SHORT_LOWER_WICK_MAX) * 100);
+  const totalScore = bodyScore + closeScore + wickScore;
+
+  // Pass criteria for short (bearish)
+  const bearish = candle.close < candle.open;
+  const pass = (
+    bearish &&
+    bodySize >= requiredBody &&
+    closePos <= SHORT_CLOSE_POS_MAX && // Close in bottom 40%
+    lowerWickPct <= SHORT_LOWER_WICK_MAX
+  );
+
+  return {
+    pass,
+    score: Math.round(totalScore),
+    details: `${pass ? 'PASS' : 'FAIL'} body:${(bodyPct * 100).toFixed(2)}% vs req:${(requiredBody / candle.close * 100).toFixed(2)}% ` +
+             `closePos:${(closePos * 100).toFixed(0)}% wick:${(lowerWickPct * 100).toFixed(0)}% score:${Math.round(totalScore)}`
   };
 }
 
@@ -377,6 +443,36 @@ function nearestUpsideLiquidity(data5: OHLCV[], lookback = LIQ_LOOKBACK) {
   const i = data5.length - 1;
   const start = Math.max(0, i - lookback);
   return swingHigh(data5, start, i - 1).price;
+}
+
+/** Short-side sweep & reclaim (mirror of long logic) */
+function detectLiquiditySweepShort(data5: OHLCV[], vwap_i: number, atrPctNow: number, lookback = LIQ_LOOKBACK) {
+  const i = data5.length - 1;
+  const start = Math.max(0, i - 1 - lookback);
+  const prior = swingHigh(data5, start, i - 1);
+  const sweepWindow = Math.min(3, i + 1);
+  let swept = false;
+  let sweptHigh = -Infinity;
+  for (let k = i; k >= Math.max(0, i - sweepWindow + 1); k--) {
+    const high = data5[k].high;
+    if (high > prior.price) {
+      swept = true;
+      if (high > sweptHigh) sweptHigh = high;
+    }
+  }
+  const lastClose = data5[i].close;
+  const sweepDepthPct = swept ? ((sweptHigh - prior.price) / prior.price) * 100 : 0;
+  const calculatedDepth = atrPctNow * SWEEP_MIN_DEPTH_ATR_MULT;
+  const minDepthPct = Math.max(0.10, Math.min(SWEEP_MAX_DEPTH_CAP, calculatedDepth));
+  const reclaimed = lastClose < prior.price && lastClose < vwap_i;
+  const ok = swept && sweepDepthPct >= minDepthPct && reclaimed;
+  return { ok, sweptHigh, priorHigh: prior.price, sweepDepthPct, minDepthPct };
+}
+
+function nearestDownsideLiquidity(data5: OHLCV[], lookback = LIQ_LOOKBACK) {
+  const i = data5.length - 1;
+  const start = Math.max(0, i - lookback);
+  return swingLow(data5, start, i - 1).price;
 }
 
 /** Session filter using UTC hour windows */
@@ -956,6 +1052,182 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
 
   if (category && (category === 'EARLY_READY' || category === 'WATCH') && market && !btcBull) {
     reasons.push(btcBear ? 'BTC bearish (15m)' : 'BTC not supportive (15m)');
+  }
+
+  /** ===================== SHORT SIGNALS (Mirror of Long Logic) ===================== */
+  let shortCategory: Signal['category'] | null = null;
+  let shortStop: number | null = null;
+  let shortTp1: number | null = null;
+  let shortTp2: number | null = null;
+  let shortTarget: number | null = null;
+  let shortRr: number | null = null;
+  let shortRiskPct: number | null = null;
+
+  if (ENABLE_SHORT_SIGNALS && !category) {
+    // Short trend: EMA50 < EMA200 and falling
+    const trendOkShort = ema50Now < emaNow && !ema50Up && !ema200Up;
+    const readyTrendOkShort = SHORT_TREND_REQUIRED ? trendOkShort : true;
+
+    // Short VWAP: Price below VWAP
+    const priceBelowVwapStrict = price < vwap_i;
+    const shortVwapMax = Number.isFinite(SHORT_VWAP_MAX_PCT) ? SHORT_VWAP_MAX_PCT : 1.50;
+    const shortVwapTouchStart = Math.max(0, i - SHORT_VWAP_TOUCH_BARS + 1);
+    const touchedVwapRecentlyShort = highs5
+      .slice(shortVwapTouchStart, i + 1)
+      .some((high) => high >= vwap_i * (1 - SHORT_VWAP_TOUCH_PCT / 100));
+    const nearVwapShortDist = Math.abs(distToVwapPct) <= shortVwapMax;
+    const nearVwapShort = nearVwapShortDist && touchedVwapRecentlyShort;
+    const readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && price <= vwap_i * (1 + READY_VWAP_EPS_PCT / 100));
+
+    // Short RSI: 30-60 (overbought to neutral), falling
+    const rsiShortOk = rsiNow >= SHORT_RSI_MIN && rsiNow <= SHORT_RSI_MAX && rsiDelta <= SHORT_RSI_DELTA_STRICT;
+
+    // Short body quality (bearish candle)
+    const bearish = openNow != null ? closes5[i] < openNow : false;
+    const bodyQualityShort = checkBodyQualityShort(currentCandle, atrNow);
+    const strongBodyShort = bodyQualityShort.pass;
+
+    // Short volume
+    const shortVolMinOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
+    const shortVolMaxOk = Number.isFinite(READY_VOL_SPIKE_MAX) ? volSpikeNow <= READY_VOL_SPIKE_MAX : true;
+    const shortVolOk = shortVolMinOk && shortVolMaxOk;
+
+    // Short liquidity sweep (sweep HIGH, not low)
+    const liqShort = detectLiquiditySweepShort(data5, vwap_i, atrNow, LIQ_LOOKBACK);
+    const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? liqShort.ok : true;
+
+    // Short confirm15 (mirror logic - price below VWAP/EMA)
+    const confirm15mOkShort = confirm15mOk; // Use same 15m check for now
+    const shortConfirmOk = SHORT_CONFIRM15_REQUIRED ? confirm15mOkShort : true;
+
+    // Short daily VWAP
+    const shortDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price < vwap_i) : true;
+
+    // Short BTC gate
+    const btcBearOk = hasMarket && btcBear;
+    const shortBtcOkReq = SHORT_BTC_REQUIRED ? btcBearOk : true;
+    const bestShortBtcOk = hasMarket && btcBear;
+    const bestShortBtcOkReq = BEST_SHORT_BTC_REQUIRED ? bestShortBtcOk : true;
+
+    // Short trade plan (inverted stops/TPs)
+    if (liqShort.ok) {
+      const stopCandidate = liqShort.sweptHigh;
+      const sweptStop = stopCandidate;
+      const atrPrice = price * (atrNow / 100);
+      const maxStopPriceByFloor = price + (atrPrice * SHORT_ATR_FLOOR_MULT);
+      const flooredStop = Math.max(sweptStop, maxStopPriceByFloor);
+      if (Number.isFinite(flooredStop) && flooredStop > price) {
+        shortStop = flooredStop;
+      }
+    } else {
+      // Fallback to recent swing high
+      const recentHighStart = Math.max(0, i - LIQ_LOOKBACK);
+      const recentHighEnd = Math.max(recentHighStart, i - 1);
+      const recentHigh = swingHigh(data5, recentHighStart, recentHighEnd).price;
+      const finalStop = Math.max(recentHigh, price + (price * (atrNow / 100) * SHORT_ATR_FLOOR_MULT));
+      if (Number.isFinite(finalStop) && finalStop > price) {
+        shortStop = finalStop;
+      }
+    }
+
+    if (shortStop != null && price < shortStop) {
+      shortRiskPct = ((shortStop - price) / price) * 100;
+      shortTp1 = price - (shortStop - price); // 1R below
+      shortTp2 = price - (shortStop - price) * 2; // 2R below
+      const targetCandidate = nearestDownsideLiquidity(data5, LIQ_LOOKBACK);
+      shortTarget = Number.isFinite(targetCandidate) && targetCandidate < price ? targetCandidate : shortTp2;
+      const reward = price - (shortTarget ?? shortTp2);
+      const risk = (shortStop ?? 0) - price;
+      if (reward > 0 && risk > 0) shortRr = reward / risk;
+    }
+
+    const rrShortOk = Number.isFinite(shortRr ?? NaN) && (shortRr ?? 0) >= SHORT_MIN_RR;
+    const riskShortOk = SHORT_MIN_RISK_PCT > 0
+      ? Number.isFinite(shortRiskPct ?? NaN) && (shortRiskPct ?? 0) >= SHORT_MIN_RISK_PCT
+      : true;
+
+    // BEST_SHORT_ENTRY criteria
+    const bestShortCore =
+      priceBelowVwapStrict &&
+      nearVwapShort &&
+      rsiShortOk &&
+      strongBodyShort &&
+      atrOkBest &&
+      trendOkShort &&
+      sessionOK &&
+      confirm15mOkShort &&
+      liqShort.ok &&
+      shortVolOk &&
+      shortRr && shortRr >= RR_MIN_BEST &&
+      hasMarket;
+
+    if (bestShortCore && bestShortBtcOkReq) {
+      shortCategory = 'BEST_SHORT_ENTRY';
+    }
+
+    // READY_TO_SELL criteria (if not BEST)
+    if (!shortCategory) {
+      const readyShortCore =
+        sessionOK &&
+        readyPriceBelowVwap &&
+        rsiShortOk &&
+        nearVwapShort &&
+        shortVolOk &&
+        atrOkReady &&
+        shortConfirmOk &&
+        shortDailyVwapOk &&
+        strongBodyShort &&
+        readyTrendOkShort &&
+        rrShortOk &&
+        riskShortOk;
+
+      const shortSweepOk = liqShort.ok || true; // Allow without sweep like longs
+      const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
+
+      if (readyShortCore && shortSweepOkReq && shortBtcOkReq) {
+        shortCategory = 'READY_TO_SELL';
+      }
+    }
+
+    // EARLY_READY_SHORT (if no higher category)
+    if (!shortCategory) {
+      const earlyShortOk =
+        sessionOK &&
+        nearVwapShort &&
+        rsiShortOk &&
+        emaWatchOk &&
+        atrOkReady &&
+        priceBelowVwapStrict;
+
+      if (earlyShortOk) {
+        shortCategory = 'EARLY_READY_SHORT';
+      }
+    }
+  }
+
+  // Use short category if no long category found
+  if (!category && shortCategory) {
+    category = shortCategory;
+    stop = shortStop;
+    tp1 = shortTp1;
+    tp2 = shortTp2;
+    target = shortTarget;
+    rr = shortRr;
+    riskPct = shortRiskPct;
+    if (category === 'READY_TO_SELL') {
+      reasons.push(
+        'Short setup: Price below VWAP',
+        `RSI-9 falling (${SHORT_RSI_MIN}–${SHORT_RSI_MAX})`,
+        'Trend down (EMA50 < EMA200)',
+        'Bearish candle pattern'
+      );
+    } else if (category === 'BEST_SHORT_ENTRY') {
+      reasons.push(
+        'Best short: Liquidity sweep above',
+        'BTC bearish alignment',
+        `R:R ${shortRr?.toFixed(2)}≥${RR_MIN_BEST.toFixed(2)}`
+      );
+    }
   }
 
   const candidateDebug: CandidateDebug = {

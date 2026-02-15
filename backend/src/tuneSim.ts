@@ -46,6 +46,19 @@ export type TuneConfig = {
   READY_REQUIRE_DAILY_VWAP: boolean;
   // Threshold override flags
   THRESHOLD_VOL_SPIKE_X: number;
+  // Short signal config
+  ENABLE_SHORT_SIGNALS: boolean;
+  SHORT_VWAP_MAX_PCT: number;
+  SHORT_VWAP_TOUCH_PCT: number;
+  SHORT_VWAP_TOUCH_BARS: number;
+  SHORT_TREND_REQUIRED: boolean;
+  SHORT_CONFIRM15_REQUIRED: boolean;
+  SHORT_RSI_MIN: number;
+  SHORT_RSI_MAX: number;
+  SHORT_RSI_DELTA_STRICT: number;
+  SHORT_MIN_RR: number;
+  SHORT_SWEEP_REQUIRED: boolean;
+  SHORT_BTC_REQUIRED: boolean;
 };
 
 export type EvalResult = {
@@ -145,6 +158,19 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     READY_REQUIRE_DAILY_VWAP: (process.env.READY_REQUIRE_DAILY_VWAP ?? 'false').toLowerCase() === 'true',
     // Threshold override (for simulator)
     THRESHOLD_VOL_SPIKE_X: thresholds.volSpikeX,
+    // Short signal config
+    ENABLE_SHORT_SIGNALS: (process.env.ENABLE_SHORT_SIGNALS ?? 'false').toLowerCase() === 'true',
+    SHORT_VWAP_MAX_PCT: parseFloat(process.env.SHORT_VWAP_MAX_PCT || '1.50'),
+    SHORT_VWAP_TOUCH_PCT: parseFloat(process.env.SHORT_VWAP_TOUCH_PCT || '0.50'),
+    SHORT_VWAP_TOUCH_BARS: parseInt(process.env.SHORT_VWAP_TOUCH_BARS || '10', 10),
+    SHORT_TREND_REQUIRED: (process.env.SHORT_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    SHORT_CONFIRM15_REQUIRED: (process.env.SHORT_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    SHORT_RSI_MIN: parseFloat(process.env.SHORT_RSI_MIN || '30'),
+    SHORT_RSI_MAX: parseFloat(process.env.SHORT_RSI_MAX || '60'),
+    SHORT_RSI_DELTA_STRICT: parseFloat(process.env.SHORT_RSI_DELTA_STRICT || '-0.20'),
+    SHORT_MIN_RR: parseFloat(process.env.SHORT_MIN_RR || '1.35'),
+    SHORT_SWEEP_REQUIRED: (process.env.SHORT_SWEEP_REQUIRED ?? 'false').toLowerCase() !== 'false',
+    SHORT_BTC_REQUIRED: (process.env.SHORT_BTC_REQUIRED ?? 'false').toLowerCase() !== 'false',
   };
 }
 
