@@ -289,7 +289,38 @@ function sliceToLastClosed(data: OHLCV[], intervalMs: number, now = Date.now()):
   return data;
 }
 
-function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number): number {
+/** Detect gaps in candle data (missing intervals) */
+function detectGaps(data: OHLCV[], intervalMs: number, symbol: string, label: string): { gaps: number; maxGapMs: number; firstGapTime: string | null } {
+  if (data.length < 2) return { gaps: 0, maxGapMs: 0, firstGapTime: null };
+  let gaps = 0;
+  let maxGapMs = 0;
+  let firstGapTime: string | null = null;
+  for (let i = 1; i < data.length; i++) {
+    const prevClose = getCandleCloseMs(data[i - 1], intervalMs);
+    const currOpen = Number(data[i].openTime) || (Number(data[i].time) - intervalMs);
+    if (prevClose > 0 && currOpen > 0) {
+      const gap = currOpen - prevClose;
+      // Allow small tolerance (1s) for exchange timing variations
+      if (gap > intervalMs + 1000) {
+        gaps++;
+        maxGapMs = Math.max(maxGapMs, gap);
+        if (!firstGapTime) {
+          firstGapTime = new Date(prevClose).toISOString();
+        }
+      }
+    }
+  }
+  if (gaps > 0) {
+    const gapCandles = Math.round(maxGapMs / intervalMs);
+    console.warn(`[gap] ${symbol} ${label} gaps=${gaps} maxGap=${gapCandles}candles at ${firstGapTime}`);
+  }
+  return { gaps, maxGapMs, firstGapTime };
+}
+
+let lastVwapDayFlipLogScanner = 0;
+const VWAP_DAY_FLIP_LOG_COOLDOWN_MS = 60_000; // Log at most once per minute
+
+function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number, symbol?: string): number {
   if (j <= 0) return 0;
   const hasTime = data[j].time != null || data[j].openTime != null;
   if (!hasTime) return Math.max(0, j - fallbackBars + 1);
@@ -298,12 +329,26 @@ function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number): numbe
     const dt = new Date(ms);
     return dt.getUTCFullYear() * 10_000 + (dt.getUTCMonth() + 1) * 100 + dt.getUTCDate();
   };
+  const toDateStr = (key: number) => {
+    const year = Math.floor(key / 10_000);
+    const month = Math.floor((key % 10_000) / 100);
+    const day = key % 100;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  };
 
   const endKey = dateKey(getMs(data[j]));
   let anchor = j;
   while (anchor > 0) {
     const prevKey = dateKey(getMs(data[anchor - 1]));
-    if (prevKey !== endKey) break;
+    if (prevKey !== endKey) {
+      // Day boundary detected - log with cooldown to avoid spam
+      const now = Date.now();
+      if (symbol && now - lastVwapDayFlipLogScanner > VWAP_DAY_FLIP_LOG_COOLDOWN_MS) {
+        lastVwapDayFlipLogScanner = now;
+        console.log(`[vwap] day flip ${symbol} ${toDateStr(prevKey)} → ${toDateStr(endKey)} anchor=${anchor} barsIntoDay=${j - anchor}`);
+      }
+      break;
+    }
     anchor--;
   }
   return anchor;
@@ -338,7 +383,7 @@ function computeBtcMarket(data15: OHLCV[]): MarketInfo | null {
   const r = rsi(closes, 9);
   const i = closes.length - 1;
   if (i < 2) return null;
-  const anchor = dayAnchorIndexAt(data15, i, 96);
+  const anchor = dayAnchorIndexAt(data15, i, 96, 'BTCUSDT');
   const vwap = anchoredVwapAt(cumPV, cumV, anchor, i);
   const close = closes[i];
   const emaNow = e[i];
@@ -386,6 +431,11 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   }
   currentScan = scanRun;
 
+  // Log scan start with time sync info (symbols count logged after fetch)
+  const last5mClose = new Date(now - (now % (5 * 60_000)) - 1).toISOString();
+  const last15mClose = new Date(now - (now % (15 * 60_000)) - 1).toISOString();
+  console.log(`[scan] start runId=${scanRun.runId} now=${new Date(now).toISOString()} 5mLastClose=${last5mClose} 15mLastClose=${last15mClose}`);
+
   const signalsByCategory: Record<string, number> = {
     WATCH: 0,
     EARLY_READY: 0,
@@ -422,6 +472,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       errOther += 1;
     }
   }
+  console.log(`[scan] symbols=${symbols.length}`);
 
   const outs: any[] = [];
   const toNotify: Array<{ sym: string; title: string; body: string; sig: any; dedupeKey: string; }> = [];
@@ -464,6 +515,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     try {
       let d5 = await klines(sym, '5m', 300);
       d5 = sliceToLastClosed(d5, 5 * 60_000, now);
+      detectGaps(d5, 5 * 60_000, sym, '5m');
       if (d5.length < 210) { precheck.fail_5m_candles += 1; continue; }
 
       const last5 = d5[d5.length - 1];
@@ -497,7 +549,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const vols5 = d5.map(d => d.volume);
       const tp5 = d5.map(d => (d.high + d.low + d.close) / 3);
       const { cumPV, cumV } = buildCum(tp5, vols5);
-      const a0 = dayAnchorIndexAt(d5, i5, 288);
+      const a0 = dayAnchorIndexAt(d5, i5, 288, sym);
       const vwap5 = anchoredVwapAt(cumPV, cumV, a0, i5);
       if (!Number.isFinite(vwap5) || vwap5 <= 0) { precheck.fail_vwap += 1; continue; }
       const distToVwapPct = ((last5.close - vwap5) / vwap5) * 100;
@@ -509,6 +561,7 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
 
       let d15 = await klines(sym, '15m', 260);
       d15 = sliceToLastClosed(d15, 15 * 60_000, now);
+      detectGaps(d15, 15 * 60_000, sym, '15m');
       if (d15.length < 210) { precheck.fail_15m_candles += 1; continue; }
       fetchedOk++;
 

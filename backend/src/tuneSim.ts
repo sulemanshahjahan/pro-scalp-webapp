@@ -38,6 +38,10 @@ export type TuneConfig = {
   BEST_EMA_EPS_PCT: number;
   CONFIRM15_VWAP_EPS_PCT: number;
   CONFIRM15_VWAP_ROLL_BARS: number;
+  // Sweep parameters
+  SWEEP_MIN_DEPTH_ATR_MULT: number;
+  SWEEP_MAX_DEPTH_CAP: number;
+  LIQ_LOOKBACK: number;
 };
 
 export type EvalResult = {
@@ -129,6 +133,10 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
     CONFIRM15_VWAP_EPS_PCT: Number.isFinite(CONFIRM15_VWAP_EPS_PCT) ? CONFIRM15_VWAP_EPS_PCT : 0.20,
     CONFIRM15_VWAP_ROLL_BARS: Number.isFinite(CONFIRM15_VWAP_ROLL_BARS) ? CONFIRM15_VWAP_ROLL_BARS : 96,
+    // Sweep parameters
+    SWEEP_MIN_DEPTH_ATR_MULT: parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.35'),
+    SWEEP_MAX_DEPTH_CAP: parseFloat(process.env.SWEEP_MAX_DEPTH_CAP || '0.25'),
+    LIQ_LOOKBACK: parseInt(process.env.LIQ_LOOKBACK || '20', 10),
   };
 }
 

@@ -22,6 +22,12 @@ const MIN_BODY_PCT = parseFloat(process.env.MIN_BODY_PCT || '0.15');   // candle
 const READY_BODY_PCT = parseFloat(process.env.READY_BODY_PCT || '0.10'); // READY body filter (%)
 const READY_CLOSE_POS_MIN = parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'); // close in top 40% of candle range
 const READY_UPPER_WICK_MAX = parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'); // upper wick <= 40% of range
+
+// === ATR-Based Body Sizing (NEW) ===
+const READY_BODY_ATR_MULT = parseFloat(process.env.READY_BODY_ATR_MULT || '0.40');   // Body >= 0.4x ATR
+const BEST_BODY_ATR_MULT = parseFloat(process.env.BEST_BODY_ATR_MULT || '0.80');     // Body >= 0.8x ATR
+const READY_BODY_MIN_PCT = parseFloat(process.env.READY_BODY_MIN_PCT || '0.008');    // Static floor: 0.8%
+const BEST_BODY_MIN_PCT = parseFloat(process.env.BEST_BODY_MIN_PCT || '0.015');      // Static floor: 1.5%
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
 const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '0');
@@ -74,7 +80,10 @@ const SESSIONS_UTC = process.env.SESSIONS_UTC || '07-11,13-20';
 /** ===================================================== */
 
 /** ----- Helpers: daily-anchored VWAP (fallback = last N bars) ----- */
-function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number): number {
+let lastVwapDayFlipLog = 0;
+const VWAP_DAY_FLIP_LOG_COOLDOWN_MS = 60_000; // Log at most once per minute
+
+function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number, symbol?: string): number {
   if (j <= 0) return 0;
   const hasTime = data[j].time != null || data[j].openTime != null;
   if (!hasTime) return Math.max(0, j - fallbackBars + 1);
@@ -84,12 +93,26 @@ function dayAnchorIndexAt(data: OHLCV[], j: number, fallbackBars: number): numbe
     const dt = new Date(ms);
     return dt.getUTCFullYear() * 10_000 + (dt.getUTCMonth() + 1) * 100 + dt.getUTCDate();
   };
+  const toDateStr = (key: number) => {
+    const year = Math.floor(key / 10_000);
+    const month = Math.floor((key % 10_000) / 100);
+    const day = key % 100;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  };
 
   const endKey = dateKey(getMs(data[j]));
   let anchor = j;
   while (anchor > 0) {
     const prevKey = dateKey(getMs(data[anchor - 1]));
-    if (prevKey !== endKey) break;
+    if (prevKey !== endKey) {
+      // Day boundary detected - log with cooldown to avoid spam
+      const now = Date.now();
+      if (symbol && now - lastVwapDayFlipLog > VWAP_DAY_FLIP_LOG_COOLDOWN_MS) {
+        lastVwapDayFlipLog = now;
+        console.log(`[vwap] day flip ${symbol} ${toDateStr(prevKey)} → ${toDateStr(endKey)} anchor=${anchor} barsIntoDay=${j - anchor}`);
+      }
+      break;
+    }
     anchor--;
   }
   return anchor;
@@ -113,6 +136,56 @@ function anchoredVwapAt(cumPV: number[], cumV: number[], start: number, j: numbe
   const den = cumV[j] - (s > 0 ? cumV[s - 1] : 0);
   return den ? num / den : NaN;
 }
+
+// === GATE: Body Quality (ATR-Relative with Static Floors) ===
+export type BodyQualityResult = { pass: boolean; score: number; details: string };
+
+export function checkBodyQuality(
+  candle: { open: number; high: number; low: number; close: number },
+  atrPct: number,
+  isBest: boolean
+): BodyQualityResult {
+  const bodySize = Math.abs(candle.close - candle.open);
+  const bodyPct = bodySize / candle.close;
+  const range = candle.high - candle.low;
+  const upperWick = candle.high - Math.max(candle.open, candle.close);
+  const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+
+  // Dynamic thresholds
+  const atrMult = isBest ? BEST_BODY_ATR_MULT : READY_BODY_ATR_MULT;
+  const minPct = isBest ? BEST_BODY_MIN_PCT : READY_BODY_MIN_PCT;
+
+  // ATR-based required body vs static floor - use whichever is LARGER (stricter)
+  const atrBasedBody = (candle.close * atrPct / 100) * atrMult;
+  const staticFloor = candle.close * minPct;
+  const requiredBody = Math.max(atrBasedBody, staticFloor);
+
+  const closePos = range > 0 ? (candle.close - candle.low) / range : 0;
+  const upperWickPct = range > 0 ? upperWick / range : 0;
+
+  // Calculate quality score (0-100)
+  const bodyScore = Math.min(100, (bodySize / requiredBody) * 50);
+  const closeScore = closePos >= READY_CLOSE_POS_MIN ? 30 : (closePos * 50);
+  const wickScore = upperWickPct <= READY_UPPER_WICK_MAX ? 20 : Math.max(0, 20 - (upperWickPct - READY_UPPER_WICK_MAX) * 100);
+  const totalScore = bodyScore + closeScore + wickScore;
+
+  // Pass criteria
+  const bullish = candle.close > candle.open;
+  const pass = (
+    bullish &&
+    bodySize >= requiredBody &&
+    closePos >= READY_CLOSE_POS_MIN &&
+    upperWickPct <= READY_UPPER_WICK_MAX
+  );
+
+  return {
+    pass,
+    score: Math.round(totalScore),
+    details: `${pass ? 'PASS' : 'FAIL'} body:${(bodyPct * 100).toFixed(2)}% vs req:${(requiredBody / candle.close * 100).toFixed(2)}% ` +
+             `closePos:${(closePos * 100).toFixed(0)}% wick:${(upperWickPct * 100).toFixed(0)}% score:${Math.round(totalScore)}`
+  };
+}
+
 type Gate = { key: string; ok: boolean; reason: string };
 
 function buildGateDebug(gates: Gate[]) {
@@ -362,6 +435,8 @@ export type CandidateFeatureSnapshot = {
     closePos: number;
     upperWickPct: number;
     vwapLowDistPctLast: number[];
+    bodyQualityReadyScore?: number;
+    bodyQualityBestScore?: number;
   };
   computed: {
     sessionOk: boolean;
@@ -384,6 +459,8 @@ export type CandidateFeatureSnapshot = {
     btcBear: boolean;
     bullish: boolean;
     stopReason?: string | null;
+    bodyQualityReady?: string;
+    bodyQualityBest?: string;
   };
 };
 
@@ -420,6 +497,14 @@ function analyzeSymbolInternal(
     if (data5.length < 210 || data15.length < 210) return null;
   }
 
+  // Log which candles are being used for this signal analysis
+  const last5m = data5[data5.length - 1];
+  const last15m = data15[data15.length - 1];
+  const last5mCloseTs = fmtTs(candleCloseMs(last5m, 5 * 60_000));
+  const last15mCloseTs = fmtTs(candleCloseMs(last15m, 15 * 60_000));
+  const entryTimeTs = fmtTs(entryTimeMs);
+  console.log(`[signal] ${symbol} using 5mClose=${last5mCloseTs} 15mClose=${last15mCloseTs} entryTime=${entryTimeTs}`);
+
   // ----- 5m series -----
   const closes5 = data5.map(d => d.close);
   const highs5  = data5.map(d => d.high);
@@ -440,9 +525,9 @@ function analyzeSymbolInternal(
   const i2 = i - 2;
 
   // ✅ daily-anchored VWAP on 5m (fallback 288 bars ~ 1 day)
-  const a2 = dayAnchorIndexAt(data5, i2, 288);
-  const a1 = dayAnchorIndexAt(data5, i1, 288);
-  const a0 = dayAnchorIndexAt(data5, i, 288);
+  const a2 = dayAnchorIndexAt(data5, i2, 288, symbol);
+  const a1 = dayAnchorIndexAt(data5, i1, 288, symbol);
+  const a0 = dayAnchorIndexAt(data5, i, 288, symbol);
   const vwap_i2 = anchoredVwapAt(cumPV5, cumV5, a2, i2);
   const vwap_i1 = anchoredVwapAt(cumPV5, cumV5, a1, i1);
   const vwap_i  = anchoredVwapAt(cumPV5, cumV5, a0, i);
@@ -483,7 +568,7 @@ function analyzeSymbolInternal(
     .slice(touchStart, i + 1)
     .some((low, offset) => {
       const j = touchStart + offset;
-      const aj = dayAnchorIndexAt(data5, j, 288);
+      const aj = dayAnchorIndexAt(data5, j, 288, symbol);
       const vwap_j = anchoredVwapAt(cumPV5, cumV5, aj, j);
       return Number.isFinite(vwap_j) && vwap_j > 0 && low <= vwap_j * (1 + READY_VWAP_TOUCH_PCT / 100);
     });
@@ -520,24 +605,20 @@ function analyzeSymbolInternal(
   const rsiReadyOk = rsiNow >= RSI_READY_MIN && rsiNow <= RSI_READY_MAX && rsiDelta >= RSI_DELTA_STRICT;
   const rsiWatchOk = rsiNow >= RSI_EARLY_MIN && rsiNow <= RSI_EARLY_MAX && rsiNow >= (rsiPrev - 0.2);
 
+  // === ATR-Relative Body Quality Check ===
+  const currentCandle = { open: data5[i].open, high: highs5[i], low: lows5[i], close: closes5[i] };
+  const bodyQualityBest = checkBodyQuality(currentCandle, atrNow, true);
+  const bodyQualityReady = checkBodyQuality(currentCandle, atrNow, false);
+  const strongBodyBest = bodyQualityBest.pass;
+  const strongBodyReady = bodyQualityReady.pass;
+
+  // Backward compatibility: also compute old-style body metrics for logging
   const openNow = data5[i].open;
   const bodyPct = (openNow && openNow > 0) ? (Math.abs((closes5[i] - openNow) / openNow) * 100) : 0;
   const bullish = openNow != null ? closes5[i] > openNow : false;
-
   const rangeNow = highs5[i] - lows5[i];
   const closePos = rangeNow > 0 ? (closes5[i] - lows5[i]) / rangeNow : 0;
   const upperWickPct = rangeNow > 0 ? (highs5[i] - closes5[i]) / rangeNow : 1;
-
-  const strongBodyBest =
-    bullish &&
-    bodyPct >= MIN_BODY_PCT &&
-    upperWickPct <= 0.5;
-
-  const strongBodyReady =
-    bullish &&
-    bodyPct >= READY_BODY_PCT &&
-    closePos >= READY_CLOSE_POS_MIN &&
-    upperWickPct <= READY_UPPER_WICK_MAX;
 
   const strictDbg: { reason?: string } = {};
   const softDbg: { reason?: string } = {};
@@ -783,7 +864,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     { key: 'atrOkReady', ok: atrOkReady, reason: 'ATR too high' },
     { key: 'confirm15mOk', ok: readyConfirmOk, reason: '15m confirmation not satisfied' },
     { key: 'dailyVwapOk', ok: readyDailyVwapOk, reason: 'Price below daily VWAP (soft path blocked)' },
-    { key: 'strongBody', ok: strongBodyReady, reason: 'No strong bullish body candle' },
+    { key: 'strongBody', ok: strongBodyReady, reason: strongBodyReady ? '' : bodyQualityReady.details },
     { key: 'rrOk', ok: rrReadyOk, reason: `R:R below ${READY_MIN_RR.toFixed(2)}` },
     { key: 'riskOk', ok: readyRiskOk, reason: `Risk% below ${READY_MIN_RISK_PCT.toFixed(2)}` },
     { key: 'trendOk', ok: readyTrendOkReq, reason: 'Trend not OK (EMA50>EMA200 + EMA200 rising)' },
@@ -953,7 +1034,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     { key: 'priceAboveEma', ok: bestPriceAboveEma, reason: 'Price not above EMA200' },
     { key: 'nearVwapBuy', ok: nearVwapBuy, reason: 'Too far from VWAP (extended)' },
     { key: 'rsiBestOk', ok: rsiBestOk, reason: `RSI not in ${RSI_BEST_MIN}–${RSI_BEST_MAX} rising window` },
-    { key: 'strongBody', ok: strongBodyBest, reason: 'No strong bullish body candle' },
+    { key: 'strongBody', ok: strongBodyBest, reason: strongBodyBest ? '' : bodyQualityBest.details },
     { key: 'atrOkBest', ok: atrOkBest, reason: 'ATR too high' },
     { key: 'trendOk', ok: trendOk, reason: 'Trend not OK (EMA50>EMA200 + both rising)' },
     { key: 'sessionOK', ok: sessionOK, reason: 'Session not active' },
@@ -1035,6 +1116,8 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       closePos,
       upperWickPct,
       vwapLowDistPctLast,
+      bodyQualityReadyScore: bodyQualityReady.score,
+      bodyQualityBestScore: bodyQualityBest.score,
     },
     computed: {
       sessionOk: sessionOK,
@@ -1057,6 +1140,8 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       btcBear,
       bullish,
       stopReason,
+      bodyQualityReady: bodyQualityReady.details,
+      bodyQualityBest: bodyQualityBest.details,
     },
   };
   const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug };
