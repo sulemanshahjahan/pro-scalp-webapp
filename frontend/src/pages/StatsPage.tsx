@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getReadyGateDebug } from '../services/api';
+import MarketConditionsDashboard from '../components/MarketConditionsDashboard';
 
 const HORIZONS = [15, 30, 60, 120, 240] as const;
 const CATEGORIES = ['BEST_ENTRY', 'READY_TO_BUY', 'EARLY_READY', 'WATCH'] as const;
@@ -580,6 +581,10 @@ export default function StatsPage() {
             {btcStale ? <span className="ml-2 px-2 py-0.5 rounded-md border border-amber-400/40 text-amber-200 bg-amber-400/10">Stale</span> : null}
           </div>
         </div>
+      </section>
+
+      <section className="fade-up">
+        <MarketConditionsDashboard />
       </section>
 
       <section className="grid grid-cols-1 lg:grid-cols-6 gap-3 fade-up">

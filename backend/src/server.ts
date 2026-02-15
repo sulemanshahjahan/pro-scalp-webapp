@@ -13,6 +13,7 @@ import { emailNotify } from './emailNotifier.js';
 import { getDb } from './db/db.js';
 import { getLatestTuningBundle, listRecentTuningBundles, getTuningBundleById } from './tuningBundleStore.js';
 import { generateTuningBundle } from './tuning/generateTuningBundle.js';
+import { getMarketConditions } from './marketConditions.js';
 import {
   clearAllSignalsData,
   deleteOutcomesBulk,
@@ -1355,6 +1356,16 @@ app.get('/api/stats/health', async (req, res) => {
     const days = Number((req.query as any)?.days);
     const out = await getStatsHealth({ days: Number.isFinite(days) ? days : undefined });
     res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Market Conditions Dashboard - dual timeframe health metrics
+app.get('/api/market/conditions', async (_req, res) => {
+  try {
+    const result = await getMarketConditions(['1h', '4h']);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
