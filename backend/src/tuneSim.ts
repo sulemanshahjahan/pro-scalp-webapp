@@ -42,6 +42,10 @@ export type TuneConfig = {
   SWEEP_MIN_DEPTH_ATR_MULT: number;
   SWEEP_MAX_DEPTH_CAP: number;
   LIQ_LOOKBACK: number;
+  // Daily VWAP requirement
+  READY_REQUIRE_DAILY_VWAP: boolean;
+  // Threshold override flags
+  THRESHOLD_VOL_SPIKE_X: number;
 };
 
 export type EvalResult = {
@@ -137,6 +141,10 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     SWEEP_MIN_DEPTH_ATR_MULT: parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.35'),
     SWEEP_MAX_DEPTH_CAP: parseFloat(process.env.SWEEP_MAX_DEPTH_CAP || '0.25'),
     LIQ_LOOKBACK: parseInt(process.env.LIQ_LOOKBACK || '20', 10),
+    // Daily VWAP requirement
+    READY_REQUIRE_DAILY_VWAP: (process.env.READY_REQUIRE_DAILY_VWAP ?? 'false').toLowerCase() === 'true',
+    // Threshold override (for simulator)
+    THRESHOLD_VOL_SPIKE_X: thresholds.volSpikeX,
   };
 }
 
