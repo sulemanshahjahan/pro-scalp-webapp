@@ -113,7 +113,7 @@ function buildOverrideNotes(overrides: Record<string, any> | undefined) {
 }
 
 type SimEval = {
-  counts: { watch: number; early: number; ready: number; best: number };
+  counts: { watch: number; early: number; ready: number; best: number; watchShort: number; earlyShort: number; readyShort: number; bestShort: number };
   funnel: {
     candidate_evaluated: number;
     watch_created: number;
@@ -122,6 +122,12 @@ type SimEval = {
     best_core_true: number;
     ready_final_true: number;
     best_final_true: number;
+    watch_short_created: number;
+    early_short_created: number;
+    ready_short_core_true: number;
+    best_short_core_true: number;
+    ready_short_final_true: number;
+    best_short_final_true: number;
   };
   firstFailed: Record<string, Record<string, number>>;
   gateTrue: Record<string, Record<string, number>>;
@@ -135,7 +141,7 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
   const includeExamples = Boolean(opts?.includeExamples);
   const examplesPerGate = Math.max(1, Math.min(50, Number(opts?.examplesPerGate ?? 5)));
 
-  const counts = { watch: 0, early: 0, ready: 0, best: 0 };
+  const counts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
   const funnel = {
     candidate_evaluated: rows.length,
     watch_created: 0,
@@ -144,6 +150,12 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     best_core_true: 0,
     ready_final_true: 0,
     best_final_true: 0,
+    watch_short_created: 0,
+    early_short_created: 0,
+    ready_short_core_true: 0,
+    best_short_core_true: 0,
+    ready_short_final_true: 0,
+    best_short_final_true: 0,
   };
   const firstFailed: Record<string, Record<string, number>> = {
     watch: {},
@@ -226,6 +238,10 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     if (evalRes.earlyOk) counts.early += 1;
     if (evalRes.readyOk) counts.ready += 1;
     if (evalRes.bestOk) counts.best += 1;
+    if (evalRes.watchShortOk) counts.watchShort += 1;
+    if (evalRes.earlyShortOk) counts.earlyShort += 1;
+    if (evalRes.readyShortOk) counts.readyShort += 1;
+    if (evalRes.bestShortOk) counts.bestShort += 1;
 
     if (evalRes.watchOk) funnel.watch_created += 1;
     if (evalRes.earlyOk) funnel.early_created += 1;
@@ -233,6 +249,12 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     if (evalRes.bestCore) funnel.best_core_true += 1;
     if (evalRes.readyOk) funnel.ready_final_true += 1;
     if (evalRes.bestOk) funnel.best_final_true += 1;
+    if (evalRes.watchShortOk) funnel.watch_short_created += 1;
+    if (evalRes.earlyShortOk) funnel.early_short_created += 1;
+    if (evalRes.readyShortCore) funnel.ready_short_core_true += 1;
+    if (evalRes.bestShortCore) funnel.best_short_core_true += 1;
+    if (evalRes.readyShortOk) funnel.ready_short_final_true += 1;
+    if (evalRes.bestShortOk) funnel.best_short_final_true += 1;
 
     addGateTrue(gateTrue.watch, evalRes.watchFlags);
     addGateTrue(gateTrue.early, evalRes.earlyFlags);

@@ -59,6 +59,7 @@ export type TuneConfig = {
   SHORT_MIN_RR: number;
   SHORT_SWEEP_REQUIRED: boolean;
   SHORT_BTC_REQUIRED: boolean;
+  BEST_SHORT_BTC_REQUIRED: boolean;
 };
 
 export type EvalResult = {
@@ -75,6 +76,13 @@ export type EvalResult = {
   earlyFlags: Record<string, boolean>;
   readyFlags: Record<string, boolean>;
   bestFlags: Record<string, boolean>;
+  // Short signals
+  watchShortOk?: boolean;
+  earlyShortOk?: boolean;
+  readyShortOk?: boolean;
+  bestShortOk?: boolean;
+  readyShortCore?: boolean;
+  bestShortCore?: boolean;
 };
 
 export type CandidateFeatureInput = {
@@ -171,6 +179,7 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     SHORT_MIN_RR: parseFloat(process.env.SHORT_MIN_RR || '1.35'),
     SHORT_SWEEP_REQUIRED: (process.env.SHORT_SWEEP_REQUIRED ?? 'false').toLowerCase() !== 'false',
     SHORT_BTC_REQUIRED: (process.env.SHORT_BTC_REQUIRED ?? 'false').toLowerCase() !== 'false',
+    BEST_SHORT_BTC_REQUIRED: (process.env.BEST_SHORT_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false',
   };
 }
 
@@ -437,6 +446,62 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const bestBtcOkReq = cfg.BEST_BTC_REQUIRED ? bestBtcOk : true;
   const bestOk = bestCore && bestBtcOkReq;
 
+  // Short signal evaluation (mirror of long logic)
+  const enableShort = cfg.ENABLE_SHORT_SIGNALS;
+  const trendOkShort = emaDistPct < 0; // EMA50 < EMA200 (price below EMA)
+  const readyTrendOkShort = cfg.SHORT_TREND_REQUIRED ? trendOkShort : true;
+  const priceBelowVwapStrict = vwapDistPct < 0;
+  const shortVwapMax = Number.isFinite(cfg.SHORT_VWAP_MAX_PCT) ? cfg.SHORT_VWAP_MAX_PCT : 1.50;
+  const nearVwapShort = Math.abs(vwapDistPct) <= shortVwapMax;
+  const readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && vwapDistPct <= 0.12);
+  const rsiShortOk = rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && rsiDelta <= cfg.SHORT_RSI_DELTA_STRICT;
+  const bearish = !bullish;
+  const strongBodyShort = bearish && bodyPct >= 0.008; // Simplified check
+  const shortConfirmOk = cfg.SHORT_CONFIRM15_REQUIRED ? confirm15Ok : true;
+  const shortDailyVwapOk = cfg.READY_REQUIRE_DAILY_VWAP ? (confirm15Strict || priceBelowVwapStrict) : true;
+  const rrShortOk = Number.isFinite(rrMetric) ? rrMetric >= cfg.SHORT_MIN_RR : true;
+  const btcBearOk = hasMarket && btcBear;
+  const shortBtcOkReq = cfg.SHORT_BTC_REQUIRED ? btcBearOk : true;
+  const bestShortBtcOk = hasMarket && btcBear;
+  const bestShortBtcOkReq = cfg.BEST_SHORT_BTC_REQUIRED ? bestShortBtcOk : true;
+
+  const readyShortCore = enableShort &&
+    sessionOk &&
+    readyPriceBelowVwap &&
+    rsiShortOk &&
+    nearVwapShort &&
+    readyVolOk &&
+    atrOkReady &&
+    shortConfirmOk &&
+    shortDailyVwapOk &&
+    strongBodyShort &&
+    readyTrendOkShort &&
+    rrShortOk &&
+    readyRiskOk;
+
+  const shortSweepOk = sweepOk || true;
+  const shortSweepOkReq = cfg.SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
+  const readyShortOk = readyShortCore && shortSweepOkReq && shortBtcOkReq;
+
+  const bestShortCore = enableShort &&
+    priceBelowVwapStrict &&
+    nearVwapShort &&
+    rsiShortOk &&
+    strongBodyShort &&
+    atrOkBest &&
+    trendOkShort &&
+    sessionOk &&
+    confirm15Ok &&
+    sweepOk &&
+    bestVolOk &&
+    rrOk &&
+    hasMarket;
+
+  const bestShortOk = bestShortCore && bestShortBtcOkReq;
+
+  const watchShortOk = enableShort && nearVwapShort && rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && emaWatchOk;
+  const earlyShortOk = enableShort && sessionOk && nearVwapShort && rsiShortOk && emaWatchOk && atrOkReady && priceBelowVwapStrict;
+
   return {
     watchOk: nearVwapWatch && rsiWatchOk && emaWatchOk,
     earlyOk:
@@ -499,5 +564,12 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
       rrOk,
       hasMarket,
     },
+    // Short results
+    watchShortOk,
+    earlyShortOk,
+    readyShortOk,
+    bestShortOk,
+    readyShortCore,
+    bestShortCore,
   };
 }
