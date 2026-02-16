@@ -74,6 +74,24 @@ type ReadyGateFailures = GateFailures & {
   ready_priceAboveVwap_relaxed_true: number;
 };
 
+type ReadyShortGateFailures = GateFailures & {
+  ready_core_evaluated: number;
+  ready_core_true: number;
+  ready_core_first_failed: Record<string, number>;
+  ready_core_flag_true: Record<string, number>;
+  ready_confirm15_strict_true: number;
+};
+
+type Confirm15Stats = {
+  pass_strict: number;
+  pass_soft: number;
+  fail_len: number;
+  fail_vwap: number;
+  fail_ema: number;
+  fail_rsi: number;
+  fail_other: number;
+};
+
 type CandidateStats = {
   candidate_evaluated: number;
   candidate_skipped: number;
@@ -107,17 +125,12 @@ type ScanGateStats = {
   bestCandidates: number;
   ready: ReadyGateFailures;
   best: GateFailures;
+  readyShort: ReadyShortGateFailures;
+  bestShort: GateFailures;
   candidate: CandidateStats;
   precheck: PrecheckStats;
-  confirm15: {
-    pass_strict: number;
-    pass_soft: number;
-    fail_len: number;
-    fail_vwap: number;
-    fail_ema: number;
-    fail_rsi: number;
-    fail_other: number;
-  };
+  confirm15: Confirm15Stats;
+  confirm15Short: Confirm15Stats;
 };
 
 type ScanHealth = {
@@ -192,6 +205,29 @@ function initReadyGateFailures(): ReadyGateFailures {
   };
 }
 
+function initReadyShortGateFailures(): ReadyShortGateFailures {
+  return {
+    ...initGateFailures(),
+    ready_core_evaluated: 0,
+    ready_core_true: 0,
+    ready_core_first_failed: {},
+    ready_core_flag_true: {},
+    ready_confirm15_strict_true: 0,
+  };
+}
+
+function initConfirm15Stats(): Confirm15Stats {
+  return {
+    pass_strict: 0,
+    pass_soft: 0,
+    fail_len: 0,
+    fail_vwap: 0,
+    fail_ema: 0,
+    fail_rsi: 0,
+    fail_other: 0,
+  };
+}
+
 function initPrecheckStats(): PrecheckStats {
   return {
     skip_stable: 0,
@@ -230,17 +266,12 @@ function initGateStats(): ScanGateStats {
     bestCandidates: 0,
     ready: initReadyGateFailures(),
     best: initGateFailures(),
+    readyShort: initReadyShortGateFailures(),
+    bestShort: initGateFailures(),
     candidate: initCandidateStats(),
     precheck: initPrecheckStats(),
-    confirm15: {
-      pass_strict: 0,
-      pass_soft: 0,
-      fail_len: 0,
-      fail_vwap: 0,
-      fail_ema: 0,
-      fail_rsi: 0,
-      fail_other: 0,
-    },
+    confirm15: initConfirm15Stats(),
+    confirm15Short: initConfirm15Stats(),
   };
 }
 
@@ -621,22 +652,23 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         }
       }
 
-      const c15 = res?.debug?.confirm15;
-      if (c15) {
-        const stats = gateStats.confirm15;
-        if (c15.strict.ok) {
+      const accumulateConfirm15 = (stats: Confirm15Stats, c15: any) => {
+        if (!c15) return;
+        if (c15.strict?.ok) {
           stats.pass_strict += 1;
-        } else if (c15.soft.ok) {
+        } else if (c15.soft?.ok) {
           stats.pass_soft += 1;
         } else {
-          const reason = c15.soft.reason || c15.strict.reason || 'unknown';
+          const reason = c15.soft?.reason || c15.strict?.reason || 'unknown';
           if (reason === 'len' || reason === 'i') stats.fail_len += 1;
           else if (reason === 'vwap') stats.fail_vwap += 1;
           else if (reason === 'ema') stats.fail_ema += 1;
           else if (reason === 'rsi') stats.fail_rsi += 1;
           else stats.fail_other += 1;
         }
-      }
+      };
+      accumulateConfirm15(gateStats.confirm15, res?.debug?.confirm15);
+      accumulateConfirm15(gateStats.confirm15Short, res?.debug?.confirm15Short);
 
       const features = res?.debug?.features;
       if (features) {
@@ -658,6 +690,8 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       if (snap) {
         const ready = snap.ready;
         const best = snap.best;
+        const short = snap.short;
+        const bestShort = snap.bestShort;
 
         gateStats.readyCandidates += 1;
         gateStats.bestCandidates += 1;
@@ -751,6 +785,75 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         if (best.corePreSweep && !best.sweep) gateStats.best.failed_sweep += 1;
         if (best.corePreRr && !best.rr) gateStats.best.failed_rr += 1;
         if (best.core && !best.btc) gateStats.best.failed_btc_gate += 1;
+
+        if (short) {
+          if (!short.nearVwap) gateStats.readyShort.failed_near_vwap += 1;
+          if (!short.confirm15) gateStats.readyShort.failed_confirm15 += 1;
+          if (!short.trend) gateStats.readyShort.failed_trend += 1;
+          if (!short.volSpike) gateStats.readyShort.failed_volSpike += 1;
+          if (!short.atr) gateStats.readyShort.failed_atr += 1;
+          if (short.core && !short.sweep) gateStats.readyShort.failed_sweep += 1;
+          if (short.core && short.sweep && !short.btc) gateStats.readyShort.failed_btc_gate += 1;
+
+          gateStats.readyShort.ready_core_evaluated += 1;
+          if (short.core) gateStats.readyShort.ready_core_true += 1;
+          if (short.confirm15Strict) gateStats.readyShort.ready_confirm15_strict_true += 1;
+
+          const shortCoreFlags: Record<string, boolean> = {
+            sessionOK: Boolean(short.sessionOk),
+            priceBelowVwap: Boolean(short.priceBelowVwap),
+            priceBelowEma: Boolean(short.priceBelowEma),
+            nearVwapShort: Boolean(short.nearVwap),
+            rsiShortOk: Boolean(short.rsiShortOk),
+            strongBody: Boolean(short.strongBody),
+            readyVolOk: Boolean(short.volSpike),
+            atrOkReady: Boolean(short.atr),
+            confirm15mOk: Boolean(short.confirm15),
+            trendOkShort: Boolean(short.trend),
+            rrOk: Boolean(short.rrOk),
+            riskOk: Boolean(short.riskOk),
+          };
+          const shortCoreOrder = [
+            'sessionOK',
+            'priceBelowVwap',
+            'priceBelowEma',
+            'nearVwapShort',
+            'rsiShortOk',
+            'strongBody',
+            'readyVolOk',
+            'atrOkReady',
+            'confirm15mOk',
+            'trendOkShort',
+            'rrOk',
+            'riskOk',
+          ];
+          const shortFirstFailed = shortCoreOrder.find((k) => !shortCoreFlags[k]);
+          if (shortFirstFailed) {
+            gateStats.readyShort.ready_core_first_failed[shortFirstFailed] =
+              (gateStats.readyShort.ready_core_first_failed[shortFirstFailed] ?? 0) + 1;
+          }
+          for (const k of shortCoreOrder) {
+            if (shortCoreFlags[k]) {
+              gateStats.readyShort.ready_core_flag_true[k] =
+                (gateStats.readyShort.ready_core_flag_true[k] ?? 0) + 1;
+            }
+          }
+
+          const rrFailedShort = !shortCoreFlags.rrOk
+            && shortCoreOrder.filter(k => k !== 'rrOk').every((k) => shortCoreFlags[k]);
+          if (rrFailedShort) gateStats.readyShort.failed_rr += 1;
+        }
+
+        if (bestShort) {
+          if (!bestShort.nearVwap) gateStats.bestShort.failed_near_vwap += 1;
+          if (!bestShort.confirm15) gateStats.bestShort.failed_confirm15 += 1;
+          if (!bestShort.trend) gateStats.bestShort.failed_trend += 1;
+          if (!bestShort.volSpike) gateStats.bestShort.failed_volSpike += 1;
+          if (!bestShort.atr) gateStats.bestShort.failed_atr += 1;
+          if (bestShort.corePreSweep && !bestShort.sweep) gateStats.bestShort.failed_sweep += 1;
+          if (bestShort.corePreRr && !bestShort.rr) gateStats.bestShort.failed_rr += 1;
+          if (bestShort.core && !bestShort.btc) gateStats.bestShort.failed_btc_gate += 1;
+        }
       }
 
       const sig = res?.signal ?? null;

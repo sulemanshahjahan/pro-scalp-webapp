@@ -646,6 +646,7 @@ export type AnalyzeResult = {
     gateSnapshot: any;
     features?: CandidateFeatureSnapshot;
     confirm15?: Confirm15Debug;
+    confirm15Short?: Confirm15Debug;
   };
 };
 
@@ -1141,55 +1142,86 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
   let shortTarget: number | null = null;
   let shortRr: number | null = null;
   let shortRiskPct: number | null = null;
+  let trendOkShort = false;
+  let readyTrendOkShort = false;
+  let priceBelowVwapStrict = false;
+  let nearVwapShort = false;
+  let readyPriceBelowVwap = false;
+  let rsiShortOk = false;
+  let strongBodyShort = false;
+  let shortVolOk = false;
+  let shortSweepOk = false;
+  let rrShortOk = false;
+  let riskShortOk = false;
+  let confirm15mStrictShort = false;
+  let confirm15mSoftShort = false;
+  let confirm15mOkShort = false;
+  let shortConfirmOk = true;
+  let shortDailyVwapOk = true;
+  let shortBtcOkReq = true;
+  let bestShortBtcOkReq = true;
+  let readyShortCore = false;
+  let bestShortCorePreSweep = false;
+  let bestShortCorePreRr = false;
+  let bestShortCore = false;
+  let bestShortRrOk = false;
+  let confirm15ShortDebug: Confirm15Debug | undefined;
 
   if (ENABLE_SHORT_SIGNALS) {
     // Short trend: EMA50 < EMA200 and falling
-    const trendOkShort = ema50Now < emaNow && !ema50Up && !ema200Up;
-    const readyTrendOkShort = SHORT_TREND_REQUIRED ? trendOkShort : true;
+    trendOkShort = ema50Now < emaNow && !ema50Up && !ema200Up;
+    readyTrendOkShort = SHORT_TREND_REQUIRED ? trendOkShort : true;
 
     // Short VWAP: Price below VWAP
-    const priceBelowVwapStrict = price < vwap_i;
+    priceBelowVwapStrict = price < vwap_i;
     const shortVwapMax = Number.isFinite(SHORT_VWAP_MAX_PCT) ? SHORT_VWAP_MAX_PCT : 1.50;
     const shortVwapTouchStart = Math.max(0, i - SHORT_VWAP_TOUCH_BARS + 1);
     const touchedVwapRecentlyShort = highs5
       .slice(shortVwapTouchStart, i + 1)
       .some((high) => high >= vwap_i * (1 - SHORT_VWAP_TOUCH_PCT / 100));
     const nearVwapShortDist = Math.abs(distToVwapPct) <= shortVwapMax;
-    const nearVwapShort = nearVwapShortDist && touchedVwapRecentlyShort;
-    const readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && price <= vwap_i * (1 + READY_VWAP_EPS_PCT / 100));
+    nearVwapShort = nearVwapShortDist && touchedVwapRecentlyShort;
+    readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && price <= vwap_i * (1 + READY_VWAP_EPS_PCT / 100));
 
     // Short RSI: 30-60 (overbought to neutral), falling
-    const rsiShortOk = rsiNow >= SHORT_RSI_MIN && rsiNow <= SHORT_RSI_MAX && rsiDelta <= SHORT_RSI_DELTA_STRICT;
+    rsiShortOk = rsiNow >= SHORT_RSI_MIN && rsiNow <= SHORT_RSI_MAX && rsiDelta <= SHORT_RSI_DELTA_STRICT;
 
     // Short body quality (bearish candle)
     const bodyQualityShort = checkBodyQualityShort(currentCandle, atrNow);
-    const strongBodyShort = bodyQualityShort.pass;
+    strongBodyShort = bodyQualityShort.pass;
 
     // Short volume
     const shortVolMinOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
     const shortVolMaxOk = Number.isFinite(READY_VOL_SPIKE_MAX) ? volSpikeNow <= READY_VOL_SPIKE_MAX : true;
-    const shortVolOk = shortVolMinOk && shortVolMaxOk;
+    shortVolOk = shortVolMinOk && shortVolMaxOk;
 
     // Short liquidity sweep (sweep HIGH, not low)
     const liqShort = detectLiquiditySweepShort(data5, vwap_i, atrNow, LIQ_LOOKBACK);
-    const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? liqShort.ok : true;
+    shortSweepOk = liqShort.ok;
+    const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
 
     // Short confirm15 (bearish mirror of long confirm)
     const strictShortDbg: { reason?: string } = {};
     const softShortDbg: { reason?: string } = {};
-    const confirm15mStrictShort = confirm15_short_strict(data15, strictShortDbg);
-    const confirm15mSoftShort = confirm15mStrictShort ? false : confirm15_short_soft(data15, softShortDbg);
-    const confirm15mOkShort = confirm15mStrictShort || confirm15mSoftShort;
-    const shortConfirmOk = SHORT_CONFIRM15_REQUIRED ? confirm15mOkShort : true;
+    confirm15mStrictShort = confirm15_short_strict(data15, strictShortDbg);
+    confirm15mSoftShort = confirm15mStrictShort ? false : confirm15_short_soft(data15, softShortDbg);
+    confirm15mOkShort = confirm15mStrictShort || confirm15mSoftShort;
+    shortConfirmOk = SHORT_CONFIRM15_REQUIRED ? confirm15mOkShort : true;
+    confirm15ShortDebug = {
+      strict: { ok: confirm15mStrictShort, reason: confirm15mStrictShort ? 'pass' : (strictShortDbg.reason || 'unknown') },
+      soft: { ok: confirm15mSoftShort, reason: confirm15mSoftShort ? 'pass' : (softShortDbg.reason || 'unknown') },
+      ok: confirm15mOkShort,
+      used: confirm15mStrictShort ? 'strict' : confirm15mSoftShort ? 'soft' : 'none',
+    };
 
     // Short daily VWAP
-    const shortDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrictShort || price < vwap_i) : true;
+    shortDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrictShort || price < vwap_i) : true;
 
     // Short BTC gate
-    const btcBearOk = hasMarket && btcBear;
-    const shortBtcOkReq = SHORT_BTC_REQUIRED ? btcBearOk : true;
+    const shortBtcOk = hasMarket && btcBear;
+    shortBtcOkReq = SHORT_BTC_REQUIRED ? shortBtcOk : true;
     const bestShortBtcOk = hasMarket && btcBear;
-    const bestShortBtcOkReq = BEST_SHORT_BTC_REQUIRED ? bestShortBtcOk : true;
+    bestShortBtcOkReq = BEST_SHORT_BTC_REQUIRED ? bestShortBtcOk : true;
 
     // Short trade plan (inverted stops/TPs)
     if (liqShort.ok) {
@@ -1223,13 +1255,14 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       if (reward > 0 && risk > 0) shortRr = reward / risk;
     }
 
-    const rrShortOk = Number.isFinite(shortRr ?? NaN) && (shortRr ?? 0) >= SHORT_MIN_RR;
-    const riskShortOk = SHORT_MIN_RISK_PCT > 0
+    rrShortOk = Number.isFinite(shortRr ?? NaN) && (shortRr ?? 0) >= SHORT_MIN_RR;
+    riskShortOk = SHORT_MIN_RISK_PCT > 0
       ? Number.isFinite(shortRiskPct ?? NaN) && (shortRiskPct ?? 0) >= SHORT_MIN_RISK_PCT
       : true;
+    bestShortRrOk = Number.isFinite(shortRr ?? NaN) && (shortRr ?? 0) >= RR_MIN_BEST;
 
     // BEST_SHORT_ENTRY criteria
-    const bestShortCore =
+    bestShortCorePreSweep =
       priceBelowVwapStrict &&
       nearVwapShort &&
       rsiShortOk &&
@@ -1238,10 +1271,10 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       trendOkShort &&
       sessionOK &&
       confirm15mOkShort &&
-      liqShort.ok &&
       shortVolOk &&
-      shortRr && shortRr >= RR_MIN_BEST &&
       hasMarket;
+    bestShortCorePreRr = bestShortCorePreSweep && shortSweepOk;
+    bestShortCore = bestShortCorePreRr && bestShortRrOk;
 
     if (bestShortCore && bestShortBtcOkReq) {
       shortCategory = 'BEST_SHORT_ENTRY';
@@ -1249,7 +1282,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
 
     // READY_TO_SELL criteria (if not BEST)
     if (!shortCategory) {
-      const readyShortCore =
+      readyShortCore =
         sessionOK &&
         readyPriceBelowVwap &&
         rsiShortOk &&
@@ -1262,9 +1295,6 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
         readyTrendOkShort &&
         rrShortOk &&
         riskShortOk;
-
-      const shortSweepOk = liqShort.ok;
-      const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
 
       if (readyShortCore && shortSweepOkReq && shortBtcOkReq) {
         shortCategory = 'READY_TO_SELL';
@@ -1441,6 +1471,41 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       rr: rrOK,
       core: bestCore,
     },
+    ...(ENABLE_SHORT_SIGNALS ? {
+      short: {
+        enabled: true,
+        sessionOk: sessionOK,
+        priceBelowVwap: readyPriceBelowVwap,
+        priceBelowEma: price < emaNow,
+        nearVwap: nearVwapShort,
+        confirm15: confirm15mOkShort,
+        confirm15Strict: confirm15mStrictShort,
+        trend: readyTrendOkShort,
+        volSpike: shortVolOk,
+        atr: atrOkReady,
+        sweep: shortSweepOk,
+        strongBody: strongBodyShort,
+        rsiShortOk,
+        rrOk: rrShortOk,
+        riskOk: riskShortOk,
+        hasMarket,
+        btc: shortBtcOkReq,
+        core: readyShortCore,
+      },
+      bestShort: {
+        corePreSweep: bestShortCorePreSweep,
+        corePreRr: bestShortCorePreRr,
+        nearVwap: nearVwapShort,
+        confirm15: confirm15mOkShort,
+        trend: trendOkShort,
+        volSpike: shortVolOk,
+        atr: atrOkBest,
+        sweep: shortSweepOk,
+        btc: bestShortBtcOkReq,
+        rr: bestShortRrOk,
+        core: bestShortCore,
+      },
+    } : {}),
   };
   const snapshotBars = Math.max(1, Math.min(200, VWAP_TOUCH_SNAPSHOT_BARS || 30));
   const lowDistStart = Math.max(0, i - snapshotBars + 1);
@@ -1499,7 +1564,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       bodyQualityBest: bodyQualityBest.details,
     },
   };
-  const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug };
+  const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug, confirm15Short: confirm15ShortDebug };
 
   if (!category) {
     return { signal: null, debug };
