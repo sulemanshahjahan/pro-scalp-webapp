@@ -615,6 +615,10 @@ export type CandidateFeatureSnapshot = {
     bodyQualityBestScore?: number;
   };
   computed: {
+    finalCategory?: string | null;
+    shortCategory?: string | null;
+    shortCore?: boolean;
+    shortBestCore?: boolean;
     sessionOk: boolean;
     reclaimOrTap: boolean;
     trendOk: boolean;
@@ -1555,6 +1559,10 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       rrOk: rrOK,
       rrReadyOk,
       readyCore,
+      finalCategory: category ?? null,
+      shortCategory: shortCategory ?? null,
+      shortCore: readyShortCore,
+      shortBestCore: bestShortCore,
       readyFirstFailedGate: readyDebug.firstFailedGate ?? null,
       readyBlockedReasons,
       readyGateSnapshot: gateSnapshot?.ready ?? null,

@@ -399,7 +399,9 @@ function buildParityMismatches(params: {
     const simRes: any = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
     const key = `${String(row.runId ?? '')}|${String(row.symbol ?? '').toUpperCase()}`;
     const actual = signalByKey.get(key) ?? null;
-    const actualCategory = actual?.category ?? null;
+    const actualCategory = actual?.category
+      ?? (row.computed?.finalCategory != null ? String(row.computed.finalCategory) : null)
+      ?? null;
     const actualReady = actualCategory === 'READY_TO_BUY' || actualCategory === 'BEST_ENTRY';
     const actualReadyShort = actualCategory === 'READY_TO_SELL' || actualCategory === 'BEST_SHORT_ENTRY';
 
@@ -460,6 +462,16 @@ function buildParityMismatches(params: {
 type SimEval = {
   counts: SignalCounts;
   funnel: SimFunnel;
+  intersections: {
+    ready_core_all_true: number;
+    ready_all_required_true: number;
+    best_core_all_true: number;
+    best_all_required_true: number;
+    ready_short_core_all_true: number;
+    ready_short_all_required_true: number;
+    best_short_core_all_true: number;
+    best_short_all_required_true: number;
+  };
   firstFailed: Record<string, Record<string, number>>;
   gateTrue: Record<string, Record<string, number>>;
   postCoreFailed: Record<string, Record<string, number>>;
@@ -487,6 +499,16 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     best_short_core_true: 0,
     ready_short_final_true: 0,
     best_short_final_true: 0,
+  };
+  const intersections = {
+    ready_core_all_true: 0,
+    ready_all_required_true: 0,
+    best_core_all_true: 0,
+    best_all_required_true: 0,
+    ready_short_core_all_true: 0,
+    ready_short_all_required_true: 0,
+    best_short_core_all_true: 0,
+    best_short_all_required_true: 0,
   };
   const firstFailed: Record<string, Record<string, number>> = {
     watch: {},
@@ -574,6 +596,15 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     if (evalRes.readyShortOk) counts.readyShort += 1;
     if (evalRes.bestShortOk) counts.bestShort += 1;
 
+    if (evalRes.readyCore) intersections.ready_core_all_true += 1;
+    if (evalRes.readyOk) intersections.ready_all_required_true += 1;
+    if (evalRes.bestCore) intersections.best_core_all_true += 1;
+    if (evalRes.bestOk) intersections.best_all_required_true += 1;
+    if (evalRes.readyShortCore) intersections.ready_short_core_all_true += 1;
+    if (evalRes.readyShortOk) intersections.ready_short_all_required_true += 1;
+    if (evalRes.bestShortCore) intersections.best_short_core_all_true += 1;
+    if (evalRes.bestShortOk) intersections.best_short_all_required_true += 1;
+
     if (evalRes.watchOk) funnel.watch_created += 1;
     if (evalRes.earlyOk) funnel.early_created += 1;
     if (evalRes.readyCore) funnel.ready_core_true += 1;
@@ -624,7 +655,7 @@ function runTuneSimRows(rows: Array<{ symbol: string; metrics: any; computed: an
     if (evalRes.bestOk) bestSymbols.add(row.symbol);
   }
 
-  return { counts, funnel, firstFailed, gateTrue, postCoreFailed, examples, readySymbols, bestSymbols };
+  return { counts, funnel, intersections, firstFailed, gateTrue, postCoreFailed, examples, readySymbols, bestSymbols };
 }
 
 const db = getDb();
@@ -820,6 +851,9 @@ app.post('/api/tune/sim', async (req, res) => {
       },
       counts: countsOut,
       funnel: funnelOut,
+      simCountsRaw: sim.counts,
+      simFunnelRaw: sim.funnel,
+      intersections: sim.intersections,
       postCoreFailed: sim.postCoreFailed,
       firstFailed: sim.firstFailed,
       gateTrue: sim.gateTrue,
@@ -1008,6 +1042,9 @@ app.post('/api/tune/simBatch', async (req, res) => {
         notes: buildOverrideNotes({ ...(body.baseOverrides || {}), ...(overrides || {}) }),
         counts: countsOut,
         funnel: funnelOut,
+        simCountsRaw: sim.counts,
+        simFunnelRaw: sim.funnel,
+        intersections: sim.intersections,
         postCoreFailed: sim.postCoreFailed,
         firstFailed: sim.firstFailed,
         gateTrue: sim.gateTrue,
@@ -1061,6 +1098,9 @@ app.post('/api/tune/simBatch', async (req, res) => {
         actualCounts,
         diffVsActual: baseDiffVsActual,
         funnel: baseFunnel,
+        simCountsRaw: baseSim.counts,
+        simFunnelRaw: baseSim.funnel,
+        intersections: baseSim.intersections,
         postCoreFailed: baseSim.postCoreFailed,
         firstFailed: baseSim.firstFailed,
         gateTrue: baseSim.gateTrue,

@@ -1137,6 +1137,15 @@ export default function TunePage() {
                 ))}
               </div>
             ) : null}
+            {batchResult?.base?.intersections ? (
+              <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2 text-xs text-white/80 space-y-1">
+                <div className="text-white/60">Gate intersections (sim raw)</div>
+                <div>ready_core_all_true: {batchResult.base.intersections.ready_core_all_true ?? 0}</div>
+                <div>ready_all_required_true: {batchResult.base.intersections.ready_all_required_true ?? 0}</div>
+                <div>ready_short_core_all_true: {batchResult.base.intersections.ready_short_core_all_true ?? 0}</div>
+                <div>ready_short_all_required_true: {batchResult.base.intersections.ready_short_all_required_true ?? 0}</div>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
