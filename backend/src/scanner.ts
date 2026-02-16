@@ -265,6 +265,20 @@ function initCandidateStats(): CandidateStats {
   };
 }
 
+function accumulateSequentialGatePasses(
+  order: string[],
+  flags: Record<string, boolean>,
+  out: Record<string, number>,
+): string | undefined {
+  const firstFailed = order.find((k) => !flags[k]);
+  const stopAt = firstFailed == null ? order.length : order.indexOf(firstFailed);
+  for (let i = 0; i < stopAt; i++) {
+    const k = order[i];
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return firstFailed;
+}
+
 function initGateStats(): ScanGateStats {
   return {
     readyCandidates: 0,
@@ -785,17 +799,14 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           'readyTrendOk',
         ];
 
-        const firstFailed = coreOrder.find((k) => !coreFlags[k]);
+        const firstFailed = accumulateSequentialGatePasses(
+          coreOrder,
+          coreFlags,
+          gateStats.ready.ready_core_flag_true,
+        );
         if (firstFailed) {
           gateStats.ready.ready_core_first_failed[firstFailed] =
             (gateStats.ready.ready_core_first_failed[firstFailed] ?? 0) + 1;
-        }
-
-        for (const k of coreOrder) {
-          if (coreFlags[k]) {
-            gateStats.ready.ready_core_flag_true[k] =
-              (gateStats.ready.ready_core_flag_true[k] ?? 0) + 1;
-          }
         }
 
         const rrFailed = !coreFlags.rrOk
@@ -863,16 +874,14 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
             'rrOk',
             'riskOk',
           ];
-          const shortFirstFailed = shortCoreOrder.find((k) => !shortCoreFlags[k]);
+          const shortFirstFailed = accumulateSequentialGatePasses(
+            shortCoreOrder,
+            shortCoreFlags,
+            gateStats.readyShort.ready_core_flag_true,
+          );
           if (shortFirstFailed) {
             gateStats.readyShort.ready_core_first_failed[shortFirstFailed] =
               (gateStats.readyShort.ready_core_first_failed[shortFirstFailed] ?? 0) + 1;
-          }
-          for (const k of shortCoreOrder) {
-            if (shortCoreFlags[k]) {
-              gateStats.readyShort.ready_core_flag_true[k] =
-                (gateStats.readyShort.ready_core_flag_true[k] ?? 0) + 1;
-            }
           }
 
           const rrFailedShort = !shortCoreFlags.rrOk
