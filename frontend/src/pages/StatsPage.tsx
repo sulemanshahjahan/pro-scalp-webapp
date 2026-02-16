@@ -409,6 +409,8 @@ export default function StatsPage() {
   }, [selectedId]);
 
   const summaryTotals = summary?.totals ?? [];
+  const effectiveStatsSource = summary?.source ?? statsSource;
+  const sourceFallbackActive = statsSource === 'events' && effectiveStatsSource === 'signals';
   const outcomeStats = summary?.outcomes;
   const totalSignals = Number(summary?.totalSignals) || summaryTotals.reduce((acc: number, r: any) => acc + (Number(r?.n) || 0), 0);
   const eligibleSignals = Number(summary?.eligibleSignals);
@@ -505,7 +507,12 @@ export default function StatsPage() {
           <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="text-2xl font-display font-semibold tracking-tight">Stats + Outcomes</div>
-              <div className="text-xs text-white/60">5m entries, 15m check, VWAP/EMA/RSI, sweep + BTC trend</div>
+              <div className="text-xs text-white/60">
+                5m entries, 15m check, VWAP/EMA/RSI, sweep + BTC trend
+                {' | '}
+                Source: {effectiveStatsSource === 'events' ? 'Event Log' : 'Deduped'}
+                {sourceFallbackActive ? ' (fallback: no events in range)' : ''}
+              </div>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <div className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1">

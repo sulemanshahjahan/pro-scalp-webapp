@@ -1096,6 +1096,28 @@ function buildStatsSignalsSelect(source: StatsSource): string {
   `;
 }
 
+async function resolveEffectiveStatsSource(
+  d: any,
+  requestedSource: StatsSource,
+  whereSignals: string[],
+  bind: Record<string, any>,
+): Promise<StatsSource> {
+  if (requestedSource !== 'events') return 'signals';
+  try {
+    const row = await d.prepare(`
+      WITH stats_signals AS (
+        ${buildStatsSignalsSelect('events')}
+      )
+      SELECT COUNT(1) as n
+      FROM stats_signals s
+      WHERE ${whereSignals.join(' AND ')}
+    `).get(bind) as { n?: number } | undefined;
+    return Number(row?.n ?? 0) > 0 ? 'events' : 'signals';
+  } catch {
+    return 'signals';
+  }
+}
+
 function applySignalFilters(
   where: string[],
   bind: Record<string, any>,
@@ -2135,8 +2157,7 @@ export async function getStats(params: {
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
+  const sourceRequested = resolveStatsSource(params.source);
 
   const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end, resolveVersion: OUTCOME_RESOLVE_VERSION };
@@ -2160,6 +2181,8 @@ export async function getStats(params: {
     whereSignals.push(`s.strategy_version = @strategyVersion`);
     bind.strategyVersion = params.strategyVersion;
   }
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
 
   const totals = await d.prepare(`
     WITH stats_signals AS (
@@ -2410,12 +2433,13 @@ export async function getStatsSummary(params: {
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
+  const sourceRequested = resolveStatsSource(params.source);
 
   const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end };
   applySignalFilters(whereSignals, bind, params, 's');
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
 
   const whereOutcomes = [...whereSignals];
   if (Number.isFinite(params.horizonMin)) {
@@ -2768,11 +2792,13 @@ export async function getStatsMatrixBtc(params: {
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
-  const where: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const sourceRequested = resolveStatsSource(params.source);
+  const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const where: string[] = [...whereSignals];
   const bind: any = { start, end };
   applySignalFilters(where, bind, params, 's');
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   if (Number.isFinite(params.horizonMin)) {
     where.push(`o.horizon_min = @horizonMin`);
     bind.horizonMin = params.horizonMin;
@@ -2825,11 +2851,13 @@ export async function getStatsBuckets(params: {
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
-  const where: string[] = [
+  const sourceRequested = resolveStatsSource(params.source);
+  const whereSignals: string[] = [
     `s.time >= @start`,
     `s.time <= @end`,
+  ];
+  const where: string[] = [
+    ...whereSignals,
     `o.resolve_version = @resolveVersion`,
     `o.outcome_state LIKE 'COMPLETE_%'`,
     `o.invalid_levels = 0`,
@@ -2837,6 +2865,8 @@ export async function getStatsBuckets(params: {
   ];
   const bind: any = { start, end, resolveVersion: OUTCOME_RESOLVE_VERSION };
   applySignalFilters(where, bind, params, 's');
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   if (Number.isFinite(params.horizonMin)) {
     where.push(`o.horizon_min = @horizonMin`);
     bind.horizonMin = params.horizonMin;
@@ -2947,11 +2977,13 @@ export async function getInvalidReasons(params: {
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
-  const where: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const sourceRequested = resolveStatsSource(params.source);
+  const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const where: string[] = [...whereSignals];
   const bind: any = { start, end };
   applySignalFilters(where, bind, params, 's');
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   if (Number.isFinite(params.horizonMin)) {
     where.push(`o.horizon_min = @horizonMin`);
     bind.horizonMin = params.horizonMin;
@@ -2997,46 +3029,62 @@ export async function listOutcomes(params: {
   source?: string;
 }) {
   const d = await getDbReady();
-  const source = resolveStatsSource(params.source);
-  const statsSignalsSelect = buildStatsSignalsSelect(source);
+  const sourceRequested = resolveStatsSource(params.source);
 
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
   const limit = Math.max(1, Math.min(1000, params.limit ?? 200));
   const offset = Math.max(0, Math.min(50_000, params.offset ?? 0));
 
-  const where: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
+  const where: string[] = [...whereSignals];
   const bind: any = { start, end, limit, offset };
 
   if (params.category) {
     where.push(`s.category = @category`);
+    whereSignals.push(`s.category = @category`);
     bind.category = params.category;
   }
   if (params.categories?.length) {
     where.push(`s.category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})`);
+    whereSignals.push(`s.category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})`);
     params.categories.forEach((c, i) => { bind[`cat_${i}`] = c; });
   }
   if (params.symbol) {
     where.push(`s.symbol = @symbol`);
+    whereSignals.push(`s.symbol = @symbol`);
     bind.symbol = params.symbol.toUpperCase();
   }
   if (params.preset) {
     where.push(`s.preset = @preset`);
+    whereSignals.push(`s.preset = @preset`);
     bind.preset = params.preset;
   }
   if (params.strategyVersion) {
     where.push(`s.strategy_version = @strategyVersion`);
+    whereSignals.push(`s.strategy_version = @strategyVersion`);
     bind.strategyVersion = params.strategyVersion;
   }
   if (params.blockedByBtc != null) {
     where.push(`s.blocked_by_btc = @blockedByBtc`);
+    whereSignals.push(`s.blocked_by_btc = @blockedByBtc`);
     bind.blockedByBtc = params.blockedByBtc ? 1 : 0;
   }
   if (params.btcState) {
     const state = String(params.btcState).toUpperCase();
-    if (state === 'BULL') where.push(`s.btc_bull = 1`);
-    else if (state === 'BEAR') where.push(`s.btc_bear = 1`);
-    else if (state === 'NEUTRAL') where.push(`(s.btc_bull IS NULL OR s.btc_bull = 0) AND (s.btc_bear IS NULL OR s.btc_bear = 0)`);
+    if (state === 'BULL') {
+      where.push(`s.btc_bull = 1`);
+      whereSignals.push(`s.btc_bull = 1`);
+    } else if (state === 'BEAR') {
+      where.push(`s.btc_bear = 1`);
+      whereSignals.push(`s.btc_bear = 1`);
+    } else if (state === 'NEUTRAL') {
+      const neutralExpr = `(s.btc_bull IS NULL OR s.btc_bull = 0) AND (s.btc_bear IS NULL OR s.btc_bear = 0)`;
+      where.push(neutralExpr);
+      whereSignals.push(neutralExpr);
+    }
   }
+  const source = await resolveEffectiveStatsSource(d, sourceRequested, whereSignals, bind);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   if (Number.isFinite(params.horizonMin)) {
     where.push(`o.horizon_min = @horizonMin`);
     bind.horizonMin = params.horizonMin;
