@@ -14,6 +14,7 @@ const CATEGORIES = [
 ] as const;
 const PRESETS = ['ALL', 'BALANCED', 'CONSERVATIVE', 'AGGRESSIVE'] as const;
 const BTC_STATES = ['ALL', 'BULL', 'NEUTRAL', 'BEAR'] as const;
+const STATS_SOURCES = ['events', 'signals'] as const;
 const BUCKET_LABELS: Record<'deltaVwapPct' | 'rsi9' | 'atrPct' | 'volSpike' | 'rr', string> = {
   deltaVwapPct: 'Price vs VWAP',
   rsi9: 'RSI',
@@ -139,6 +140,7 @@ export default function StatsPage() {
   const [symbol, setSymbol] = useState('');
   const [btcStateFilter, setBtcStateFilter] = useState<typeof BTC_STATES[number]>('ALL');
   const [showBtcBlocked, setShowBtcBlocked] = useState(false);
+  const [statsSource, setStatsSource] = useState<typeof STATS_SOURCES[number]>('events');
 
   const [summary, setSummary] = useState<any | null>(null);
   const [matrix, setMatrix] = useState<any | null>(null);
@@ -198,6 +200,7 @@ export default function StatsPage() {
     const qs = new URLSearchParams();
     qs.set('start', String(range.start));
     qs.set('end', String(range.end));
+    qs.set('source', statsSource);
     if (preset !== 'ALL') qs.set('preset', preset);
     if (resolvedVersion) qs.set('version', resolvedVersion);
     if (categories.length) qs.set('categories', categories.join(','));
@@ -275,7 +278,7 @@ export default function StatsPage() {
     try {
       const resp = await fetch(API('/api/signals/clear'), { method: 'POST' }).then(r => r.json());
       if (resp?.ok) {
-        setClearMsg(`Cleared ${resp.signals ?? 0} signals, ${resp.outcomes ?? 0} outcomes`);
+        setClearMsg(`Cleared ${resp.signals ?? 0} deduped signals, ${resp.events ?? 0} signal events, ${resp.outcomes ?? 0} outcomes`);
         setSelectedId(null);
         setPage(0);
         await Promise.all([loadTop(), loadOutcomes()]);
@@ -383,9 +386,9 @@ export default function StatsPage() {
   }
 
   useEffect(() => { loadVersions().catch(() => {}); }, []);
-  useEffect(() => { loadTop().catch(() => {}); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked]);
-  useEffect(() => { setPage(0); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, windowStatus, resultFilter, invalidReasonFilter]);
-  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, windowStatus, resultFilter, invalidReasonFilter, page, limit, sort]);
+  useEffect(() => { loadTop().catch(() => {}); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, statsSource]);
+  useEffect(() => { setPage(0); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, statsSource, windowStatus, resultFilter, invalidReasonFilter]);
+  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, preset, resolvedVersion, categories.join(','), symbol, horizon, btcStateFilter, showBtcBlocked, statsSource, windowStatus, resultFilter, invalidReasonFilter, page, limit, sort]);
   useEffect(() => {
     loadHealth().catch(() => {});
     loadScanRuns().catch(() => {});
@@ -518,6 +521,13 @@ export default function StatsPage() {
                   {(versions?.versions ?? []).map((v: any) => (
                     <option key={v.version} value={v.version}>{v.version}</option>
                   ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1">
+                <span className="text-white/60">Mode</span>
+                <select className="bg-transparent text-white/90" value={statsSource} onChange={(e) => setStatsSource(e.target.value as any)}>
+                  <option value="events">Event Log</option>
+                  <option value="signals">Deduped</option>
                 </select>
               </div>
               <div className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1">
@@ -945,7 +955,7 @@ export default function StatsPage() {
             </thead>
             <tbody>
               {outcomesRows.map((o: any) => (
-                <tr key={`${o.signalId}-${o.horizonMin}`} className="border-b border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => setSelectedId(o.signalId)}>
+                <tr key={`${o.rowId ?? o.signalId}-${o.horizonMin}`} className="border-b border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => setSelectedId(o.signalId)}>
                   <td className="px-3 py-2 text-white/70">{dt(o.time)}</td>
                   <td className="px-3 py-2 font-semibold">{o.symbol}</td>
                   <td className="px-3 py-2">
@@ -977,7 +987,7 @@ export default function StatsPage() {
                         {Array.isArray(o.blockedReasons) && o.blockedReasons.length ? (
                           <div className="absolute left-0 top-full z-10 mt-1 hidden w-64 flex-wrap gap-1 rounded-lg border border-white/10 bg-[#111722] p-2 text-[10px] text-white/80 group-hover:flex">
                             {o.blockedReasons.slice(0, 3).map((r: string, idx: number) => (
-                              <span key={`${o.signalId}-${idx}`} className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5">
+                              <span key={`${o.rowId ?? o.signalId}-${idx}`} className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5">
                                 {r}
                               </span>
                             ))}

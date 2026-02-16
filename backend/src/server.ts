@@ -1775,7 +1775,12 @@ app.post('/api/debug/outcomes/run', async (req, res) => {
     await updateOutcomesOnce();
     const outcomes = getOutcomesHealth();
     const signalsTotal = await db.prepare('SELECT COUNT(1) as n FROM signals').get() as { n: number };
-    const signalEventsTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_events').get() as { n: number };
+    let signalEventsTotal: { n: number } | null = null;
+    try {
+      signalEventsTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_events').get() as { n: number };
+    } catch {
+      signalEventsTotal = { n: 0 };
+    }
     const outcomesTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_outcomes').get() as { n: number };
     res.json({
       ok: true,
@@ -1854,6 +1859,7 @@ app.get('/api/stats', async (req, res) => {
     const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
     const preset = String((req.query as any)?.preset || '').trim() || undefined;
     const strategyVersion = String((req.query as any)?.version || '').trim() || undefined;
+    const source = String((req.query as any)?.source || '').trim() || undefined;
     const out = await getStats({
       days: Number.isFinite(days) ? days : undefined,
       start: Number.isFinite(start) ? start : undefined,
@@ -1863,6 +1869,7 @@ app.get('/api/stats', async (req, res) => {
       symbol,
       preset,
       strategyVersion,
+      source,
     });
     res.json(out);
   } catch (e) {
@@ -1886,6 +1893,7 @@ app.get('/api/stats/summary', async (req, res) => {
       : ['0', 'false', 'no'].includes(blockedByBtcRaw) ? false : undefined;
     const btcState = String((req.query as any)?.btcState || '').trim() || undefined;
     const horizonMin = Number((req.query as any)?.horizonMin);
+    const source = String((req.query as any)?.source || '').trim() || undefined;
 
     const out = await getStatsSummary({
       days: Number.isFinite(days) ? days : undefined,
@@ -1899,6 +1907,7 @@ app.get('/api/stats/summary', async (req, res) => {
       blockedByBtc,
       btcState,
       horizonMin: Number.isFinite(horizonMin) ? horizonMin : undefined,
+      source,
     });
     res.json(out);
   } catch (e) {
@@ -1922,6 +1931,7 @@ app.get('/api/stats/matrix/btc', async (req, res) => {
       : ['0', 'false', 'no'].includes(blockedByBtcRaw) ? false : undefined;
     const btcState = String((req.query as any)?.btcState || '').trim() || undefined;
     const horizonMin = Number((req.query as any)?.horizonMin);
+    const source = String((req.query as any)?.source || '').trim() || undefined;
 
     const out = await getStatsMatrixBtc({
       days: Number.isFinite(days) ? days : undefined,
@@ -1935,6 +1945,7 @@ app.get('/api/stats/matrix/btc', async (req, res) => {
       blockedByBtc,
       btcState,
       horizonMin: Number.isFinite(horizonMin) ? horizonMin : undefined,
+      source,
     });
     res.json(out);
   } catch (e) {
@@ -1958,6 +1969,7 @@ app.get('/api/stats/buckets', async (req, res) => {
       : ['0', 'false', 'no'].includes(blockedByBtcRaw) ? false : undefined;
     const btcState = String((req.query as any)?.btcState || '').trim() || undefined;
     const horizonMin = Number((req.query as any)?.horizonMin);
+    const source = String((req.query as any)?.source || '').trim() || undefined;
 
     const out = await getStatsBuckets({
       days: Number.isFinite(days) ? days : undefined,
@@ -1971,6 +1983,7 @@ app.get('/api/stats/buckets', async (req, res) => {
       blockedByBtc,
       btcState,
       horizonMin: Number.isFinite(horizonMin) ? horizonMin : undefined,
+      source,
     });
     res.json({ ok: true, ...out });
   } catch (e) {
@@ -1994,6 +2007,7 @@ app.get('/api/stats/invalidReasons', async (req, res) => {
       : ['0', 'false', 'no'].includes(blockedByBtcRaw) ? false : undefined;
     const btcState = String((req.query as any)?.btcState || '').trim() || undefined;
     const horizonMin = Number((req.query as any)?.horizonMin);
+    const source = String((req.query as any)?.source || '').trim() || undefined;
 
     const out = await getInvalidReasons({
       days: Number.isFinite(days) ? days : undefined,
@@ -2007,6 +2021,7 @@ app.get('/api/stats/invalidReasons', async (req, res) => {
       blockedByBtc,
       btcState,
       horizonMin: Number.isFinite(horizonMin) ? horizonMin : undefined,
+      source,
     });
     res.json({ ok: true, ...out });
   } catch (e) {
@@ -2072,6 +2087,7 @@ app.get('/api/outcomes', async (req, res) => {
     const result = String((req.query as any)?.result || '').trim() || undefined;
     const invalidReason = String((req.query as any)?.invalidReason || '').trim() || undefined;
     const sort = String((req.query as any)?.sort || '').trim() || undefined;
+    const source = String((req.query as any)?.source || '').trim() || undefined;
 
     const out = await listOutcomes({
       days: Number.isFinite(days) ? days : undefined,
@@ -2091,6 +2107,7 @@ app.get('/api/outcomes', async (req, res) => {
       result,
       invalidReason,
       sort,
+      source,
     });
     res.json(out);
   } catch (e) {

@@ -1012,6 +1012,90 @@ function resolveTimeRange(params: { days?: number; start?: number; end?: number;
   return { start, end, days };
 }
 
+type StatsSource = 'events' | 'signals';
+
+function resolveStatsSource(source?: string | null): StatsSource {
+  const raw = String(source || '').trim().toLowerCase();
+  if (raw === 'signals') return 'signals';
+  return 'events';
+}
+
+function buildStatsSignalsSelect(source: StatsSource): string {
+  if (source === 'signals') {
+    return `
+      SELECT
+        s.id as id,
+        s.id as signal_id,
+        s.run_id as run_id,
+        s.symbol as symbol,
+        s.category as category,
+        s.time as time,
+        s.time as signal_time,
+        s.preset as preset,
+        s.strategy_version as strategy_version,
+        s.blocked_by_btc as blocked_by_btc,
+        s.would_be_category as would_be_category,
+        s.gate_score as gate_score,
+        s.first_failed_gate as first_failed_gate,
+        s.blocked_reasons_json as blocked_reasons_json,
+        s.btc_bull as btc_bull,
+        s.btc_bear as btc_bear,
+        s.price as price,
+        s.stop as stop,
+        s.tp1 as tp1,
+        s.tp2 as tp2,
+        s.target as target,
+        s.rr as rr,
+        s.riskPct as riskPct,
+        s.deltaVwapPct as deltaVwapPct,
+        s.rsi9 as rsi9,
+        s.atrPct as atrPct,
+        s.volSpike as volSpike,
+        s.entry_time as entry_time,
+        s.entry_candle_open_time as entry_candle_open_time,
+        s.entry_rule as entry_rule,
+        s.config_hash as config_hash
+      FROM signals s
+    `;
+  }
+  return `
+    SELECT
+      e.id as id,
+      COALESCE(e.signal_id, s.id) as signal_id,
+      e.run_id as run_id,
+      e.symbol as symbol,
+      e.category as category,
+      e.created_at as time,
+      e.time as signal_time,
+      COALESCE(e.preset, s.preset) as preset,
+      s.strategy_version as strategy_version,
+      s.blocked_by_btc as blocked_by_btc,
+      s.would_be_category as would_be_category,
+      s.gate_score as gate_score,
+      COALESCE(e.first_failed_gate, s.first_failed_gate) as first_failed_gate,
+      COALESCE(e.blocked_reasons_json, s.blocked_reasons_json) as blocked_reasons_json,
+      s.btc_bull as btc_bull,
+      s.btc_bear as btc_bear,
+      s.price as price,
+      s.stop as stop,
+      s.tp1 as tp1,
+      s.tp2 as tp2,
+      s.target as target,
+      s.rr as rr,
+      s.riskPct as riskPct,
+      s.deltaVwapPct as deltaVwapPct,
+      s.rsi9 as rsi9,
+      s.atrPct as atrPct,
+      s.volSpike as volSpike,
+      s.entry_time as entry_time,
+      s.entry_candle_open_time as entry_candle_open_time,
+      s.entry_rule as entry_rule,
+      COALESCE(e.config_hash, s.config_hash) as config_hash
+    FROM signal_events e
+    LEFT JOIN signals s ON s.id = e.signal_id
+  `;
+}
+
 function applySignalFilters(
   where: string[],
   bind: Record<string, any>,
@@ -2047,54 +2131,58 @@ export async function getStats(params: {
   symbol?: string;
   preset?: string;
   strategyVersion?: string;
+  source?: string;
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
 
-  const whereSignals: string[] = [`time >= @start`, `time <= @end`];
+  const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end, resolveVersion: OUTCOME_RESOLVE_VERSION };
   if (params.category) {
-    whereSignals.push(`category = @category`);
+    whereSignals.push(`s.category = @category`);
     bind.category = params.category;
   }
   if (params.categories?.length) {
-    whereSignals.push(`category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})`);
+    whereSignals.push(`s.category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})`);
     params.categories.forEach((c, i) => { bind[`cat_${i}`] = c; });
   }
   if (params.symbol) {
-    whereSignals.push(`symbol = @symbol`);
+    whereSignals.push(`s.symbol = @symbol`);
     bind.symbol = params.symbol.toUpperCase();
   }
   if (params.preset) {
-    whereSignals.push(`preset = @preset`);
+    whereSignals.push(`s.preset = @preset`);
     bind.preset = params.preset;
   }
   if (params.strategyVersion) {
-    whereSignals.push(`strategy_version = @strategyVersion`);
+    whereSignals.push(`s.strategy_version = @strategyVersion`);
     bind.strategyVersion = params.strategyVersion;
   }
 
   const totals = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT category, COUNT(*) as n
-    FROM signals
+    FROM stats_signals s
     WHERE ${whereSignals.join(' AND ')}
     GROUP BY category
     ORDER BY n DESC
   `).all(bind);
 
   const byCatH = await d.prepare(`
-    WITH sig_totals AS (
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    ),
+    sig_totals AS (
       SELECT
-        category,
+        s.category as category,
         COUNT(*) as totalSignals
-      FROM signals
-      WHERE time >= @start AND time <= @end
-        ${params.category ? 'AND category = @category' : ''}
-        ${params.categories?.length ? `AND category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})` : ''}
-        ${params.symbol ? 'AND symbol = @symbol' : ''}
-        ${params.preset ? 'AND preset = @preset' : ''}
-        ${params.strategyVersion ? 'AND strategy_version = @strategyVersion' : ''}
-      GROUP BY category
+      FROM stats_signals s
+      WHERE ${whereSignals.join(' AND ')}
+      GROUP BY s.category
     )
     SELECT
       s.category as category,
@@ -2135,22 +2223,20 @@ export async function getStats(params: {
         AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED')
         THEN CASE WHEN o.max_high >= s.tp2 THEN 1.0 ELSE 0 END END) as touchTp2Rate
       FROM signal_outcomes o
-      JOIN signals s ON s.id = o.signal_id
+      JOIN stats_signals s ON s.signal_id = o.signal_id
       LEFT JOIN sig_totals st ON st.category = s.category
-      WHERE s.time >= @start AND s.time <= @end
+      WHERE ${whereSignals.join(' AND ')}
         AND o.resolve_version = @resolveVersion
-        ${params.category ? 'AND s.category = @category' : ''}
-        ${params.categories?.length ? `AND s.category IN (${params.categories.map((_, i) => `@cat_${i}`).join(',')})` : ''}
-        ${params.symbol ? 'AND s.symbol = @symbol' : ''}
-        ${params.preset ? 'AND s.preset = @preset' : ''}
-        ${params.strategyVersion ? 'AND s.strategy_version = @strategyVersion' : ''}
     GROUP BY s.category, o.horizon_min
     ORDER BY s.category, o.horizon_min
   `).all(bind);
 
   const topSymbols = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT symbol, COUNT(*) as n
-    FROM signals
+    FROM stats_signals s
     WHERE ${whereSignals.join(' AND ')}
     GROUP BY symbol
     ORDER BY n DESC
@@ -2161,6 +2247,7 @@ export async function getStats(params: {
     start,
     end,
     days,
+    source,
     categoriesLogged: SIGNAL_LOG_CATS,
     totals,
     byCategoryAndHorizon: byCatH,
@@ -2319,9 +2406,12 @@ export async function getStatsSummary(params: {
   horizonMin?: number;
   blockedByBtc?: boolean;
   btcState?: string;
+  source?: string;
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
 
   const whereSignals: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end };
@@ -2336,8 +2426,11 @@ export async function getStatsSummary(params: {
   bind.resolveVersion = OUTCOME_RESOLVE_VERSION;
 
   const totalSignalsRow = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT COUNT(*) as n
-    FROM signals s
+    FROM stats_signals s
     WHERE ${whereSignals.join(' AND ')}
   `).get(bind) as { n: number } | undefined;
   const totalSignals = Number(totalSignalsRow?.n ?? 0);
@@ -2351,8 +2444,11 @@ export async function getStatsSummary(params: {
     eligibleCutoff = rangeEnd - horizonMin * 60_000;
     const eligibleWhere = [...whereSignals, `s.time <= @eligibleCutoff`];
     const eligibleRow = await d.prepare(`
+      WITH stats_signals AS (
+        ${statsSignalsSelect}
+      )
       SELECT COUNT(*) as n
-      FROM signals s
+      FROM stats_signals s
       WHERE ${eligibleWhere.join(' AND ')}
     `).get({ ...bind, eligibleCutoff }) as { n: number } | undefined;
     eligibleSignals = Number(eligibleRow?.n ?? 0);
@@ -2360,14 +2456,20 @@ export async function getStatsSummary(params: {
   }
 
   const totals = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT s.category as category, COUNT(*) as n
-    FROM signals s
+    FROM stats_signals s
     WHERE ${whereSignals.join(' AND ')}
     GROUP BY s.category
     ORDER BY n DESC
   `).all(bind);
 
   const agg = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%'
         AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN 1 ELSE 0 END) as "completeN",
@@ -2385,17 +2487,20 @@ export async function getStatsSummary(params: {
       AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
         AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.mae_pct END) as "avgMaePct"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
     `).get(bind) as any;
 
   const sampleRows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       o.r_close as "rClose",
       o.time_to_first_hit_ms as "timeToFirstHitMs",
       o.exit_reason as "exitReason"
       FROM signal_outcomes o
-      JOIN signals s ON s.id = o.signal_id
+      JOIN stats_signals s ON s.signal_id = o.signal_id
       WHERE ${whereOutcomes.join(' AND ')}
         AND o.outcome_state LIKE 'COMPLETE_%'
         AND o.invalid_levels = 0
@@ -2412,6 +2517,9 @@ export async function getStatsSummary(params: {
   const medianTimeToTp1 = median(tp1Times);
 
   const winLossAgg = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       AVG(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
         AND o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN o.r_close END) as "avgWinR",
@@ -2422,17 +2530,20 @@ export async function getStatsSummary(params: {
       SUM(CASE WHEN o.outcome_state LIKE 'COMPLETE_%' AND o.invalid_levels = 0
         AND o.trade_state = 'FAILED_SL' THEN o.r_close END) as "sumLossR"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
   `).get(bind) as any;
 
   const seriesRows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       s.entry_time as "entryTime",
       o.r_close as "rClose",
       o.trade_state as "tradeState"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
@@ -2472,6 +2583,9 @@ export async function getStatsSummary(params: {
   }
 
   const lossRows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       o.r_close as "rClose",
       o.outcome_driver as "outcomeDriver",
@@ -2479,7 +2593,7 @@ export async function getStatsSummary(params: {
       s.first_failed_gate as "firstFailedGate",
       s.blocked_reasons_json as "blockedReasonsJson"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
@@ -2542,6 +2656,9 @@ export async function getStatsSummary(params: {
     .sort((a, b) => (b.count - a.count) || (b.netR - a.netR));
 
   const btcOverrideRows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       CASE WHEN s.category = 'READY_TO_BUY' AND s.btc_bear = 1 THEN 1 ELSE 0 END as "overrideOn",
       COUNT(*) as n,
@@ -2550,7 +2667,7 @@ export async function getStatsSummary(params: {
       SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as netR,
       AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as avgR
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
@@ -2559,15 +2676,18 @@ export async function getStatsSummary(params: {
   `).all(bind) as any[];
 
   const perfByHourRows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
-      CAST(s.entry_time / 3600000 AS BIGINT) * 3600000 as "hourStart",
+      CAST(s.time / 3600000 AS BIGINT) * 3600000 as "hourStart",
       COUNT(*) as n,
       SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2') THEN 1 ELSE 0 END) as winN,
       SUM(CASE WHEN o.trade_state = 'FAILED_SL' THEN 1 ELSE 0 END) as lossN,
       SUM(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as netR,
       AVG(CASE WHEN o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED') THEN o.r_close END) as avgR
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${whereOutcomes.join(' AND ')}
       AND o.outcome_state LIKE 'COMPLETE_%'
       AND o.invalid_levels = 0
@@ -2577,10 +2697,13 @@ export async function getStatsSummary(params: {
   `).all(bind) as any[];
 
   const signalsPerHour = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       CAST(s.time / 3600000 AS BIGINT) * 3600000 as "hourStart",
       COUNT(*) as n
-    FROM signals s
+    FROM stats_signals s
     WHERE ${whereSignals.join(' AND ')}
     GROUP BY 1
     ORDER BY 1
@@ -2590,6 +2713,7 @@ export async function getStatsSummary(params: {
     start,
     end,
     days,
+    source,
     currentResolveVersion: OUTCOME_RESOLVE_VERSION,
     totalSignals,
     eligibleSignals,
@@ -2640,9 +2764,12 @@ export async function getStatsMatrixBtc(params: {
   horizonMin?: number;
   blockedByBtc?: boolean;
   btcState?: string;
+  source?: string;
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   const where: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end };
   applySignalFilters(where, bind, params, 's');
@@ -2657,6 +2784,9 @@ export async function getStatsMatrixBtc(params: {
   where.push(`o.trade_state IN ('COMPLETED_TP1','COMPLETED_TP2','FAILED_SL','EXPIRED')`);
 
   const rows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       CASE
         WHEN s.btc_bull = 1 THEN 'BULL'
@@ -2670,13 +2800,13 @@ export async function getStatsMatrixBtc(params: {
       SUM(o.r_close) as "netR",
       AVG(o.r_close) as "avgR"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${where.join(' AND ')}
     GROUP BY "btcState", s.category
     ORDER BY "btcState", s.category
   `).all(bind);
 
-    return { start, end, days, currentResolveVersion: OUTCOME_RESOLVE_VERSION, rows };
+    return { start, end, days, source, currentResolveVersion: OUTCOME_RESOLVE_VERSION, rows };
 }
 
 export async function getStatsBuckets(params: {
@@ -2691,9 +2821,12 @@ export async function getStatsBuckets(params: {
   horizonMin?: number;
   blockedByBtc?: boolean;
   btcState?: string;
+  source?: string;
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   const where: string[] = [
     `s.time >= @start`,
     `s.time <= @end`,
@@ -2710,6 +2843,9 @@ export async function getStatsBuckets(params: {
   }
 
   const rows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       s.deltaVwapPct as "deltaVwapPct",
       s.rsi9 as "rsi9",
@@ -2719,7 +2855,7 @@ export async function getStatsBuckets(params: {
       o.r_close as "rClose",
       o.trade_state as "tradeState"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${where.join(' AND ')}
   `).all(bind) as Array<{
     deltaVwapPct: number;
@@ -2783,6 +2919,7 @@ export async function getStatsBuckets(params: {
       start,
       end,
       days,
+      source,
       currentResolveVersion: OUTCOME_RESOLVE_VERSION,
       buckets: {
         deltaVwapPct: buildBuckets('deltaVwapPct'),
@@ -2806,9 +2943,12 @@ export async function getInvalidReasons(params: {
   horizonMin?: number;
   blockedByBtc?: boolean;
   btcState?: string;
+  source?: string;
 } = {}) {
   const d = await getDbReady();
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
   const where: string[] = [`s.time >= @start`, `s.time <= @end`];
   const bind: any = { start, end };
   applySignalFilters(where, bind, params, 's');
@@ -2819,18 +2959,21 @@ export async function getInvalidReasons(params: {
   where.push(`o.window_status IN ('PARTIAL', 'INVALID')`);
 
   const rows = await d.prepare(`
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
       o.window_status as status,
       COALESCE(o.invalid_reason, '') as reason,
       COUNT(*) as n
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${where.join(' AND ')}
     GROUP BY o.window_status, o.invalid_reason
     ORDER BY n DESC
   `).all(bind);
 
-  return { start, end, days, rows };
+  return { start, end, days, source, rows };
 }
 
 export async function listOutcomes(params: {
@@ -2851,8 +2994,11 @@ export async function listOutcomes(params: {
   result?: string;
   invalidReason?: string;
   sort?: string;
+  source?: string;
 }) {
   const d = await getDbReady();
+  const source = resolveStatsSource(params.source);
+  const statsSignalsSelect = buildStatsSignalsSelect(source);
 
   const { start, end, days } = resolveTimeRange({ days: params.days, start: params.start, end: params.end, maxDays: 365 });
   const limit = Math.max(1, Math.min(1000, params.limit ?? 200));
@@ -2924,8 +3070,12 @@ export async function listOutcomes(params: {
   }
 
   const sql = `
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT
-      s.id as "signalId",
+      s.id as "rowId",
+      s.signal_id as "signalId",
       s.symbol, s.category, s.time, s.preset, s.strategy_version as "strategyVersion",
       s.blocked_by_btc as "blockedByBtc", s.would_be_category as "wouldBeCategory",
       s.gate_score as "gateScore",
@@ -2979,7 +3129,7 @@ export async function listOutcomes(params: {
       o.resolved_at as "resolvedAt",
       o.resolve_version as "resolveVersion"
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${where.join(' AND ')}
     ORDER BY ${orderBy}
     LIMIT @limit OFFSET @offset
@@ -3001,14 +3151,17 @@ export async function listOutcomes(params: {
   });
 
   const countSql = `
+    WITH stats_signals AS (
+      ${statsSignalsSelect}
+    )
     SELECT COUNT(*) as n
     FROM signal_outcomes o
-    JOIN signals s ON s.id = o.signal_id
+    JOIN stats_signals s ON s.signal_id = o.signal_id
     WHERE ${where.join(' AND ')}
   `;
   const totalRow = await d.prepare(countSql).get(bind) as { n: number };
 
-  return { start, end, days, limit, offset, total: totalRow.n, rows };
+  return { start, end, days, source, limit, offset, total: totalRow.n, rows };
 }
 
 export async function listRecentOutcomes(params: {
