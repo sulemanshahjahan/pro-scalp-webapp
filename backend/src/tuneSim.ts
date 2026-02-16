@@ -450,20 +450,34 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const bestBtcOkReq = cfg.BEST_BTC_REQUIRED ? bestBtcOk : true;
   const bestOk = bestCore && bestBtcOkReq;
 
-  // Short signal evaluation (mirror of long logic)
+  // Short signal evaluation (mirror of long logic).
+  // Prefer stored short gate snapshot from live evaluator to avoid sim/live drift.
   const enableShort = cfg.ENABLE_SHORT_SIGNALS;
-  const trendOkShort = emaDistPct < 0; // EMA50 < EMA200 (price below EMA)
+  const shortGate = computed?.shortGateSnapshot && typeof computed.shortGateSnapshot === 'object'
+    ? (computed.shortGateSnapshot as Record<string, any>)
+    : null;
+  const trendOkShortBase = shortGate?.trend == null ? (emaDistPct < 0) : Boolean(shortGate.trend);
+  const trendOkShort = trendOkShortBase;
   const readyTrendOkShort = cfg.SHORT_TREND_REQUIRED ? trendOkShort : true;
-  const priceBelowVwapStrict = vwapDistPct < 0;
+  const priceBelowVwapStrict = shortGate?.priceBelowVwap == null ? (vwapDistPct < 0) : Boolean(shortGate.priceBelowVwap);
   const shortVwapMax = Number.isFinite(cfg.SHORT_VWAP_MAX_PCT) ? cfg.SHORT_VWAP_MAX_PCT : 1.50;
-  const nearVwapShort = Math.abs(vwapDistPct) <= shortVwapMax;
-  const readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && vwapDistPct <= 0.12);
-  const rsiShortOk = rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && rsiDelta <= cfg.SHORT_RSI_DELTA_STRICT;
+  const nearVwapShortDist = Math.abs(vwapDistPct) <= shortVwapMax;
+  const nearVwapShort = shortGate?.nearVwap == null ? nearVwapShortDist : Boolean(shortGate.nearVwap);
+  const readyPriceBelowVwap = priceBelowVwapStrict || (nearVwapShort && vwapDistPct <= cfg.READY_VWAP_EPS_PCT);
+  const rsiShortOk = shortGate?.rsiShortOk == null
+    ? (rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && rsiDelta <= cfg.SHORT_RSI_DELTA_STRICT)
+    : Boolean(shortGate.rsiShortOk);
   const bearish = !bullish;
-  const strongBodyShort = bearish && bodyPct >= 0.008; // Simplified check
-  const shortConfirmOk = cfg.SHORT_CONFIRM15_REQUIRED ? confirm15Ok : true;
-  const shortDailyVwapOk = cfg.READY_REQUIRE_DAILY_VWAP ? (confirm15Strict || priceBelowVwapStrict) : true;
-  const rrShortOk = Number.isFinite(rrMetric) ? rrMetric >= cfg.SHORT_MIN_RR : true;
+  const strongBodyShort = shortGate?.strongBody == null
+    ? (bearish && bodyPct >= cfg.READY_BODY_PCT)
+    : Boolean(shortGate.strongBody);
+  const shortConfirmStrict = shortGate?.confirm15Strict == null ? confirm15Strict : Boolean(shortGate.confirm15Strict);
+  const shortConfirmBase = shortGate?.confirm15 == null ? confirm15Ok : Boolean(shortGate.confirm15);
+  const shortConfirmOk = cfg.SHORT_CONFIRM15_REQUIRED ? shortConfirmBase : true;
+  const shortDailyVwapOk = cfg.READY_REQUIRE_DAILY_VWAP ? (shortConfirmStrict || priceBelowVwapStrict) : true;
+  const rrShortOk = Number.isFinite(rrMetric)
+    ? rrMetric >= cfg.SHORT_MIN_RR
+    : (shortGate?.rrOk == null ? true : Boolean(shortGate.rrOk));
   const btcBearOk = hasMarket && btcBear;
   const shortBtcOkReq = cfg.SHORT_BTC_REQUIRED ? btcBearOk : true;
   const bestShortBtcOk = hasMarket && btcBear;
@@ -483,7 +497,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     rrShortOk &&
     readyRiskOk;
 
-  const shortSweepOk = sweepOk;
+  const shortSweepOk = shortGate?.sweep == null ? sweepOk : Boolean(shortGate.sweep);
   const shortSweepOkReq = cfg.SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
   const readyShortOk = readyShortCore && shortSweepOkReq && shortBtcOkReq;
 
@@ -495,8 +509,8 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     atrOkBest &&
     trendOkShort &&
     sessionOk &&
-    confirm15Ok &&
-    sweepOk &&
+    shortConfirmBase &&
+    shortSweepOk &&
     bestVolOk &&
     rrOk &&
     hasMarket;
@@ -575,18 +589,18 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     bestShortOk,
     readyShortCore,
     bestShortCore,
-    readyShortSweepOk: shortSweepOkReq,
+    readyShortSweepOk: shortSweepOk,
     readyShortBtcOk: shortBtcOkReq,
     readyShortFlags: {
       sessionOK: sessionOk,
       priceBelowVwap: readyPriceBelowVwap,
-      priceBelowEma: emaDistPct < 0,
+      priceBelowEma: shortGate?.priceBelowEma == null ? (emaDistPct < 0) : Boolean(shortGate.priceBelowEma),
       nearVwapShort,
       rsiShortOk,
       strongBody: strongBodyShort,
       readyVolOk,
       atrOkReady,
-      confirm15mOk: shortConfirmOk,
+      confirm15mOk: shortConfirmBase,
       trendOkShort: readyTrendOkShort,
       rrOk: rrShortOk,
       riskOk: readyRiskOk,
