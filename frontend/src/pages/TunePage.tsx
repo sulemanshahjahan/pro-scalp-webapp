@@ -46,6 +46,24 @@ function parseJsonObject(text: string): { ok: true; value: Record<string, any> }
   }
 }
 
+function normalizeOverridesEnvelope(
+  parsed: Record<string, any>,
+): { overrides: Record<string, any>; parityWithActual?: boolean } {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { overrides: {} };
+  }
+  const parityWithActual = typeof parsed.parityWithActual === 'boolean'
+    ? parsed.parityWithActual
+    : undefined;
+  if (parsed.baseOverrides && typeof parsed.baseOverrides === 'object' && !Array.isArray(parsed.baseOverrides)) {
+    return { overrides: parsed.baseOverrides as Record<string, any>, parityWithActual };
+  }
+  if (parsed.overrides && typeof parsed.overrides === 'object' && !Array.isArray(parsed.overrides)) {
+    return { overrides: parsed.overrides as Record<string, any>, parityWithActual };
+  }
+  return { overrides: parsed, parityWithActual };
+}
+
 function makeId() {
   return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -115,6 +133,7 @@ export default function TunePage() {
   const [sweepIncludeBooleans, setSweepIncludeBooleans] = useState(false);
   const [includeExamples, setIncludeExamples] = useState(true);
   const [examplesPerGate, setExamplesPerGate] = useState(5);
+  const [parityWithActual, setParityWithActual] = useState(true);
 
   const [simResult, setSimResult] = useState<any | null>(null);
   const [batchResult, setBatchResult] = useState<any | null>(null);
@@ -269,11 +288,14 @@ export default function TunePage() {
         setError(parsed.error);
         return;
       }
-      const overrides = parsed.value;
+      const normalized = normalizeOverridesEnvelope(parsed.value);
+      const overrides = normalized.overrides;
+      const requestParityWithActual = normalized.parityWithActual ?? parityWithActual;
       const body = {
         preset,
         runId: useLatest ? '' : runId.trim(),
         useLatestFinishedIfMissing: useLatest,
+        parityWithActual: requestParityWithActual,
         overrides,
         scope: {
           limit,
@@ -384,7 +406,10 @@ export default function TunePage() {
         setError(baseParsed.error);
         return;
       }
-      const guardKeys = new Set(Object.keys(baseParsed.value));
+      const normalizedBase = normalizeOverridesEnvelope(baseParsed.value);
+      const baseOverrides = normalizedBase.overrides;
+      const requestParityWithActual = normalizedBase.parityWithActual ?? parityWithActual;
+      const guardKeys = new Set(Object.keys(baseOverrides));
       const targetVariants = onlyId ? variants.filter((v) => v.id === onlyId) : variants;
       if (!targetVariants.length) {
         setError('No variants to run.');
@@ -411,7 +436,8 @@ export default function TunePage() {
         preset,
         runId: batchSource === 'runId' ? runId.trim() : '',
         useLatestFinishedIfMissing: batchSource !== 'runId',
-        baseOverrides: baseParsed.value,
+        parityWithActual: requestParityWithActual,
+        baseOverrides,
         variants: parsedVariants,
         scope: {
           limit,
@@ -629,6 +655,10 @@ export default function TunePage() {
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="text-xs text-white/60">Output</div>
+            <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
+              <input type="checkbox" checked={parityWithActual} onChange={(e) => setParityWithActual(e.target.checked)} />
+              Parity with actual counts
+            </label>
             <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
               <input type="checkbox" checked={includeExamples} onChange={(e) => setIncludeExamples(e.target.checked)} />
               Include examples
