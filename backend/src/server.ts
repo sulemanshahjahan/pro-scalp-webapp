@@ -109,6 +109,9 @@ function buildOverrideNotes(overrides: Record<string, any> | undefined) {
   if (keys.some(k => confirmKeys.includes(k))) {
     notes.push('Confirm15 overrides do not recompute stored confirm15 flags. Re-run a scan to apply confirm15 logic changes.');
   }
+  if (keys.includes('READY_BODY_PCT') || keys.includes('MIN_BODY_PCT')) {
+    notes.push('Legacy body overrides map to READY_BODY_MIN_PCT/BEST_BODY_MIN_PCT (fraction units) in simulator.');
+  }
   return notes;
 }
 

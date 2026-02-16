@@ -9,8 +9,14 @@ export type TuneConfig = {
   RSI_EARLY_MIN: number;
   RSI_EARLY_MAX: number;
   RSI_DELTA_STRICT: number;
+  // Legacy body keys (kept for backward-compatible overrides/reporting)
   MIN_BODY_PCT: number;
   READY_BODY_PCT: number;
+  // Live-equivalent ATR body model
+  READY_BODY_ATR_MULT: number;
+  BEST_BODY_ATR_MULT: number;
+  READY_BODY_MIN_PCT: number;
+  BEST_BODY_MIN_PCT: number;
   READY_CLOSE_POS_MIN: number;
   READY_UPPER_WICK_MAX: number;
   VWAP_WATCH_MIN_PCT: number;
@@ -56,6 +62,10 @@ export type TuneConfig = {
   SHORT_RSI_MIN: number;
   SHORT_RSI_MAX: number;
   SHORT_RSI_DELTA_STRICT: number;
+  SHORT_BODY_ATR_MULT: number;
+  SHORT_BODY_MIN_PCT: number;
+  SHORT_CLOSE_POS_MAX: number;
+  SHORT_LOWER_WICK_MAX: number;
   SHORT_MIN_RR: number;
   SHORT_SWEEP_REQUIRED: boolean;
   SHORT_BTC_REQUIRED: boolean;
@@ -133,6 +143,10 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     RSI_DELTA_STRICT: parseFloat(process.env.RSI_DELTA_STRICT || '0.2'),
     MIN_BODY_PCT: parseFloat(process.env.MIN_BODY_PCT || '0.15'),
     READY_BODY_PCT: parseFloat(process.env.READY_BODY_PCT || '0.10'),
+    READY_BODY_ATR_MULT: parseFloat(process.env.READY_BODY_ATR_MULT || '0.40'),
+    BEST_BODY_ATR_MULT: parseFloat(process.env.BEST_BODY_ATR_MULT || '0.80'),
+    READY_BODY_MIN_PCT: parseFloat(process.env.READY_BODY_MIN_PCT || '0.008'),
+    BEST_BODY_MIN_PCT: parseFloat(process.env.BEST_BODY_MIN_PCT || '0.015'),
     READY_CLOSE_POS_MIN: parseFloat(process.env.READY_CLOSE_POS_MIN || '0.60'),
     READY_UPPER_WICK_MAX: parseFloat(process.env.READY_UPPER_WICK_MAX || '0.40'),
     VWAP_WATCH_MIN_PCT: parseFloat(process.env.VWAP_WATCH_MIN_PCT || '0.80'),
@@ -180,6 +194,10 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     SHORT_RSI_MIN: parseFloat(process.env.SHORT_RSI_MIN || '30'),
     SHORT_RSI_MAX: parseFloat(process.env.SHORT_RSI_MAX || '60'),
     SHORT_RSI_DELTA_STRICT: parseFloat(process.env.SHORT_RSI_DELTA_STRICT || '-0.20'),
+    SHORT_BODY_ATR_MULT: parseFloat(process.env.SHORT_BODY_ATR_MULT || '0.40'),
+    SHORT_BODY_MIN_PCT: parseFloat(process.env.SHORT_BODY_MIN_PCT || '0.008'),
+    SHORT_CLOSE_POS_MAX: parseFloat(process.env.SHORT_CLOSE_POS_MAX || '0.40'),
+    SHORT_LOWER_WICK_MAX: parseFloat(process.env.SHORT_LOWER_WICK_MAX || '0.40'),
     SHORT_MIN_RR: parseFloat(process.env.SHORT_MIN_RR || '1.35'),
     SHORT_SWEEP_REQUIRED: (process.env.SHORT_SWEEP_REQUIRED ?? 'false').toLowerCase() !== 'false',
     SHORT_BTC_REQUIRED: (process.env.SHORT_BTC_REQUIRED ?? 'false').toLowerCase() !== 'false',
@@ -233,6 +251,32 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
         out.thresholds.atrGuardPct = n;
       }
       appliedOverrides[key] = n;
+      continue;
+    }
+
+    // Legacy body keys map to the live-equivalent min-pct fields (fraction units).
+    if (key === 'READY_BODY_PCT') {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
+        continue;
+      }
+      out.READY_BODY_PCT = n;
+      out.READY_BODY_MIN_PCT = n / 100;
+      appliedOverrides.READY_BODY_PCT = n;
+      appliedOverrides.READY_BODY_MIN_PCT = out.READY_BODY_MIN_PCT;
+      continue;
+    }
+    if (key === 'MIN_BODY_PCT') {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        overrideTypeErrors[key] = `Expected number, got ${typeof raw}`;
+        continue;
+      }
+      out.MIN_BODY_PCT = n;
+      out.BEST_BODY_MIN_PCT = n / 100;
+      appliedOverrides.MIN_BODY_PCT = n;
+      appliedOverrides.BEST_BODY_MIN_PCT = out.BEST_BODY_MIN_PCT;
       continue;
     }
 
@@ -299,6 +343,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const riskPct = num(metrics.riskPct);
   const volSpike = num(metrics.volSpike);
   const bodyPct = num(metrics.bodyPct);
+  const bodyPctAbs = Math.abs(bodyPct);
   const closePos = num(metrics.closePos);
   const upperWickPct = num(metrics.upperWickPct);
 
@@ -354,9 +399,22 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     rsi <= cfg.RSI_EARLY_MAX &&
     (Number.isFinite(rsiPrev) ? rsi >= (rsiPrev - 0.2) : true);
 
-  const strongBodyBest = bullish && bodyPct >= cfg.MIN_BODY_PCT && upperWickPct <= 0.5;
+  // Mirror live body-quality model:
+  // requiredBodyPct = max(atrPct * ATR_MULT, MIN_PCT_FLOOR * 100)
+  const readyBodyAtrPct = Number.isFinite(atrPct) ? atrPct * cfg.READY_BODY_ATR_MULT : 0;
+  const bestBodyAtrPct = Number.isFinite(atrPct) ? atrPct * cfg.BEST_BODY_ATR_MULT : 0;
+  const readyBodyFloorPct = Number.isFinite(cfg.READY_BODY_MIN_PCT) ? cfg.READY_BODY_MIN_PCT * 100 : 0;
+  const bestBodyFloorPct = Number.isFinite(cfg.BEST_BODY_MIN_PCT) ? cfg.BEST_BODY_MIN_PCT * 100 : 0;
+  const requiredReadyBodyPct = Math.max(readyBodyAtrPct, readyBodyFloorPct);
+  const requiredBestBodyPct = Math.max(bestBodyAtrPct, bestBodyFloorPct);
   const strongBodyReady = bullish &&
-    bodyPct >= cfg.READY_BODY_PCT &&
+    Number.isFinite(bodyPctAbs) &&
+    bodyPctAbs >= requiredReadyBodyPct &&
+    closePos >= cfg.READY_CLOSE_POS_MIN &&
+    upperWickPct <= cfg.READY_UPPER_WICK_MAX;
+  const strongBodyBest = bullish &&
+    Number.isFinite(bodyPctAbs) &&
+    bodyPctAbs >= requiredBestBodyPct &&
     closePos >= cfg.READY_CLOSE_POS_MIN &&
     upperWickPct <= cfg.READY_UPPER_WICK_MAX;
 
@@ -468,8 +526,19 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     ? (rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && rsiDelta <= cfg.SHORT_RSI_DELTA_STRICT)
     : Boolean(shortGate.rsiShortOk);
   const bearish = !bullish;
+  const shortBodyAtrPct = Number.isFinite(atrPct) ? atrPct * cfg.SHORT_BODY_ATR_MULT : 0;
+  const shortBodyFloorPct = Number.isFinite(cfg.SHORT_BODY_MIN_PCT) ? cfg.SHORT_BODY_MIN_PCT * 100 : 0;
+  const requiredShortBodyPct = Math.max(shortBodyAtrPct, shortBodyFloorPct);
+  // For bearish candles, closePos=(close-low)/range equals lower-wick ratio.
+  const lowerWickPctShort = closePos;
   const strongBodyShort = shortGate?.strongBody == null
-    ? (bearish && bodyPct >= cfg.READY_BODY_PCT)
+    ? (
+      bearish &&
+      Number.isFinite(bodyPctAbs) &&
+      bodyPctAbs >= requiredShortBodyPct &&
+      closePos <= cfg.SHORT_CLOSE_POS_MAX &&
+      lowerWickPctShort <= cfg.SHORT_LOWER_WICK_MAX
+    )
     : Boolean(shortGate.strongBody);
   const shortConfirmStrict = shortGate?.confirm15Strict == null ? confirm15Strict : Boolean(shortGate.confirm15Strict);
   const shortConfirmBase = shortGate?.confirm15 == null ? confirm15Ok : Boolean(shortGate.confirm15);
