@@ -123,23 +123,343 @@ function hasNoOverrides(report: {
   return applied === 0 && unknown === 0 && typeErr === 0;
 }
 
-type SimEval = {
-  counts: { watch: number; early: number; ready: number; best: number; watchShort: number; earlyShort: number; readyShort: number; bestShort: number };
-  funnel: {
-    candidate_evaluated: number;
-    watch_created: number;
-    early_created: number;
-    ready_core_true: number;
-    best_core_true: number;
-    ready_final_true: number;
-    best_final_true: number;
-    watch_short_created: number;
-    early_short_created: number;
-    ready_short_core_true: number;
-    best_short_core_true: number;
-    ready_short_final_true: number;
-    best_short_final_true: number;
+type SignalCounts = {
+  watch: number;
+  early: number;
+  ready: number;
+  best: number;
+  watchShort: number;
+  earlyShort: number;
+  readyShort: number;
+  bestShort: number;
+};
+
+type SimFunnel = {
+  candidate_evaluated: number;
+  watch_created: number;
+  early_created: number;
+  ready_core_true: number;
+  best_core_true: number;
+  ready_final_true: number;
+  best_final_true: number;
+  watch_short_created: number;
+  early_short_created: number;
+  ready_short_core_true: number;
+  best_short_core_true: number;
+  ready_short_final_true: number;
+  best_short_final_true: number;
+};
+
+type RunSignalLite = {
+  id: number;
+  runId: string;
+  symbol: string;
+  category: string;
+  gateSnapshot: any | null;
+  outcomeResult: string | null;
+  outcomeHitTp1: boolean | null;
+  outcomeHitSl: boolean | null;
+  outcomeWindowStatus: string | null;
+};
+
+const ZERO_COUNTS: SignalCounts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
+
+function safeJsonParse<T>(raw: any): T | null {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw as T;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  try { return JSON.parse(raw) as T; } catch { return null; }
+}
+
+function toBool(v: any): boolean | null {
+  if (v == null) return null;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return Number.isFinite(v) ? v !== 0 : null;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(s)) return true;
+    if (['false', '0', 'no', 'n'].includes(s)) return false;
+  }
+  return null;
+}
+
+function diffCounts(left: SignalCounts, right: SignalCounts): SignalCounts {
+  return {
+    watch: left.watch - right.watch,
+    early: left.early - right.early,
+    ready: left.ready - right.ready,
+    best: left.best - right.best,
+    watchShort: left.watchShort - right.watchShort,
+    earlyShort: left.earlyShort - right.earlyShort,
+    readyShort: left.readyShort - right.readyShort,
+    bestShort: left.bestShort - right.bestShort,
   };
+}
+
+function alignFunnelToCounts(funnel: SimFunnel, counts: SignalCounts): SimFunnel {
+  return {
+    ...funnel,
+    watch_created: counts.watch,
+    early_created: counts.early,
+    ready_final_true: counts.ready,
+    best_final_true: counts.best,
+    watch_short_created: counts.watchShort,
+    early_short_created: counts.earlyShort,
+    ready_short_final_true: counts.readyShort,
+    best_short_final_true: counts.bestShort,
+  };
+}
+
+function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null): Record<string, boolean> | null {
+  const src = computed?.readyGateSnapshot ?? gateSnapshot?.ready;
+  if (!src || typeof src !== 'object') return null;
+  const out: Record<string, boolean> = {
+    sessionOK: Boolean(src.sessionOk),
+    priceAboveVwap: Boolean(src.priceAboveVwap),
+    priceAboveEma: Boolean(src.priceAboveEma),
+    nearVwapReady: Boolean(src.nearVwap),
+    reclaimOrTap: Boolean(src.reclaimOrTap),
+    readyVolOk: Boolean(src.volSpike),
+    atrOkReady: Boolean(src.atr),
+    confirm15mOk: Boolean(src.confirm15),
+    strongBody: Boolean(src.strongBody),
+    rrOk: Boolean(src.rrOk),
+    riskOk: Boolean(src.riskOk),
+    rsiReadyOk: Boolean(src.rsiReadyOk),
+    readyTrendOk: Boolean(src.trend),
+    sweepOk: Boolean(src.sweep),
+    btcOk: Boolean(src.btc),
+    core: Boolean(src.core),
+  };
+  return out;
+}
+
+function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null): Record<string, boolean> | null {
+  const src = computed?.shortGateSnapshot ?? gateSnapshot?.short;
+  if (!src || typeof src !== 'object') return null;
+  const out: Record<string, boolean> = {
+    sessionOK: Boolean(src.sessionOk),
+    priceBelowVwap: Boolean(src.priceBelowVwap),
+    priceBelowEma: Boolean(src.priceBelowEma),
+    nearVwapShort: Boolean(src.nearVwap),
+    rsiShortOk: Boolean(src.rsiShortOk),
+    strongBody: Boolean(src.strongBody),
+    readyVolOk: Boolean(src.volSpike),
+    atrOkReady: Boolean(src.atr),
+    confirm15mOk: Boolean(src.confirm15),
+    trendOkShort: Boolean(src.trend),
+    rrOk: Boolean(src.rrOk),
+    riskOk: Boolean(src.riskOk),
+    sweepOk: Boolean(src.sweep),
+    btcOk: Boolean(src.btc),
+    core: Boolean(src.core),
+  };
+  return out;
+}
+
+function firstDiff(order: string[], sim: Record<string, boolean>, live: Record<string, boolean> | null): string | null {
+  if (!live) return null;
+  for (const k of order) {
+    if (typeof live[k] !== 'boolean') continue;
+    if (sim[k] !== live[k]) return k;
+  }
+  return null;
+}
+
+function firstFalse(order: string[], flags: Record<string, boolean> | null): string | null {
+  if (!flags) return null;
+  return order.find((k) => flags[k] === false) ?? null;
+}
+
+async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<RunSignalLite[]> {
+  const cleaned = Array.from(new Set((runIds || []).map((r) => String(r || '').trim()).filter(Boolean)));
+  if (!cleaned.length) return [];
+  const bind: Record<string, any> = { horizonMin };
+  const placeholders = cleaned.map((_, i) => {
+    bind[`run_${i}`] = cleaned[i];
+    return `@run_${i}`;
+  }).join(',');
+  const rows = await db.prepare(`
+    SELECT
+      s.id as "id",
+      s.run_id as "runId",
+      s.symbol as "symbol",
+      s.category as "category",
+      s.gate_snapshot_json as "gateSnapshotJson",
+      o.result as "outcomeResult",
+      o.hit_tp1 as "outcomeHitTp1",
+      o.hit_sl as "outcomeHitSl",
+      o.window_status as "outcomeWindowStatus"
+    FROM signals s
+    LEFT JOIN signal_outcomes o
+      ON o.signal_id = s.id
+      AND o.horizon_min = @horizonMin
+    WHERE s.run_id IN (${placeholders})
+  `).all(bind) as any[];
+  return rows.map((r) => ({
+    id: Number(r.id ?? 0),
+    runId: String(r.runId ?? ''),
+    symbol: String(r.symbol ?? ''),
+    category: String(r.category ?? ''),
+    gateSnapshot: safeJsonParse<any>(r.gateSnapshotJson),
+    outcomeResult: r.outcomeResult == null ? null : String(r.outcomeResult),
+    outcomeHitTp1: toBool(r.outcomeHitTp1),
+    outcomeHitSl: toBool(r.outcomeHitSl),
+    outcomeWindowStatus: r.outcomeWindowStatus == null ? null : String(r.outcomeWindowStatus),
+  }));
+}
+
+function computeActualOutcome120m(signalRows: RunSignalLite[]) {
+  const categories = ['READY_TO_BUY', 'BEST_ENTRY', 'READY_TO_SELL', 'BEST_SHORT_ENTRY'];
+  const byCategory: Record<string, any> = {};
+  for (const cat of categories) {
+    byCategory[cat] = {
+      count: 0,
+      tp1_hit_120m: 0,
+      sl_hit_120m: 0,
+      no_hit_120m: 0,
+      missing_outcome_120m: 0,
+      unresolved_120m: 0,
+      win_rate_120m: 0,
+      loss_rate_120m: 0,
+      no_hit_rate_120m: 0,
+    };
+  }
+
+  for (const row of signalRows) {
+    const bucket = byCategory[row.category];
+    if (!bucket) continue;
+    bucket.count += 1;
+    if (row.outcomeResult == null && row.outcomeHitTp1 == null && row.outcomeHitSl == null) {
+      bucket.missing_outcome_120m += 1;
+      continue;
+    }
+    if (row.outcomeHitTp1 === true || row.outcomeResult === 'WIN') {
+      bucket.tp1_hit_120m += 1;
+    } else if (row.outcomeHitSl === true || row.outcomeResult === 'LOSS') {
+      bucket.sl_hit_120m += 1;
+    } else if (row.outcomeResult === 'NONE') {
+      bucket.no_hit_120m += 1;
+    } else {
+      bucket.unresolved_120m += 1;
+    }
+  }
+
+  const totals = {
+    count: 0,
+    tp1_hit_120m: 0,
+    sl_hit_120m: 0,
+    no_hit_120m: 0,
+    missing_outcome_120m: 0,
+    unresolved_120m: 0,
+    win_rate_120m: 0,
+    loss_rate_120m: 0,
+    no_hit_rate_120m: 0,
+  };
+
+  for (const cat of categories) {
+    const b = byCategory[cat];
+    const denom = b.count > 0 ? b.count : 1;
+    b.win_rate_120m = b.tp1_hit_120m / denom;
+    b.loss_rate_120m = b.sl_hit_120m / denom;
+    b.no_hit_rate_120m = b.no_hit_120m / denom;
+    totals.count += b.count;
+    totals.tp1_hit_120m += b.tp1_hit_120m;
+    totals.sl_hit_120m += b.sl_hit_120m;
+    totals.no_hit_120m += b.no_hit_120m;
+    totals.missing_outcome_120m += b.missing_outcome_120m;
+    totals.unresolved_120m += b.unresolved_120m;
+  }
+  const totalDenom = totals.count > 0 ? totals.count : 1;
+  totals.win_rate_120m = totals.tp1_hit_120m / totalDenom;
+  totals.loss_rate_120m = totals.sl_hit_120m / totalDenom;
+  totals.no_hit_rate_120m = totals.no_hit_120m / totalDenom;
+
+  return {
+    horizonMin: 120,
+    byCategory,
+    totals,
+  };
+}
+
+function buildParityMismatches(params: {
+  rows: Array<{ runId?: string; symbol: string; metrics: any; computed: any }>;
+  cfg: any;
+  signalByKey: Map<string, RunSignalLite>;
+  mismatchLimit: number;
+}) {
+  const { rows, cfg, signalByKey, mismatchLimit } = params;
+  const readyOrder = ['sessionOK', 'priceAboveVwap', 'priceAboveEma', 'nearVwapReady', 'reclaimOrTap', 'readyVolOk', 'atrOkReady', 'confirm15mOk', 'strongBody', 'rrOk', 'riskOk', 'rsiReadyOk', 'readyTrendOk', 'sweepOk', 'btcOk', 'core'];
+  const shortOrder = ['sessionOK', 'priceBelowVwap', 'priceBelowEma', 'nearVwapShort', 'rsiShortOk', 'strongBody', 'readyVolOk', 'atrOkReady', 'confirm15mOk', 'trendOkShort', 'rrOk', 'riskOk', 'sweepOk', 'btcOk', 'core'];
+  const ready: any[] = [];
+  const readyShort: any[] = [];
+
+  for (const row of rows) {
+    if (ready.length >= mismatchLimit && readyShort.length >= mismatchLimit) break;
+    const simRes: any = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
+    const key = `${String(row.runId ?? '')}|${String(row.symbol ?? '').toUpperCase()}`;
+    const actual = signalByKey.get(key) ?? null;
+    const actualCategory = actual?.category ?? null;
+    const actualReady = actualCategory === 'READY_TO_BUY' || actualCategory === 'BEST_ENTRY';
+    const actualReadyShort = actualCategory === 'READY_TO_SELL' || actualCategory === 'BEST_SHORT_ENTRY';
+
+    if (simRes.readyOk && !actualReady && ready.length < mismatchLimit) {
+      const simFlags: Record<string, boolean> = {
+        ...(simRes.readyFlags ?? {}),
+        sweepOk: Boolean(simRes.readySweepOk),
+        btcOk: Boolean(simRes.readyBtcOk),
+        core: Boolean(simRes.readyCore),
+      };
+      const liveFlags = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null);
+      const divergence = firstDiff(readyOrder, simFlags, liveFlags);
+      ready.push({
+        runId: String(row.runId ?? ''),
+        symbol: String(row.symbol ?? ''),
+        sim_ready: true,
+        actual_ready: false,
+        actual_category: actualCategory,
+        why_not_emitted: divergence
+          ? `first_divergence:${divergence}`
+          : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
+        first_failed_live: firstFalse(readyOrder, liveFlags),
+        first_failed_sim: firstFalse(readyOrder, simFlags),
+        sim_flags: simFlags,
+        live_flags: liveFlags,
+      });
+    }
+
+    if (simRes.readyShortOk && !actualReadyShort && readyShort.length < mismatchLimit) {
+      const simShortFlags: Record<string, boolean> = {
+        ...(simRes.readyShortFlags ?? {}),
+        sweepOk: Boolean(simRes.readyShortSweepOk),
+        btcOk: Boolean(simRes.readyShortBtcOk),
+        core: Boolean(simRes.readyShortCore),
+      };
+      const liveShortFlags = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null);
+      const divergence = firstDiff(shortOrder, simShortFlags, liveShortFlags);
+      readyShort.push({
+        runId: String(row.runId ?? ''),
+        symbol: String(row.symbol ?? ''),
+        sim_ready_short: true,
+        actual_ready_short: false,
+        actual_category: actualCategory,
+        why_not_emitted: divergence
+          ? `first_divergence:${divergence}`
+          : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
+        first_failed_live: firstFalse(shortOrder, liveShortFlags),
+        first_failed_sim: firstFalse(shortOrder, simShortFlags),
+        sim_flags: simShortFlags,
+        live_flags: liveShortFlags,
+      });
+    }
+  }
+
+  return { ready, readyShort };
+}
+
+type SimEval = {
+  counts: SignalCounts;
+  funnel: SimFunnel;
   firstFailed: Record<string, Record<string, number>>;
   gateTrue: Record<string, Record<string, number>>;
   postCoreFailed: Record<string, Record<string, number>>;
@@ -462,18 +782,26 @@ app.post('/api/tune/sim', async (req, res) => {
     const parityWithActual = body.parityWithActual !== false;
     const useActualParity = Boolean(actualCounts && parityWithActual && hasNoOverrides(overrideReport));
     const countsOut = useActualParity ? (actualCounts as NonNullable<typeof actualCounts>) : sim.counts;
+    const funnelOut = useActualParity ? alignFunnelToCounts(sim.funnel, countsOut) : sim.funnel;
+    const runSignalRows = await loadSignalsForRuns([runId], 120);
+    const signalByKey = new Map<string, RunSignalLite>();
+    for (const row of runSignalRows) {
+      const key = `${row.runId}|${row.symbol.toUpperCase()}`;
+      const prev = signalByKey.get(key);
+      if (!prev || row.id > prev.id) signalByKey.set(key, row);
+    }
+    const mismatchLimitRaw = Number(body.mismatchLimit ?? 20);
+    const mismatchLimit = Number.isFinite(mismatchLimitRaw) ? Math.max(1, Math.min(200, mismatchLimitRaw)) : 20;
+    const parityMismatches = buildParityMismatches({
+      rows: rows.map((r) => ({ runId: r.runId, symbol: r.symbol, metrics: r.metrics, computed: r.computed })),
+      cfg: overrideReport.config,
+      signalByKey,
+      mismatchLimit,
+    });
+    const actualOutcome120m = computeActualOutcome120m(runSignalRows);
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
-    const diffVsActual = actualCounts ? {
-      watch: countsOut.watch - actualCounts.watch,
-      early: countsOut.early - actualCounts.early,
-      ready: countsOut.ready - actualCounts.ready,
-      best: countsOut.best - actualCounts.best,
-      watchShort: countsOut.watchShort - actualCounts.watchShort,
-      earlyShort: countsOut.earlyShort - actualCounts.earlyShort,
-      readyShort: countsOut.readyShort - actualCounts.readyShort,
-      bestShort: countsOut.bestShort - actualCounts.bestShort,
-    } : null;
+    const diffVsActual = actualCounts ? diffCounts(countsOut, actualCounts) : null;
 
     res.json({
       meta: {
@@ -491,13 +819,15 @@ app.post('/api/tune/sim', async (req, res) => {
         notes: buildOverrideNotes(body.overrides),
       },
       counts: countsOut,
-      funnel: sim.funnel,
+      funnel: funnelOut,
       postCoreFailed: sim.postCoreFailed,
       firstFailed: sim.firstFailed,
       gateTrue: sim.gateTrue,
       ...(sim.examples ? { examples: sim.examples } : {}),
       actualCounts,
       diffVsActual,
+      parityMismatches,
+      actualOutcome120m,
       riskNotes: [],
     });
   } catch (e) {
@@ -589,13 +919,13 @@ app.post('/api/tune/simBatch', async (req, res) => {
 
     const variants = Array.isArray(body.variants) ? body.variants : [];
     if (!variants.length) return res.status(400).json({ ok: false, error: 'variants required' });
+    const runIdsOut = useMulti ? runIds : [runId].filter(Boolean);
 
     const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
     const baseOverrideReport = applyOverrides(cfgBase, body.baseOverrides || {});
     const baseSim = runTuneSimRows(rows, baseOverrideReport.config, { includeExamples, examplesPerGate });
     const parityWithActual = body.parityWithActual !== false;
     const hasActualCounts = selectedRuns.some((r) => r && typeof r.signalsByCategory === 'object' && r.signalsByCategory != null);
-    const zeroCounts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
     const actualCounts = hasActualCounts
       ? selectedRuns.reduce((acc, r) => {
         const cats = r?.signalsByCategory ?? {};
@@ -608,22 +938,29 @@ app.post('/api/tune/simBatch', async (req, res) => {
         acc.readyShort += Number(cats.READY_TO_SELL ?? 0);
         acc.bestShort += Number(cats.BEST_SHORT_ENTRY ?? 0);
         return acc;
-      }, { ...zeroCounts })
+      }, { ...ZERO_COUNTS })
       : null;
-    const diffCounts = (left: typeof zeroCounts, right: typeof zeroCounts) => ({
-      watch: left.watch - right.watch,
-      early: left.early - right.early,
-      ready: left.ready - right.ready,
-      best: left.best - right.best,
-      watchShort: left.watchShort - right.watchShort,
-      earlyShort: left.earlyShort - right.earlyShort,
-      readyShort: left.readyShort - right.readyShort,
-      bestShort: left.bestShort - right.bestShort,
-    });
     const baseNoOverrides = hasNoOverrides(baseOverrideReport);
     const useActualBase = Boolean(actualCounts && parityWithActual && baseNoOverrides);
-    const baseCounts = useActualBase ? (actualCounts as typeof zeroCounts) : baseSim.counts;
+    const baseCounts = useActualBase ? (actualCounts as SignalCounts) : baseSim.counts;
+    const baseFunnel = useActualBase ? alignFunnelToCounts(baseSim.funnel, baseCounts) : baseSim.funnel;
     const baseDiffVsActual = actualCounts ? diffCounts(baseCounts, actualCounts) : null;
+    const runSignalRows = await loadSignalsForRuns(runIdsOut, 120);
+    const signalByKey = new Map<string, RunSignalLite>();
+    for (const row of runSignalRows) {
+      const key = `${row.runId}|${row.symbol.toUpperCase()}`;
+      const prev = signalByKey.get(key);
+      if (!prev || row.id > prev.id) signalByKey.set(key, row);
+    }
+    const mismatchLimitRaw = Number(body.mismatchLimit ?? 20);
+    const mismatchLimit = Number.isFinite(mismatchLimitRaw) ? Math.max(1, Math.min(200, mismatchLimitRaw)) : 20;
+    const baseParityMismatches = buildParityMismatches({
+      rows: rows.map((r) => ({ runId: r.runId, symbol: r.symbol, metrics: r.metrics, computed: r.computed })),
+      cfg: baseOverrideReport.config,
+      signalByKey,
+      mismatchLimit,
+    });
+    const actualOutcome120m = computeActualOutcome120m(runSignalRows);
 
     const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
       const added: string[] = [];
@@ -651,7 +988,8 @@ app.post('/api/tune/simBatch', async (req, res) => {
       const sim = runTuneSimRows(rows, overrideReport.config, { includeExamples, examplesPerGate });
       const variantNoOverrides = hasNoOverrides(overrideReport);
       const useActualVariant = Boolean(actualCounts && parityWithActual && variantNoOverrides);
-      const countsOut = useActualVariant ? (actualCounts as typeof zeroCounts) : sim.counts;
+      const countsOut = useActualVariant ? (actualCounts as SignalCounts) : sim.counts;
+      const funnelOut = useActualVariant ? alignFunnelToCounts(sim.funnel, countsOut) : sim.funnel;
       const readyDiff = (useActualVariant || useActualBase)
         ? { added: [] as string[], removed: [] as string[] }
         : buildDiff(baseSim.readySymbols, sim.readySymbols);
@@ -669,7 +1007,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
         },
         notes: buildOverrideNotes({ ...(body.baseOverrides || {}), ...(overrides || {}) }),
         counts: countsOut,
-        funnel: sim.funnel,
+        funnel: funnelOut,
         postCoreFailed: sim.postCoreFailed,
         firstFailed: sim.firstFailed,
         gateTrue: sim.gateTrue,
@@ -686,7 +1024,6 @@ app.post('/api/tune/simBatch', async (req, res) => {
     });
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
-    const runIdsOut = useMulti ? runIds : [runId].filter(Boolean);
     const startedAtRange = runMeta.length
       ? {
         min: Math.min(...runMeta.map(r => r.startedAt)),
@@ -723,10 +1060,12 @@ app.post('/api/tune/simBatch', async (req, res) => {
         counts: baseCounts,
         actualCounts,
         diffVsActual: baseDiffVsActual,
-        funnel: baseSim.funnel,
+        funnel: baseFunnel,
         postCoreFailed: baseSim.postCoreFailed,
         firstFailed: baseSim.firstFailed,
         gateTrue: baseSim.gateTrue,
+        parityMismatches: baseParityMismatches,
+        actualOutcome120m,
         ...(baseSim.examples ? { examples: baseSim.examples } : {}),
       },
       variants: variantResults,

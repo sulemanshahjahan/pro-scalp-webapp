@@ -83,6 +83,10 @@ export type EvalResult = {
   bestShortOk?: boolean;
   readyShortCore?: boolean;
   bestShortCore?: boolean;
+  readyShortSweepOk?: boolean;
+  readyShortBtcOk?: boolean;
+  readyShortFlags?: Record<string, boolean>;
+  bestShortFlags?: Record<string, boolean>;
 };
 
 export type CandidateFeatureInput = {
@@ -571,5 +575,35 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     bestShortOk,
     readyShortCore,
     bestShortCore,
+    readyShortSweepOk: shortSweepOkReq,
+    readyShortBtcOk: shortBtcOkReq,
+    readyShortFlags: {
+      sessionOK: sessionOk,
+      priceBelowVwap: readyPriceBelowVwap,
+      priceBelowEma: emaDistPct < 0,
+      nearVwapShort,
+      rsiShortOk,
+      strongBody: strongBodyShort,
+      readyVolOk,
+      atrOkReady,
+      confirm15mOk: shortConfirmOk,
+      trendOkShort: readyTrendOkShort,
+      rrOk: rrShortOk,
+      riskOk: readyRiskOk,
+    },
+    bestShortFlags: {
+      priceBelowVwap: priceBelowVwapStrict,
+      nearVwapShort,
+      rsiShortOk,
+      strongBody: strongBodyShort,
+      atrOkBest,
+      trendOkShort,
+      sessionOK: sessionOk,
+      confirm15mOk: confirm15Ok,
+      sweepOk,
+      bestVolOk,
+      rrOk,
+      hasMarket,
+    },
   };
 }

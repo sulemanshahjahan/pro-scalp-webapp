@@ -629,6 +629,7 @@ export type CandidateFeatureSnapshot = {
     readyFirstFailedGate: string | null;
     readyBlockedReasons: string[];
     readyGateSnapshot: Record<string, any> | null;
+    shortGateSnapshot?: Record<string, any> | null;
     readyMinRiskPct: number;
     hasMarket: boolean;
     btcBull: boolean;
@@ -1557,6 +1558,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       readyFirstFailedGate: readyDebug.firstFailedGate ?? null,
       readyBlockedReasons,
       readyGateSnapshot: gateSnapshot?.ready ?? null,
+      shortGateSnapshot: gateSnapshot?.short ?? null,
       readyMinRiskPct: READY_MIN_RISK_PCT,
       hasMarket,
       btcBull,

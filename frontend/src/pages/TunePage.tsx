@@ -1104,6 +1104,39 @@ export default function TunePage() {
                 Actual signal counts were not available for the selected runs.
               </div>
             )}
+            {batchResult?.base?.parityMismatches ? (
+              <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 p-2 text-xs text-white/80 space-y-1">
+                <div>
+                  <span className="text-white/60">Parity mismatches: </span>
+                  ready {batchResult?.base?.parityMismatches?.ready?.length ?? 0}
+                  {' | '}readyShort {batchResult?.base?.parityMismatches?.readyShort?.length ?? 0}
+                </div>
+                {batchResult?.base?.parityMismatches?.ready?.[0] ? (
+                  <div className="text-white/70">
+                    ready sample: {batchResult.base.parityMismatches.ready[0].symbol} ({batchResult.base.parityMismatches.ready[0].why_not_emitted})
+                  </div>
+                ) : null}
+                {batchResult?.base?.parityMismatches?.readyShort?.[0] ? (
+                  <div className="text-white/70">
+                    readyShort sample: {batchResult.base.parityMismatches.readyShort[0].symbol} ({batchResult.base.parityMismatches.readyShort[0].why_not_emitted})
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {batchResult?.base?.actualOutcome120m?.byCategory ? (
+              <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2 text-xs text-white/80 space-y-1">
+                <div className="text-white/60">Actual outcomes @120m</div>
+                {Object.entries(batchResult.base.actualOutcome120m.byCategory).map(([cat, stats]: any) => (
+                  <div key={`o120-${cat}`} className="text-white/70">
+                    {cat}: n {stats?.count ?? 0}
+                    {' | '}tp1 {stats?.tp1_hit_120m ?? 0}
+                    {' | '}sl {stats?.sl_hit_120m ?? 0}
+                    {' | '}no_hit {stats?.no_hit_120m ?? 0}
+                    {' | '}wr {fmt((stats?.win_rate_120m ?? 0) * 100, 1)}%
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
