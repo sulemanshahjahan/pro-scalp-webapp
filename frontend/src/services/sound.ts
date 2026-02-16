@@ -1,5 +1,12 @@
 // services/sound.ts
-export type SoundKind = 'EARLY_READY' | 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY';
+export type SoundKind =
+  | 'EARLY_READY'
+  | 'WATCH'
+  | 'READY_TO_BUY'
+  | 'BEST_ENTRY'
+  | 'EARLY_READY_SHORT'
+  | 'READY_TO_SELL'
+  | 'BEST_SHORT_ENTRY';
 
 let unlocked = false;
 const audios: Partial<Record<SoundKind, HTMLAudioElement>> = {};
@@ -13,8 +20,10 @@ function ensure(kind: SoundKind) {
   if (!audios[kind]) {
     const src =
       kind === 'EARLY_READY' ? '/sounds/beep-watch.mp3' :
+      kind === 'EARLY_READY_SHORT' ? '/sounds/beep-watch.mp3' :
       kind === 'WATCH' ? '/sounds/beep-watch.mp3' :
       kind === 'READY_TO_BUY' ? '/sounds/beep-buy.mp3' :
+      kind === 'READY_TO_SELL' ? '/sounds/beep-buy.mp3' :
       '/sounds/beep-best.mp3';
     audios[kind] = mk(src);
   }

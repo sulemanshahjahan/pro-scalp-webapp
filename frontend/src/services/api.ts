@@ -13,7 +13,7 @@ export async function getVapidKey(): Promise<string> {
 // ✅ UPDATED: include title/body/tag + duplicate category inside data
 export async function debugPush(
   symbol = 'DEMOUSDT',
-  category: 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' = 'BEST_ENTRY',
+  category: 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'READY_TO_SELL' | 'BEST_SHORT_ENTRY' = 'BEST_ENTRY',
   price = 1.2345
 ) {
   await fetch(API('/api/debug/push'), {

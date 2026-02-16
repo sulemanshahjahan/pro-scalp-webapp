@@ -3,7 +3,15 @@ import { getReadyGateDebug } from '../services/api';
 import MarketConditionsDashboard from '../components/MarketConditionsDashboard';
 
 const HORIZONS = [15, 30, 60, 120, 240] as const;
-const CATEGORIES = ['BEST_ENTRY', 'READY_TO_BUY', 'EARLY_READY', 'WATCH'] as const;
+const CATEGORIES = [
+  'BEST_ENTRY',
+  'READY_TO_BUY',
+  'EARLY_READY',
+  'WATCH',
+  'BEST_SHORT_ENTRY',
+  'READY_TO_SELL',
+  'EARLY_READY_SHORT',
+] as const;
 const PRESETS = ['ALL', 'BALANCED', 'CONSERVATIVE', 'AGGRESSIVE'] as const;
 const BTC_STATES = ['ALL', 'BULL', 'NEUTRAL', 'BEAR'] as const;
 const BUCKET_LABELS: Record<'deltaVwapPct' | 'rsi9' | 'atrPct' | 'volSpike' | 'rr', string> = {
@@ -66,6 +74,9 @@ function categoryPill(cat: string) {
   if (cat === 'BEST_ENTRY') return 'bg-amber-400/15 text-amber-200 border-amber-400/30';
   if (cat === 'READY_TO_BUY') return 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30';
   if (cat === 'EARLY_READY') return 'bg-cyan-400/15 text-cyan-200 border-cyan-400/30';
+  if (cat === 'BEST_SHORT_ENTRY') return 'bg-rose-400/15 text-rose-200 border-rose-400/30';
+  if (cat === 'READY_TO_SELL') return 'bg-orange-400/15 text-orange-200 border-orange-400/30';
+  if (cat === 'EARLY_READY_SHORT') return 'bg-fuchsia-400/15 text-fuchsia-200 border-fuchsia-400/30';
   return 'bg-white/10 text-white/80 border-white/10';
 }
 function btcStateFromRow(row: any) {

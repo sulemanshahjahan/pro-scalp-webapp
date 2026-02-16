@@ -167,7 +167,7 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     // Threshold override (for simulator)
     THRESHOLD_VOL_SPIKE_X: thresholds.volSpikeX,
     // Short signal config
-    ENABLE_SHORT_SIGNALS: (process.env.ENABLE_SHORT_SIGNALS ?? 'false').toLowerCase() === 'true',
+    ENABLE_SHORT_SIGNALS: (process.env.ENABLE_SHORT_SIGNALS ?? 'true').toLowerCase() === 'true',
     SHORT_VWAP_MAX_PCT: parseFloat(process.env.SHORT_VWAP_MAX_PCT || '1.50'),
     SHORT_VWAP_TOUCH_PCT: parseFloat(process.env.SHORT_VWAP_TOUCH_PCT || '0.50'),
     SHORT_VWAP_TOUCH_BARS: parseInt(process.env.SHORT_VWAP_TOUCH_BARS || '10', 10),
@@ -479,7 +479,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     rrShortOk &&
     readyRiskOk;
 
-  const shortSweepOk = sweepOk || true;
+  const shortSweepOk = sweepOk;
   const shortSweepOkReq = cfg.SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
   const readyShortOk = readyShortCore && shortSweepOkReq && shortBtcOkReq;
 

@@ -201,9 +201,9 @@ export default function App() {
     Aggressive:   { vwapDistancePct: 1.00, volSpikeX: 1.0, atrGuardPct: 4.0 },
   };
 
-  function canPlayByGroup(cat: 'WATCH' | 'EARLY_READY' | 'READY_TO_BUY' | 'BEST_ENTRY') {
-    if (cat === 'WATCH' || cat === 'EARLY_READY') return groupWatchOnRef.current;
-    if (cat === 'READY_TO_BUY' || cat === 'BEST_ENTRY') return groupBuyOnRef.current;
+  function canPlayByGroup(cat: 'WATCH' | 'EARLY_READY' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'EARLY_READY_SHORT' | 'READY_TO_SELL' | 'BEST_SHORT_ENTRY') {
+    if (cat === 'WATCH' || cat === 'EARLY_READY' || cat === 'EARLY_READY_SHORT') return groupWatchOnRef.current;
+    if (cat === 'READY_TO_BUY' || cat === 'BEST_ENTRY' || cat === 'READY_TO_SELL' || cat === 'BEST_SHORT_ENTRY') return groupBuyOnRef.current;
     return true;
   }
 
@@ -211,7 +211,7 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       const handler = (evt: MessageEvent) => {
         if (evt.data?.type === 'PLAY_SOUND') {
-          const cat = evt.data?.category as 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'EARLY_READY' | undefined;
+          const cat = evt.data?.category as 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'EARLY_READY' | 'EARLY_READY_SHORT' | 'READY_TO_SELL' | 'BEST_SHORT_ENTRY' | undefined;
           const finalCat = cat ?? 'BEST_ENTRY';
           if (canPlayByGroup(finalCat)) playAlert(finalCat);
         }
@@ -283,7 +283,15 @@ export default function App() {
     }
   }, []);
 
-  const [totals, setTotals] = useState({ watch: 0, early_ready: 0, ready: 0, best: 0 });
+  const [totals, setTotals] = useState({
+    watch: 0,
+    early_ready: 0,
+    ready: 0,
+    best: 0,
+    early_ready_short: 0,
+    ready_short: 0,
+    best_short: 0,
+  });
 
   const scanState = health?.scan?.state ?? 'IDLE';
   const scanMeta = health?.scan?.meta ?? null;
@@ -364,7 +372,7 @@ export default function App() {
       setSignals(merged);
 
       for (const s of incoming) {
-        const cat = s.category as 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'EARLY_READY' | undefined;
+        const cat = s.category as 'WATCH' | 'READY_TO_BUY' | 'BEST_ENTRY' | 'EARLY_READY' | 'EARLY_READY_SHORT' | 'READY_TO_SELL' | 'BEST_SHORT_ENTRY' | undefined;
         if (!cat) continue;
 
         const key = `${s.symbol}|${cat}|${s.time}`;
@@ -375,6 +383,9 @@ export default function App() {
           else if (cat === 'EARLY_READY') setTotals(t => ({ ...t, early_ready: t.early_ready + 1 }));
           else if (cat === 'READY_TO_BUY') setTotals(t => ({ ...t, ready: t.ready + 1 }));
           else if (cat === 'BEST_ENTRY') setTotals(t => ({ ...t, best: t.best + 1 }));
+          else if (cat === 'EARLY_READY_SHORT') setTotals(t => ({ ...t, early_ready_short: t.early_ready_short + 1 }));
+          else if (cat === 'READY_TO_SELL') setTotals(t => ({ ...t, ready_short: t.ready_short + 1 }));
+          else if (cat === 'BEST_SHORT_ENTRY') setTotals(t => ({ ...t, best_short: t.best_short + 1 }));
 
           if (canPlayByGroup(cat)) playAlert(cat);
         }
@@ -490,7 +501,11 @@ export default function App() {
             </div>
             <br/>
             <span className="text-white/80">
-              Watch: {totals.watch} | Early: {totals.early_ready} | Ready: {totals.ready} | Best: {totals.best}
+              Watch: {totals.watch} | Early(L): {totals.early_ready} | Ready(L): {totals.ready} | Best(L): {totals.best}
+            </span>
+            <br/>
+            <span className="text-white/80">
+              Early(S): {totals.early_ready_short} | Ready(S): {totals.ready_short} | Best(S): {totals.best_short}
             </span>
             <br/>
             <span className="text-white/70">
@@ -508,7 +523,11 @@ export default function App() {
           </div>
         </div>
 
-        {(signals.every(s => s.category !== 'READY_TO_BUY' && s.category !== 'BEST_ENTRY')) ? (
+        {(signals.every(s =>
+          s.category !== 'READY_TO_BUY' &&
+          s.category !== 'BEST_ENTRY' &&
+          s.category !== 'READY_TO_SELL' &&
+          s.category !== 'BEST_SHORT_ENTRY')) ? (
           <div className="mt-2 text-xs text-white/70">
             <div className="text-white/60">No Ready/Best yet — top reasons (last scan):</div>
             <div className="mt-1 flex flex-wrap gap-2">
@@ -582,7 +601,7 @@ export default function App() {
       </section>
 
       <main className="mt-4 space-y-6">
-        {grouped(signals, useStore.getState().onlyBest).map(([title, list]) => (
+        {groupedWithShort(signals, useStore.getState().onlyBest).map(([title, list]) => (
           <section key={title}>
             <h2 className="text-lg font-semibold mb-2">{title}</h2>
             <div className="grid gap-3">
@@ -608,5 +627,24 @@ function grouped(sigs: any[], onlyBest: boolean) {
   if (ready.length) out.push(['Ready to BUY', ready])
   if (early.length) out.push(['Early Ready (½ size)', early])
   if (watch.length) out.push(['Pre-BUY Watch', watch])
+  return out
+}
+
+function groupedWithShort(sigs: any[], onlyBest: boolean) {
+  const best = sigs.filter(s => s.category === 'BEST_ENTRY')
+  const bestShort = sigs.filter(s => s.category === 'BEST_SHORT_ENTRY')
+  const ready = onlyBest ? [] : sigs.filter(s => s.category === 'READY_TO_BUY')
+  const readyShort = onlyBest ? [] : sigs.filter(s => s.category === 'READY_TO_SELL')
+  const early = onlyBest ? [] : sigs.filter(s => s.category === 'EARLY_READY')
+  const earlyShort = onlyBest ? [] : sigs.filter(s => s.category === 'EARLY_READY_SHORT')
+  const watch = onlyBest ? [] : sigs.filter(s => s.category === 'WATCH')
+  const out: [string, any[]][] = []
+  if (best.length) out.push(['Best Entry (Long)', best])
+  if (bestShort.length) out.push(['Best Entry (Short)', bestShort])
+  if (ready.length) out.push(['Ready to BUY', ready])
+  if (readyShort.length) out.push(['Ready to SELL', readyShort])
+  if (early.length) out.push(['Early Ready (Long)', early])
+  if (earlyShort.length) out.push(['Early Ready (Short)', earlyShort])
+  if (watch.length) out.push(['Watch', watch])
   return out
 }

@@ -27,10 +27,16 @@ const OUTCOME_MIN_COVERAGE_PCT = Math.min(100, Math.max(50, parseFloat(process.e
 const STRATEGY_VERSION = process.env.STRATEGY_VERSION || 'v1.0.0';
 const ENABLE_TIME_SHIFT = (process.env.MIGRATE_SHIFT_TIME_CLOSE ?? 'false').toLowerCase() === 'true';
 
-const SIGNAL_LOG_CATS = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY')
+const SHORTS_ENABLED = (process.env.ENABLE_SHORT_SIGNALS ?? 'true').toLowerCase() === 'true';
+const SIGNAL_LOG_CATS_RAW = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY,BEST_SHORT_ENTRY,READY_TO_SELL')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+const SIGNAL_LOG_CATS = Array.from(new Set(
+  SHORTS_ENABLED
+    ? [...SIGNAL_LOG_CATS_RAW, 'BEST_SHORT_ENTRY', 'READY_TO_SELL']
+    : SIGNAL_LOG_CATS_RAW
+));
 
 const BUILD_GIT_SHA =
   process.env.RAILWAY_GIT_COMMIT_SHA ||
@@ -674,6 +680,11 @@ function safeJsonParse<T>(s: any): T | null {
   try { return JSON.parse(s) as T; } catch { return null; }
 }
 
+function isShortCategory(category: string | null | undefined) {
+  const c = String(category || '').toUpperCase();
+  return c === 'READY_TO_SELL' || c === 'BEST_SHORT_ENTRY' || c === 'EARLY_READY_SHORT';
+}
+
 async function getDbReady() {
   const d = getDb();
   await ensureSchema();
@@ -971,9 +982,10 @@ export function calcOutcomeFromCandles(params: {
   tp1: number;
   tp2: number;
   entryTime: number;
+  side?: 'long' | 'short';
   candles: Array<{ time: number; open: number; high: number; low: number; close: number }>;
 }) {
-  const { entry, stop, tp1, tp2, entryTime, candles } = params;
+  const { entry, stop, tp1, tp2, entryTime, candles, side = 'long' } = params;
 
   if (!candles.length) {
     return {
@@ -1006,7 +1018,9 @@ export function calcOutcomeFromCandles(params: {
   const stopAdj = applyExitCost(stop);
   const tp1Adj = applyExitCost(tp1);
   const tp2Adj = applyExitCost(tp2);
-  const risk = entryAdj - stopAdj;
+  const risk = side === 'short'
+    ? (stopAdj - entryAdj)
+    : (entryAdj - stopAdj);
 
   let maxHigh = -Infinity;
   let minLow = Infinity;
@@ -1025,16 +1039,16 @@ export function calcOutcomeFromCandles(params: {
     const c = candles[i];
     if (c.high > maxHigh) maxHigh = c.high;
     if (c.low < minLow) minLow = c.low;
-    if (!tp1HitTime && c.high >= tp1) tp1HitTime = c.time;
-    if (!slHitTime && c.low <= stop) slHitTime = c.time;
-    if (!tp2HitTime && c.high >= tp2) tp2HitTime = c.time;
+    if (!tp1HitTime && (side === 'short' ? c.low <= tp1 : c.high >= tp1)) tp1HitTime = c.time;
+    if (!slHitTime && (side === 'short' ? c.high >= stop : c.low <= stop)) slHitTime = c.time;
+    if (!tp2HitTime && (side === 'short' ? c.low <= tp2 : c.high >= tp2)) tp2HitTime = c.time;
 
-    const hitSLInBar = c.low <= stop;
-    const hitTP2InBar = c.high >= tp2;
-    const hitTP1InBar = c.high >= tp1;
+    const hitSLInBar = side === 'short' ? (c.high >= stop) : (c.low <= stop);
+    const hitTP2InBar = side === 'short' ? (c.low <= tp2) : (c.high >= tp2);
+    const hitTP1InBar = side === 'short' ? (c.low <= tp1) : (c.high >= tp1);
 
       if (hitSLInBar && (hitTP2InBar || hitTP1InBar)) {
-        // Conservative long: assume SL first if both sides hit in same candle
+        // Conservative fill order: assume SL first if both sides hit in same candle
         ambiguous = 1;
         if (slHitTime === 0) slHitTime = c.time;
         if (hitTP2InBar && tp2HitTime === 0) tp2HitTime = c.time;
@@ -1080,19 +1094,49 @@ export function calcOutcomeFromCandles(params: {
   }
 
   const lastClose = candles[candles.length - 1]?.close ?? entry;
-  const hitSL = minLow <= stop ? 1 : 0;
-  const hitTP1 = maxHigh >= tp1 ? 1 : 0;
-  const hitTP2 = maxHigh >= tp2 ? 1 : 0;
+  const hitSL = side === 'short'
+    ? (maxHigh >= stop ? 1 : 0)
+    : (minLow <= stop ? 1 : 0);
+  const hitTP1 = side === 'short'
+    ? (minLow <= tp1 ? 1 : 0)
+    : (maxHigh >= tp1 ? 1 : 0);
+  const hitTP2 = side === 'short'
+    ? (minLow <= tp2 ? 1 : 0)
+    : (maxHigh >= tp2 ? 1 : 0);
 
   const exitAdj = applyExitCost(exitPrice);
   const maxHighAdj = applyExitCost(maxHigh);
   const minLowAdj = applyExitCost(minLow);
-  const retPct = entryAdj ? ((exitAdj - entryAdj) / entryAdj) * 100 : 0;
-  const rClose = risk > 0 ? (exitAdj - entryAdj) / risk : 0;
-  const rMfe = risk > 0 ? (maxHighAdj - entryAdj) / risk : 0;
-  const rMae = risk > 0 ? (minLowAdj - entryAdj) / risk : 0;
-  const mfePct = entry ? ((maxHigh - entry) / entry) * 100 : 0;
-  const maePct = entry ? ((minLow - entry) / entry) * 100 : 0;
+  const retPct = entryAdj
+    ? (side === 'short'
+      ? ((entryAdj - exitAdj) / entryAdj) * 100
+      : ((exitAdj - entryAdj) / entryAdj) * 100)
+    : 0;
+  const rClose = risk > 0
+    ? (side === 'short'
+      ? (entryAdj - exitAdj) / risk
+      : (exitAdj - entryAdj) / risk)
+    : 0;
+  const rMfe = risk > 0
+    ? (side === 'short'
+      ? (entryAdj - minLowAdj) / risk
+      : (maxHighAdj - entryAdj) / risk)
+    : 0;
+  const rMae = risk > 0
+    ? (side === 'short'
+      ? (entryAdj - maxHighAdj) / risk
+      : (minLowAdj - entryAdj) / risk)
+    : 0;
+  const mfePct = entry
+    ? (side === 'short'
+      ? ((entry - minLow) / entry) * 100
+      : ((maxHigh - entry) / entry) * 100)
+    : 0;
+  const maePct = entry
+    ? (side === 'short'
+      ? ((entry - maxHigh) / entry) * 100
+      : ((minLow - entry) / entry) * 100)
+    : 0;
   const rRealized =
     result === 'LOSS' ? -1 :
     result === 'WIN' && exitReason === 'TP2' ? 2 :
@@ -1219,6 +1263,7 @@ async function computeOneOutcome(
     return Number.isFinite(fromProcess) ? fromProcess : NaN;
   };
   const category = String(signalRow.category || '');
+  const shortSignal = isShortCategory(category);
   const entryRule = String(signalRow.entry_rule || ENTRY_RULE);
   const intervalMs = OUTCOME_INTERVAL_MIN * 60_000;
   const entryTimeRaw = Number(signalRow.entry_time) || Number(signalRow.time);
@@ -1266,14 +1311,23 @@ async function computeOneOutcome(
         const closeShort = Number.isFinite(Number(short.close_price)) ? Number(short.close_price) : entryShort;
         const stop = Number(signalRow.stop);
         const minLow = Number(short.min_low);
+        const maxHigh = Number(short.max_high);
         const vwap = Number(signalRow.vwap);
         const atrPct = Number(signalRow.atrPct);
         const atrPrice = Number.isFinite(atrPct) ? (entryShort * (atrPct / 100)) : NaN;
         const driftLimit = Number.isFinite(atrPrice) ? (ENTRY_DRIFT_ATR * atrPrice) : NaN;
 
-        const notStopped = Number.isFinite(stop) ? (Number.isFinite(minLow) ? minLow > stop : true) : true;
+        const notStopped = Number.isFinite(stop)
+          ? (
+            shortSignal
+              ? (Number.isFinite(maxHigh) ? maxHigh < stop : true)
+              : (Number.isFinite(minLow) ? minLow > stop : true)
+          )
+          : true;
         const stillNearEntry = Number.isFinite(driftLimit) ? (Math.abs(closeShort - entryShort) <= driftLimit) : true;
-        const structureNotBroken = Number.isFinite(vwap) ? (closeShort >= vwap) : true;
+        const structureNotBroken = Number.isFinite(vwap)
+          ? (shortSignal ? (closeShort <= vwap) : (closeShort >= vwap))
+          : true;
         const alive = notStopped && stillNearEntry && structureNotBroken;
 
         if (!alive) {
@@ -1351,11 +1405,15 @@ async function computeOneOutcome(
     if (!levelsFinite) {
       invalidLevels = true;
       invalidReason = 'NO_PLAN';
-    } else if (!(stop < entry && tp1 > entry && tp2 > tp1)) {
+    } else if (shortSignal
+      ? !(stop > entry && tp1 < entry && tp2 < tp1)
+      : !(stop < entry && tp1 > entry && tp2 > tp1)) {
       invalidLevels = true;
       invalidReason = 'BAD_LEVELS';
     } else if (MIN_RISK_PCT > 0) {
-      const riskPct = ((entry - stop) / entry) * 100;
+      const riskPct = shortSignal
+        ? ((stop - entry) / entry) * 100
+        : ((entry - stop) / entry) * 100;
       if (riskPct < MIN_RISK_PCT) {
         invalidLevels = true;
         invalidReason = 'RISK_TOO_SMALL';
@@ -1373,6 +1431,7 @@ async function computeOneOutcome(
     tp1,
     tp2,
     entryTime,
+    side: shortSignal ? 'short' : 'long',
     candles: windowSlice.map(c => ({
       time: Number.isFinite(c.openTime) ? Number(c.openTime) : c.time,
       open: c.open,
@@ -1507,19 +1566,30 @@ async function computeOneOutcome(
     const sweepOk = signalRow.sweep_ok != null ? Boolean(signalRow.sweep_ok) : null;
     const sessionOk = signalRow.session_ok != null ? Boolean(signalRow.session_ok) : null;
     const btcBear = signalRow.btc_bear != null ? Boolean(signalRow.btc_bear) : null;
+    const btcBull = signalRow.btc_bull != null ? Boolean(signalRow.btc_bull) : null;
 
-    const rrMin = category === 'BEST_ENTRY'
-      ? envNum('RR_MIN_BEST', Number(signalRow.rr_est))
-      : envNum('READY_MIN_RR');
-    const vwapMax = category === 'BEST_ENTRY'
-      ? envNum('BEST_VWAP_MAX_PCT')
-      : envNum('READY_VWAP_MAX_PCT');
-    const rsiMin = category === 'BEST_ENTRY'
-      ? envNum('RSI_BEST_MIN')
-      : envNum('RSI_READY_MIN');
-    const rsiMax = category === 'BEST_ENTRY'
-      ? envNum('RSI_BEST_MAX')
-      : envNum('RSI_READY_MAX');
+    const rrMin = shortSignal
+      ? (category === 'BEST_SHORT_ENTRY'
+        ? envNum('RR_MIN_BEST', Number(signalRow.rr_est))
+        : envNum('SHORT_MIN_RR', envNum('READY_MIN_RR')))
+      : (category === 'BEST_ENTRY'
+        ? envNum('RR_MIN_BEST', Number(signalRow.rr_est))
+        : envNum('READY_MIN_RR'));
+    const vwapMax = shortSignal
+      ? envNum('SHORT_VWAP_MAX_PCT', envNum('READY_VWAP_MAX_PCT'))
+      : (category === 'BEST_ENTRY'
+        ? envNum('BEST_VWAP_MAX_PCT')
+        : envNum('READY_VWAP_MAX_PCT'));
+    const rsiMin = shortSignal
+      ? envNum('SHORT_RSI_MIN', envNum('RSI_READY_MIN'))
+      : (category === 'BEST_ENTRY'
+        ? envNum('RSI_BEST_MIN')
+        : envNum('RSI_READY_MIN'));
+    const rsiMax = shortSignal
+      ? envNum('SHORT_RSI_MAX', envNum('RSI_READY_MAX'))
+      : (category === 'BEST_ENTRY'
+        ? envNum('RSI_BEST_MAX')
+        : envNum('RSI_READY_MAX'));
     const volSpikeMin = Number.isFinite(Number(configThresholds.volSpikeX))
       ? Number(configThresholds.volSpikeX)
       : envNum('THRESHOLD_VOL_SPIKE_X');
@@ -1529,7 +1599,9 @@ async function computeOneOutcome(
     const noSweep = sweepOk === false;
     const volSpikeNotMet = Number.isFinite(volSpikeMin) && Number.isFinite(volSpike) && volSpike < volSpikeMin;
     const rsiNotInWindow = Number.isFinite(rsi) && Number.isFinite(rsiMin) && Number.isFinite(rsiMax) && (rsi < rsiMin || rsi > rsiMax);
-    const btcContra = btcBear === true && (category === 'READY_TO_BUY' || category === 'BEST_ENTRY');
+    const btcContra = shortSignal
+      ? (btcBull === true && (category === 'READY_TO_SELL' || category === 'BEST_SHORT_ENTRY'))
+      : (btcBear === true && (category === 'READY_TO_BUY' || category === 'BEST_ENTRY'));
     const sessionOff = sessionOk === false;
 
     if (rrBelowMin) outcomeDriver = 'RR_BELOW_MIN';

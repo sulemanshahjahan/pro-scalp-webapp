@@ -445,6 +445,10 @@ app.post('/api/tune/sim', async (req, res) => {
       early: sim.counts.early - Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
       ready: sim.counts.ready - Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
       best: sim.counts.best - Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
+      watchShort: sim.counts.watchShort - Number(scanRun.signalsByCategory?.WATCH_SHORT ?? 0),
+      earlyShort: sim.counts.earlyShort - Number(scanRun.signalsByCategory?.EARLY_READY_SHORT ?? 0),
+      readyShort: sim.counts.readyShort - Number(scanRun.signalsByCategory?.READY_TO_SELL ?? 0),
+      bestShort: sim.counts.bestShort - Number(scanRun.signalsByCategory?.BEST_SHORT_ENTRY ?? 0),
     } : null;
 
     res.json({
@@ -940,9 +944,11 @@ app.post('/api/debug/push', async (req, res) => {
   try {
     const { symbol = 'DEMOUSDT', category = 'BEST_ENTRY', price = 1.2345 } = req.body || {};
     const title =
-      category === 'READY_TO_BUY' ? '✅ Ready to BUY' :
-      category === 'BEST_ENTRY'   ? '⭐ Best Entry' :
-                                    '👀 Watch';
+      category === 'READY_TO_BUY' ? '[BUY] Ready to BUY' :
+      category === 'BEST_ENTRY' ? '[BEST] Best Entry' :
+      category === 'READY_TO_SELL' ? '[SELL] Ready to SELL' :
+      category === 'BEST_SHORT_ENTRY' ? '[BEST SHORT] Best Short Entry' :
+      '[WATCH] Watch';
     const body = `${symbol} @ ${Number(price).toFixed(6)} | ΔVWAP 0.20% | RSI 56.5 | Vol× 1.80`;
     await pushToAll({ title, body, data: { symbol, price, category } });
     res.json({ ok: true });

@@ -200,7 +200,7 @@ export async function generateTuningBundle(params: TuningBundleParams = {}) {
   const limit = Math.max(50, Math.min(1000, Number(params.limit ?? process.env.TUNING_LIMIT ?? 200)));
   const categories = params.categories?.length
     ? params.categories
-    : parseList(process.env.TUNING_CATEGORIES, ['READY_TO_BUY', 'BEST_ENTRY']);
+    : parseList(process.env.TUNING_CATEGORIES, ['READY_TO_BUY', 'BEST_ENTRY', 'READY_TO_SELL', 'BEST_SHORT_ENTRY']);
 
   const resultsFilter = parseList(process.env.TUNING_RESULTS, ['STOP', 'TIMEOUT']);
   const sampleLimit = Math.max(5, Math.min(50, Number(process.env.TUNING_SYMBOL_LIMIT ?? 10)));

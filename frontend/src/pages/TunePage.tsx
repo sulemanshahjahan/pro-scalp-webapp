@@ -871,7 +871,7 @@ export default function TunePage() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-sm">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs text-white/60">Evaluated</div>
               <div className="text-xl font-semibold">{simResult?.meta?.evaluated ?? 0}</div>
@@ -890,6 +890,12 @@ export default function TunePage() {
                 {simResult?.counts?.ready ?? 0} / {simResult?.counts?.best ?? 0}
               </div>
             </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-white/60">ReadyS / BestS</div>
+              <div className="text-xl font-semibold">
+                {simResult?.counts?.readyShort ?? 0} / {simResult?.counts?.bestShort ?? 0}
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
@@ -903,6 +909,8 @@ export default function TunePage() {
                 <div>best_core_true: {simResult?.funnel?.best_core_true ?? 0}</div>
                 <div>ready_final_true: {simResult?.funnel?.ready_final_true ?? simResult?.counts?.ready ?? 0}</div>
                 <div>best_final_true: {simResult?.funnel?.best_final_true ?? simResult?.counts?.best ?? 0}</div>
+                <div>ready_short_final_true: {simResult?.funnel?.ready_short_final_true ?? simResult?.counts?.readyShort ?? 0}</div>
+                <div>best_short_final_true: {simResult?.funnel?.best_short_final_true ?? simResult?.counts?.bestShort ?? 0}</div>
               </div>
             </div>
 
@@ -913,6 +921,8 @@ export default function TunePage() {
                 <div>early: {simResult?.diffVsActual?.early ?? '--'}</div>
                 <div>ready: {simResult?.diffVsActual?.ready ?? '--'}</div>
                 <div>best: {simResult?.diffVsActual?.best ?? '--'}</div>
+                <div>readyShort: {simResult?.diffVsActual?.readyShort ?? '--'}</div>
+                <div>bestShort: {simResult?.diffVsActual?.bestShort ?? '--'}</div>
               </div>
             </div>
           </div>
@@ -1050,7 +1060,7 @@ export default function TunePage() {
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
             <div className="text-xs text-white/60">Base Summary</div>
-            <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            <div className="mt-3 grid grid-cols-2 lg:grid-cols-5 gap-3 text-sm">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/60">Evaluated</div>
                 <div className="text-xl font-semibold">{batchResult?.meta?.evaluated ?? 0}</div>
@@ -1069,6 +1079,12 @@ export default function TunePage() {
                   {batchResult?.base?.counts?.ready ?? 0} / {batchResult?.base?.counts?.best ?? 0}
                 </div>
               </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/60">ReadyS / BestS</div>
+                <div className="text-xl font-semibold">
+                  {batchResult?.base?.counts?.readyShort ?? 0} / {batchResult?.base?.counts?.bestShort ?? 0}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1079,8 +1095,8 @@ export default function TunePage() {
                 <thead className="text-white/60">
                   <tr className="text-left">
                     <th className="py-1 pr-2">Variant</th>
-                    <th className="py-1 pr-2">Ready / Best</th>
-                    <th className="py-1 pr-2">ΔReady / ΔBest</th>
+                    <th className="py-1 pr-2">Ready / Best (+Short)</th>
+                    <th className="py-1 pr-2">ΔReady / ΔBest (+Short)</th>
                     <th className="py-1 pr-2">Added / Removed (Ready)</th>
                     <th className="py-1 pr-2">Added / Removed (Best)</th>
                     <th className="py-1 pr-2">Top Bottleneck</th>
@@ -1100,8 +1116,14 @@ export default function TunePage() {
                         className={`cursor-pointer border-t border-white/5 ${selected ? 'bg-white/5' : 'hover:bg-white/5'}`}
                       >
                         <td className="py-2 pr-2 font-medium">{v?.name}</td>
-                        <td className="py-2 pr-2">{v?.counts?.ready ?? 0} / {v?.counts?.best ?? 0}</td>
-                        <td className="py-2 pr-2">{v?.diffVsBase?.counts?.ready ?? 0} / {v?.diffVsBase?.counts?.best ?? 0}</td>
+                        <td className="py-2 pr-2">
+                          {v?.counts?.ready ?? 0} / {v?.counts?.best ?? 0}
+                          <div className="text-[10px] text-white/60">{v?.counts?.readyShort ?? 0} / {v?.counts?.bestShort ?? 0}</div>
+                        </td>
+                        <td className="py-2 pr-2">
+                          {v?.diffVsBase?.counts?.ready ?? 0} / {v?.diffVsBase?.counts?.best ?? 0}
+                          <div className="text-[10px] text-white/60">{v?.diffVsBase?.counts?.readyShort ?? 0} / {v?.diffVsBase?.counts?.bestShort ?? 0}</div>
+                        </td>
                         <td className="py-2 pr-2">{readyAdded} / {readyRemoved}</td>
                         <td className="py-2 pr-2">{bestAdded} / {bestRemoved}</td>
                         <td className="py-2 pr-2">
@@ -1122,6 +1144,7 @@ export default function TunePage() {
                 <div className="text-sm font-semibold">Variant Details: {selectedVariant?.name}</div>
                 <div className="text-xs text-white/60">
                   Ready / Best: {selectedVariant?.counts?.ready ?? 0} / {selectedVariant?.counts?.best ?? 0}
+                  {' '}| Short: {selectedVariant?.counts?.readyShort ?? 0} / {selectedVariant?.counts?.bestShort ?? 0}
                 </div>
               </div>
 

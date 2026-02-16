@@ -441,6 +441,9 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     EARLY_READY: 0,
     READY_TO_BUY: 0,
     BEST_ENTRY: 0,
+    EARLY_READY_SHORT: 0,
+    READY_TO_SELL: 0,
+    BEST_SHORT_ENTRY: 0,
   };
   const gateStats = initGateStats();
   const precheck = gateStats.precheck;
@@ -766,10 +769,11 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           signalsByCategory[key] = (signalsByCategory[key] ?? 0) + 1;
         }
 
-        if (['BEST_ENTRY','READY_TO_BUY'].includes(withTime.category)) {
-          const title = withTime.category === 'BEST_ENTRY' ? '⭐ Best Entry'
-            : withTime.category === 'READY_TO_BUY' ? '✅ Ready to BUY'
-            : '⚡ Early Ready (½ size)';
+        if (['BEST_ENTRY', 'READY_TO_BUY', 'BEST_SHORT_ENTRY', 'READY_TO_SELL'].includes(withTime.category)) {
+          const title = withTime.category === 'BEST_ENTRY' ? '[BEST] Best Entry'
+            : withTime.category === 'READY_TO_BUY' ? '[BUY] Ready to BUY'
+            : withTime.category === 'BEST_SHORT_ENTRY' ? '[BEST SHORT] Best Short Entry'
+            : '[SELL] Ready to SELL';
 
           const body = `${sym} @ ${withTime.price.toFixed(6)} | ΔVWAP ${withTime.deltaVwapPct.toFixed(2)}% | RSI ${withTime.rsi9.toFixed(1)} | Vol× ${withTime.volSpike.toFixed(2)}`;
           const bucket = Math.floor(withTime.time / (5 * 60_000));

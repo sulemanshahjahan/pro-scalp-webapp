@@ -1,22 +1,30 @@
 type AnySignal = {
   symbol: string;
-  category: 'WATCH' | 'EARLY_READY' | 'READY_TO_BUY' | 'BEST_ENTRY' | string;
+  category:
+    | 'WATCH'
+    | 'EARLY_READY'
+    | 'READY_TO_BUY'
+    | 'BEST_ENTRY'
+    | 'EARLY_READY_SHORT'
+    | 'BEST_SHORT_ENTRY'
+    | 'READY_TO_SELL'
+    | string;
   price?: number;
   ema200?: number;
   volume?: number;
   vwapDistancePct?: number;
   chartUrl?: string;
-  [k: string]: any; // accept rsi9/rsi/tf/timeframe/etc.
+  [k: string]: any;
 };
 
 export function subjectFor(signal: AnySignal) {
-  const tag = signal.category === 'BEST_ENTRY' ? '⭐ Best Entry' : '✅ Ready to BUY';
+  const tag = categoryTag(signal.category);
   const tf = pickTF(signal);
-  return `${tag} • ${signal.symbol} @ ${fmtPrice(signal.price)} (${tf})`;
+  return `${tag} - ${signal.symbol} @ ${fmtPrice(signal.price)} (${tf})`;
 }
 
 export function htmlFor(signal: AnySignal) {
-  const tag = signal.category === 'BEST_ENTRY' ? '⭐ Best Entry' : '✅ Ready to BUY';
+  const tag = categoryTag(signal.category);
 
   const rows: Array<[string, string | number | undefined]> = [
     ['Symbol', signal.symbol],
@@ -46,14 +54,14 @@ export function htmlFor(signal: AnySignal) {
         <a href="${signal.chartUrl ?? '#'}" style="display:inline-block;padding:10px 14px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px">Open Chart</a>
       </div>
     </div>
-    <div style="background:#fafafa;color:#888;padding:10px 16px;font-size:12px">You’re receiving this because you enabled email alerts for Ready to Buy / Best Entry.</div>
+    <div style="background:#fafafa;color:#888;padding:10px 16px;font-size:12px">You are receiving this because you enabled email alerts.</div>
   </div>`;
 }
 
 export function textFor(signal: AnySignal) {
-  const tag = signal.category === 'BEST_ENTRY' ? 'Best Entry' : 'Ready to BUY';
+  const tag = categoryTag(signal.category);
   return [
-    `Pro Scalp Scanner — ${tag}`,
+    `Pro Scalp Scanner - ${tag}`,
     `Symbol: ${signal.symbol}`,
     `Price: ${fmtPrice(signal.price)}`,
     `TF: ${pickTF(signal)}`,
@@ -65,19 +73,35 @@ export function textFor(signal: AnySignal) {
   ].filter(Boolean).join('\n');
 }
 
-/* helpers */
 function fmtPrice(v?: number) {
   if (v == null || Number.isNaN(v)) return '-';
   return v >= 100 ? v.toFixed(2) : v >= 1 ? v.toFixed(4) : v.toFixed(6);
 }
+
 function pct(v?: number) {
   if (v == null || Number.isNaN(v)) return '-';
-  return (v * 100).toFixed(2) + '%';
+  return `${Number(v).toFixed(2)}%`;
 }
-function pickTF(s: AnySignal): string { return s.tf || s.timeframe || s.interval || '5m'; }
+
+function pickTF(s: AnySignal): string {
+  return s.tf || s.timeframe || s.interval || '5m';
+}
+
 function pickRSI(s: AnySignal): string | undefined {
   const r = s.rsi9 ?? s.rsi ?? s.rsiFast ?? s.rsi_9;
   if (r == null) return undefined;
   const n = Number(r);
   return Number.isFinite(n) ? n.toFixed(2) : String(r);
+}
+
+function categoryTag(category: string) {
+  const c = String(category || '').toUpperCase();
+  if (c === 'BEST_ENTRY') return 'Best Entry';
+  if (c === 'READY_TO_BUY') return 'Ready to BUY';
+  if (c === 'BEST_SHORT_ENTRY') return 'Best Short Entry';
+  if (c === 'READY_TO_SELL') return 'Ready to SELL';
+  if (c === 'EARLY_READY_SHORT') return 'Early Ready Short';
+  if (c === 'EARLY_READY') return 'Early Ready';
+  if (c === 'WATCH') return 'Watch';
+  return category || 'Signal';
 }

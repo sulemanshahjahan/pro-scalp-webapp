@@ -79,7 +79,7 @@ const READY_REQUIRE_DAILY_VWAP = (process.env.READY_REQUIRE_DAILY_VWAP ?? 'false
 const SESSIONS_UTC = process.env.SESSIONS_UTC || '07-11,13-20';
 
 /** =================== Short Signal Config =================== */
-const ENABLE_SHORT_SIGNALS = (process.env.ENABLE_SHORT_SIGNALS ?? 'false').toLowerCase() === 'true';
+const ENABLE_SHORT_SIGNALS = (process.env.ENABLE_SHORT_SIGNALS ?? 'true').toLowerCase() === 'true';
 const SHORT_VWAP_MAX_PCT = parseFloat(process.env.SHORT_VWAP_MAX_PCT || '1.50');
 const SHORT_VWAP_TOUCH_PCT = parseFloat(process.env.SHORT_VWAP_TOUCH_PCT || '0.50');
 const SHORT_VWAP_TOUCH_BARS = parseInt(process.env.SHORT_VWAP_TOUCH_BARS || '10', 10);
@@ -400,6 +400,85 @@ function confirm15_soft(data15: OHLCV[], dbg?: { reason?: string }): boolean {
 
   if (dbg) dbg.reason = 'soft';
   return true;
+}
+/** ------------------------------------------------------------------- */
+
+function confirm15_short_strict(data15: OHLCV[], dbg?: { reason?: string }): boolean {
+  if (data15.length < 210) { if (dbg) dbg.reason = 'len'; return false; }
+
+  const closes = data15.map(d => d.close);
+  const vols   = data15.map(d => d.volume);
+  const tp     = data15.map(d => (d.high + d.low + d.close) / 3);
+  const { cumPV, cumV } = buildCum(tp, vols);
+
+  const e = ema(closes, 200);
+  const r = rsi(closes, 9);
+
+  const i = closes.length - 1;
+  if (i < 2) { if (dbg) dbg.reason = 'i'; return false; }
+
+  const anchor = dayAnchorIndexAt(data15, i, 96);
+  const v_i = anchoredVwapAt(cumPV, cumV, anchor, i);
+
+  const belowVwap = closes[i] < v_i;
+  const belowEma = closes[i] < e[i];
+  const rsiOk = r[i] >= SHORT_RSI_MIN && r[i] <= SHORT_RSI_MAX && r[i] <= r[i - 1];
+
+  if (!belowVwap) { if (dbg) dbg.reason = 'vwap'; return false; }
+  if (!belowEma) { if (dbg) dbg.reason = 'ema'; return false; }
+  if (!rsiOk) { if (dbg) dbg.reason = 'rsi'; return false; }
+  if (dbg) dbg.reason = 'pass';
+  return true;
+}
+
+function confirm15_short_soft(data15: OHLCV[], dbg?: { reason?: string }): boolean {
+  if (data15.length < 210) { if (dbg) dbg.reason = 'len'; return false; }
+
+  const closes = data15.map(d => d.close);
+  const vols   = data15.map(d => d.volume);
+  const tp     = data15.map(d => (d.high + d.low + d.close) / 3);
+  const { cumPV, cumV } = buildCum(tp, vols);
+
+  const e = ema(closes, 200);
+  const r = rsi(closes, 9);
+
+  const i = closes.length - 1;
+  if (i < 2) { if (dbg) dbg.reason = 'i'; return false; }
+
+  const a1 = dayAnchorIndexAt(data15, i - 1, 96);
+  const v_i1 = anchoredVwapAt(cumPV, cumV, a1, i - 1);
+  const hadRecentStrict =
+    closes[i - 1] < v_i1 &&
+    closes[i - 1] < e[i - 1] &&
+    r[i - 1] >= SHORT_RSI_MIN && r[i - 1] <= SHORT_RSI_MAX &&
+    r[i - 1] <= r[i - 2];
+  if (hadRecentStrict) { if (dbg) dbg.reason = 'strict_prev'; return true; }
+
+  const roll = Math.max(1, CONFIRM15_VWAP_ROLL_BARS || 96);
+  const anchor = Math.max(0, i - roll + 1);
+  const v_i = anchoredVwapAt(cumPV, cumV, anchor, i);
+  const vwapOk =
+    Number.isFinite(v_i) &&
+    closes[i] <= v_i * (1 + (CONFIRM15_VWAP_EPS_PCT / 100));
+  if (!vwapOk) { if (dbg) dbg.reason = 'vwap'; return false; }
+
+  const nearOrBelowEma =
+    closes[i] < e[i] ||
+    (((closes[i] - e[i]) / e[i]) * 100 <= EMA15_SOFT_TOL);
+  if (!nearOrBelowEma) { if (dbg) dbg.reason = 'ema'; return false; }
+
+  const rsiSoftOk =
+    r[i] <= SHORT_RSI_MAX &&
+    r[i] >= SHORT_RSI_MIN &&
+    r[i] <= (r[i - 1] + 0.3);
+  if (!rsiSoftOk) { if (dbg) dbg.reason = 'rsi'; return false; }
+
+  if (dbg) dbg.reason = 'soft';
+  return true;
+}
+
+function isShortCategory(cat: Signal['category'] | null | undefined): boolean {
+  return cat === 'READY_TO_SELL' || cat === 'BEST_SHORT_ENTRY' || cat === 'EARLY_READY_SHORT';
 }
 /** ------------------------------------------------------------------- */
 
@@ -1063,7 +1142,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
   let shortRr: number | null = null;
   let shortRiskPct: number | null = null;
 
-  if (ENABLE_SHORT_SIGNALS && !category) {
+  if (ENABLE_SHORT_SIGNALS) {
     // Short trend: EMA50 < EMA200 and falling
     const trendOkShort = ema50Now < emaNow && !ema50Up && !ema200Up;
     const readyTrendOkShort = SHORT_TREND_REQUIRED ? trendOkShort : true;
@@ -1083,7 +1162,6 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     const rsiShortOk = rsiNow >= SHORT_RSI_MIN && rsiNow <= SHORT_RSI_MAX && rsiDelta <= SHORT_RSI_DELTA_STRICT;
 
     // Short body quality (bearish candle)
-    const bearish = openNow != null ? closes5[i] < openNow : false;
     const bodyQualityShort = checkBodyQualityShort(currentCandle, atrNow);
     const strongBodyShort = bodyQualityShort.pass;
 
@@ -1096,12 +1174,16 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     const liqShort = detectLiquiditySweepShort(data5, vwap_i, atrNow, LIQ_LOOKBACK);
     const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? liqShort.ok : true;
 
-    // Short confirm15 (mirror logic - price below VWAP/EMA)
-    const confirm15mOkShort = confirm15mOk; // Use same 15m check for now
+    // Short confirm15 (bearish mirror of long confirm)
+    const strictShortDbg: { reason?: string } = {};
+    const softShortDbg: { reason?: string } = {};
+    const confirm15mStrictShort = confirm15_short_strict(data15, strictShortDbg);
+    const confirm15mSoftShort = confirm15mStrictShort ? false : confirm15_short_soft(data15, softShortDbg);
+    const confirm15mOkShort = confirm15mStrictShort || confirm15mSoftShort;
     const shortConfirmOk = SHORT_CONFIRM15_REQUIRED ? confirm15mOkShort : true;
 
     // Short daily VWAP
-    const shortDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price < vwap_i) : true;
+    const shortDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrictShort || price < vwap_i) : true;
 
     // Short BTC gate
     const btcBearOk = hasMarket && btcBear;
@@ -1181,7 +1263,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
         rrShortOk &&
         riskShortOk;
 
-      const shortSweepOk = liqShort.ok || true; // Allow without sweep like longs
+      const shortSweepOk = liqShort.ok;
       const shortSweepOkReq = SHORT_SWEEP_REQUIRED ? shortSweepOk : true;
 
       if (readyShortCore && shortSweepOkReq && shortBtcOkReq) {
@@ -1206,7 +1288,8 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
   }
 
   // Use short category if no long category found
-  if (!category && shortCategory) {
+  const longWeakCategory = category === 'WATCH' || category === 'EARLY_READY';
+  if (shortCategory && (!category || longWeakCategory)) {
     category = shortCategory;
     stop = shortStop;
     tp1 = shortTp1;
@@ -1268,7 +1351,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
   let btcGate: string | null = null;
   let btcGateReason: string | null = null;
 
-  if (BEAR_GATE_ENABLED && btcBear && category && category !== 'WATCH') {
+  if (BEAR_GATE_ENABLED && btcBear && category && category !== 'WATCH' && !isShortCategory(category)) {
     const holdN = Math.max(1, BEAR_GATE_HOLD_CANDLES);
     const holdStart = Math.max(0, closes5.length - holdN);
     const heldAboveVwap = Number.isFinite(vwap_i)

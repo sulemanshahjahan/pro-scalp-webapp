@@ -117,4 +117,49 @@ describe('outcomes', () => {
     expect(invalid.windowStatus).toBe('PARTIAL');
     expect(invalid.invalidReason).toBe('BAD_ALIGN');
   });
+
+  it('Short TP1 hit first -> WIN/TP1', () => {
+    const entryTime = 0;
+    const candles = [
+      makeCandle(300000, 100, 101, 97, 98),
+      makeCandle(600000, 98, 99, 94, 95),
+    ];
+
+    const out = calcOutcomeFromCandles({
+      entry: 100,
+      stop: 105,
+      tp1: 95,
+      tp2: 90,
+      entryTime,
+      side: 'short',
+      candles,
+    });
+
+    expect(out.result).toBe('WIN');
+    expect(out.exitReason).toBe('TP1');
+    expect(out.hitTP1).toBe(1);
+    expect(out.hitSL).toBe(0);
+  });
+
+  it('Short stop hit first -> LOSS/STOP', () => {
+    const entryTime = 0;
+    const candles = [
+      makeCandle(300000, 100, 106, 99, 105),
+      makeCandle(600000, 105, 107, 103, 104),
+    ];
+
+    const out = calcOutcomeFromCandles({
+      entry: 100,
+      stop: 105,
+      tp1: 95,
+      tp2: 90,
+      entryTime,
+      side: 'short',
+      candles,
+    });
+
+    expect(out.result).toBe('LOSS');
+    expect(out.exitReason).toBe('STOP');
+    expect(out.hitSL).toBe(1);
+  });
 });
