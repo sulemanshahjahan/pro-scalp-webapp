@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS signals (
   UNIQUE(symbol, category, time, config_hash)
 );
 
+CREATE TABLE IF NOT EXISTS signal_events (
+  id BIGSERIAL PRIMARY KEY,
+  signal_id BIGINT,
+  run_id TEXT,
+  instance_id TEXT,
+  symbol TEXT NOT NULL,
+  category TEXT NOT NULL,
+  time BIGINT NOT NULL,
+  preset TEXT,
+  config_hash TEXT,
+  gate_snapshot_json TEXT,
+  ready_debug_json TEXT,
+  best_debug_json TEXT,
+  entry_debug_json TEXT,
+  config_snapshot_json TEXT,
+  blocked_reasons_json TEXT,
+  first_failed_gate TEXT,
+  signal_json TEXT,
+  created_at BIGINT NOT NULL,
+  FOREIGN KEY(signal_id) REFERENCES signals(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS signal_outcomes (
   id BIGSERIAL PRIMARY KEY,
   signal_id BIGINT NOT NULL,
@@ -240,6 +262,10 @@ CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
 CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
 CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
+CREATE INDEX IF NOT EXISTS idx_signal_events_run_id ON signal_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_signal_events_created_at ON signal_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_signal_events_symbol_category_time ON signal_events(symbol, category, time);
+CREATE INDEX IF NOT EXISTS idx_signal_events_signal_id ON signal_events(signal_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
 CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);

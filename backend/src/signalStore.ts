@@ -256,6 +256,28 @@ async function ensureSchema() {
       UNIQUE(symbol, category, time)
     );
 
+    CREATE TABLE IF NOT EXISTS signal_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      signal_id INTEGER,
+      run_id TEXT,
+      instance_id TEXT,
+      symbol TEXT NOT NULL,
+      category TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      preset TEXT,
+      config_hash TEXT,
+      gate_snapshot_json TEXT,
+      ready_debug_json TEXT,
+      best_debug_json TEXT,
+      entry_debug_json TEXT,
+      config_snapshot_json TEXT,
+      blocked_reasons_json TEXT,
+      first_failed_gate TEXT,
+      signal_json TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(signal_id) REFERENCES signals(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS signal_outcomes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       signal_id INTEGER NOT NULL,
@@ -320,6 +342,10 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_signals_preset ON signals(preset);
     CREATE INDEX IF NOT EXISTS idx_signals_strategy_version ON signals(strategy_version);
     CREATE INDEX IF NOT EXISTS idx_signals_config_hash ON signals(config_hash);
+    CREATE INDEX IF NOT EXISTS idx_signal_events_run_id ON signal_events(run_id);
+    CREATE INDEX IF NOT EXISTS idx_signal_events_created_at ON signal_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_signal_events_symbol_category_time ON signal_events(symbol, category, time);
+    CREATE INDEX IF NOT EXISTS idx_signal_events_signal_id ON signal_events(signal_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON signal_outcomes(signal_id);
     CREATE INDEX IF NOT EXISTS idx_outcomes_horizon ON signal_outcomes(horizon_min);
     CREATE INDEX IF NOT EXISTS idx_outcomes_window_status ON signal_outcomes(window_status);
@@ -745,6 +771,44 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
   const conflictTarget = d.driver === 'sqlite'
     ? '(symbol, category, time)'
     : '(symbol, category, time, config_hash)';
+  const signalPreset = preset || sig.preset || null;
+  const gateSnapshotJson = sig.gateSnapshot ? JSON.stringify(sig.gateSnapshot) : null;
+  const readyDebugJson = JSON.stringify(buildReadyDebugSnapshot(sig));
+  const bestDebugJson = JSON.stringify(buildBestDebugSnapshot(sig));
+  const entryDebugJson = JSON.stringify(entrySnapshot);
+  const configSnapshotJson = JSON.stringify(configSnapshot);
+  const blockedReasonsJson = sig.blockedReasons ? JSON.stringify(sig.blockedReasons) : null;
+  const marketJson = sig.market ? JSON.stringify(sig.market) : null;
+  const reasonsJson = sig.reasons ? JSON.stringify(sig.reasons) : null;
+  const signalJson = JSON.stringify({
+    symbol: sig.symbol,
+    category: sig.category,
+    time: signalClose,
+    preset: signalPreset,
+    strategyVersion: sig.strategyVersion || STRATEGY_VERSION,
+    configHash,
+    runId: sig.runId ?? null,
+    instanceId,
+    price: sig.price,
+    vwap: sig.vwap ?? null,
+    ema200: sig.ema200 ?? null,
+    rsi9: sig.rsi9 ?? null,
+    volSpike: sig.volSpike ?? null,
+    atrPct: sig.atrPct ?? null,
+    confirm15m: sig.confirm15m ? true : false,
+    deltaVwapPct: sig.deltaVwapPct ?? null,
+    stop: sig.stop ?? null,
+    tp1: sig.tp1 ?? null,
+    tp2: sig.tp2 ?? null,
+    target: sig.target ?? null,
+    rr: sig.rr ?? null,
+    riskPct: sig.riskPct ?? null,
+    blockedReasons: sig.blockedReasons ?? [],
+    firstFailedGate: sig.firstFailedGate ?? null,
+    gateScore: sig.gateScore ?? null,
+    market: sig.market ?? null,
+    reasons: sig.reasons ?? [],
+  });
 
   await d.prepare(`
     INSERT INTO signals (
@@ -831,7 +895,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     symbol: sig.symbol,
     category: sig.category,
     time: signalClose,
-    preset: preset || sig.preset || null,
+    preset: signalPreset,
     strategy_version: sig.strategyVersion || STRATEGY_VERSION,
     threshold_vwap_distance_pct: sig.thresholdVwapDistancePct ?? null,
     threshold_vol_spike_x: sig.thresholdVolSpikeX ?? null,
@@ -865,16 +929,16 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     would_be_category: sig.wouldBeCategory ?? null,
     btc_gate: sig.btcGate ?? null,
     btc_gate_reason: sig.btcGateReason ?? null,
-    gate_snapshot_json: sig.gateSnapshot ? JSON.stringify(sig.gateSnapshot) : null,
-    ready_debug_json: JSON.stringify(buildReadyDebugSnapshot(sig)),
-    best_debug_json: JSON.stringify(buildBestDebugSnapshot(sig)),
-    entry_debug_json: JSON.stringify(entrySnapshot),
-    config_snapshot_json: JSON.stringify(configSnapshot),
+    gate_snapshot_json: gateSnapshotJson,
+    ready_debug_json: readyDebugJson,
+    best_debug_json: bestDebugJson,
+    entry_debug_json: entryDebugJson,
+    config_snapshot_json: configSnapshotJson,
     config_hash: configHash,
     build_git_sha: BUILD_GIT_SHA,
     run_id: sig.runId ?? null,
     instance_id: instanceId,
-    blocked_reasons_json: sig.blockedReasons ? JSON.stringify(sig.blockedReasons) : null,
+    blocked_reasons_json: blockedReasonsJson,
     first_failed_gate: sig.firstFailedGate ?? null,
     gate_score: sig.gateScore ?? null,
     btc_bull: sig.market?.btcBull15m == null ? null : (sig.market?.btcBull15m ? 1 : 0),
@@ -885,8 +949,8 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
     btc_rsi: sig.market?.btcRsi9_15m ?? null,
     btc_delta_vwap: sig.market?.btcDeltaVwapPct15m ?? null,
 
-    market_json: sig.market ? JSON.stringify(sig.market) : null,
-    reasons_json: sig.reasons ? JSON.stringify(sig.reasons) : null,
+    market_json: marketJson,
+    reasons_json: reasonsJson,
 
     created_at: now,
     updated_at: now,
@@ -894,9 +958,41 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
 
   const row = await d
     .prepare(`SELECT id FROM signals WHERE symbol=? AND category=? AND time=? AND config_hash=?`)
-    .get(sig.symbol, sig.category, sig.time, configHash) as { id: number } | undefined;
+    .get(sig.symbol, sig.category, signalClose, configHash) as { id: number | string } | undefined;
 
-  return row?.id ?? null;
+  const signalId = Number(row?.id ?? 0) || null;
+
+  await d.prepare(`
+    INSERT INTO signal_events (
+      signal_id, run_id, instance_id, symbol, category, time, preset, config_hash,
+      gate_snapshot_json, ready_debug_json, best_debug_json, entry_debug_json, config_snapshot_json,
+      blocked_reasons_json, first_failed_gate, signal_json, created_at
+    ) VALUES (
+      @signal_id, @run_id, @instance_id, @symbol, @category, @time, @preset, @config_hash,
+      @gate_snapshot_json, @ready_debug_json, @best_debug_json, @entry_debug_json, @config_snapshot_json,
+      @blocked_reasons_json, @first_failed_gate, @signal_json, @created_at
+    )
+  `).run({
+    signal_id: signalId,
+    run_id: sig.runId ?? null,
+    instance_id: instanceId,
+    symbol: sig.symbol,
+    category: sig.category,
+    time: signalClose,
+    preset: signalPreset,
+    config_hash: configHash,
+    gate_snapshot_json: gateSnapshotJson,
+    ready_debug_json: readyDebugJson,
+    best_debug_json: bestDebugJson,
+    entry_debug_json: entryDebugJson,
+    config_snapshot_json: configSnapshotJson,
+    blocked_reasons_json: blockedReasonsJson,
+    first_failed_gate: sig.firstFailedGate ?? null,
+    signal_json: signalJson,
+    created_at: now,
+  });
+
+  return signalId;
 }
 
 function sleep(ms: number) {
@@ -3251,10 +3347,11 @@ export async function rebuildOutcomesByFilter(params: {
 export async function clearAllSignalsData() {
   const d = await getDbReady();
   const tx = d.transaction(async () => {
+    const events = (await d.prepare(`DELETE FROM signal_events`).run()).changes;
     const outcomes = (await d.prepare(`DELETE FROM signal_outcomes`).run()).changes;
     const skips = (await d.prepare(`DELETE FROM outcome_skips`).run()).changes;
     const signals = (await d.prepare(`DELETE FROM signals`).run()).changes;
-    return { signals, outcomes, skips };
+    return { signals, events, outcomes, skips };
   });
   return tx();
 }

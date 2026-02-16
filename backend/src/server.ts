@@ -274,29 +274,7 @@ function firstFalse(order: string[], flags: Record<string, boolean> | null): str
 async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<RunSignalLite[]> {
   const cleaned = Array.from(new Set((runIds || []).map((r) => String(r || '').trim()).filter(Boolean)));
   if (!cleaned.length) return [];
-  const bind: Record<string, any> = { horizonMin };
-  const placeholders = cleaned.map((_, i) => {
-    bind[`run_${i}`] = cleaned[i];
-    return `@run_${i}`;
-  }).join(',');
-  const rows = await db.prepare(`
-    SELECT
-      s.id as "id",
-      s.run_id as "runId",
-      s.symbol as "symbol",
-      s.category as "category",
-      s.gate_snapshot_json as "gateSnapshotJson",
-      o.result as "outcomeResult",
-      o.hit_tp1 as "outcomeHitTp1",
-      o.hit_sl as "outcomeHitSl",
-      o.window_status as "outcomeWindowStatus"
-    FROM signals s
-    LEFT JOIN signal_outcomes o
-      ON o.signal_id = s.id
-      AND o.horizon_min = @horizonMin
-    WHERE s.run_id IN (${placeholders})
-  `).all(bind) as any[];
-  return rows.map((r) => ({
+  const toRows = (rows: any[]): RunSignalLite[] => rows.map((r) => ({
     id: Number(r.id ?? 0),
     runId: String(r.runId ?? ''),
     symbol: String(r.symbol ?? ''),
@@ -307,6 +285,71 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
     outcomeHitSl: toBool(r.outcomeHitSl),
     outcomeWindowStatus: r.outcomeWindowStatus == null ? null : String(r.outcomeWindowStatus),
   }));
+
+  const bindEvents: Record<string, any> = { horizonMin };
+  const eventPlaceholders = cleaned.map((_, i) => {
+    bindEvents[`run_${i}`] = cleaned[i];
+    return `@run_${i}`;
+  }).join(',');
+
+  let eventRows: any[] = [];
+  try {
+    eventRows = await db.prepare(`
+      SELECT
+        e.id as "id",
+        e.run_id as "runId",
+        e.symbol as "symbol",
+        e.category as "category",
+        e.gate_snapshot_json as "gateSnapshotJson",
+        o.result as "outcomeResult",
+        o.hit_tp1 as "outcomeHitTp1",
+        o.hit_sl as "outcomeHitSl",
+        o.window_status as "outcomeWindowStatus"
+      FROM signal_events e
+      LEFT JOIN signal_outcomes o
+        ON o.signal_id = e.signal_id
+        AND o.horizon_min = @horizonMin
+      WHERE e.run_id IN (${eventPlaceholders})
+      ORDER BY e.id ASC
+    `).all(bindEvents) as any[];
+  } catch {
+    eventRows = [];
+  }
+
+  const out = toRows(eventRows);
+  const runsWithEvents = new Set(out.map((r) => r.runId).filter(Boolean));
+  const missingRunIds = cleaned.filter((runId) => !runsWithEvents.has(runId));
+  if (!missingRunIds.length) return out;
+
+  const bindSignals: Record<string, any> = { horizonMin };
+  const signalPlaceholders = missingRunIds.map((_, i) => {
+    bindSignals[`run_${i}`] = missingRunIds[i];
+    return `@run_${i}`;
+  }).join(',');
+  let signalRows: any[] = [];
+  try {
+    signalRows = await db.prepare(`
+      SELECT
+        s.id as "id",
+        s.run_id as "runId",
+        s.symbol as "symbol",
+        s.category as "category",
+        s.gate_snapshot_json as "gateSnapshotJson",
+        o.result as "outcomeResult",
+        o.hit_tp1 as "outcomeHitTp1",
+        o.hit_sl as "outcomeHitSl",
+        o.window_status as "outcomeWindowStatus"
+      FROM signals s
+      LEFT JOIN signal_outcomes o
+        ON o.signal_id = s.id
+        AND o.horizon_min = @horizonMin
+      WHERE s.run_id IN (${signalPlaceholders})
+      ORDER BY s.id ASC
+    `).all(bindSignals) as any[];
+  } catch {
+    signalRows = [];
+  }
+  return out.concat(toRows(signalRows));
 }
 
 function computeActualOutcome120m(signalRows: RunSignalLite[]) {
@@ -761,6 +804,162 @@ app.get('/api/scanRuns', async (req, res) => {
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(400, limitRaw)) : 50;
     const rows = await listScanRuns(limit);
     res.json({ ok: true, limit, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/api/scanRuns/:runId/detail', async (req, res) => {
+  try {
+    const runId = String(req.params.runId || '').trim();
+    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+
+    const run = await getScanRunByRunId(runId);
+    if (!run) return res.status(404).json({ ok: false, error: 'Scan run not found' });
+
+    const limitRaw = Number((req.query as any)?.limit);
+    const offsetRaw = Number((req.query as any)?.offset);
+    const horizonRaw = Number((req.query as any)?.horizonMin);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(2000, limitRaw)) : 500;
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.min(50_000, offsetRaw)) : 0;
+    const horizonMin = Number.isFinite(horizonRaw) ? Math.max(1, Math.min(1440, horizonRaw)) : 120;
+
+    const bind = { runId, limit, offset, horizonMin };
+    let source: 'signal_events' | 'signals_fallback' = 'signal_events';
+    let total = 0;
+    let rows: any[] = [];
+
+    try {
+      const countRow = await db.prepare(`
+        SELECT COUNT(1) as n
+        FROM signal_events
+        WHERE run_id = @runId
+      `).get({ runId }) as { n?: number } | undefined;
+      total = Number(countRow?.n ?? 0);
+
+      rows = await db.prepare(`
+        SELECT
+          e.id as "id",
+          e.signal_id as "signalId",
+          e.run_id as "runId",
+          e.symbol as "symbol",
+          e.category as "category",
+          e.time as "time",
+          e.preset as "preset",
+          e.config_hash as "configHash",
+          e.instance_id as "instanceId",
+          e.created_at as "createdAt",
+          e.first_failed_gate as "firstFailedGate",
+          e.gate_snapshot_json as "gateSnapshotJson",
+          e.ready_debug_json as "readyDebugJson",
+          e.best_debug_json as "bestDebugJson",
+          e.entry_debug_json as "entryDebugJson",
+          e.config_snapshot_json as "configSnapshotJson",
+          e.blocked_reasons_json as "blockedReasonsJson",
+          e.signal_json as "signalJson",
+          o.result as "outcomeResult",
+          o.hit_tp1 as "outcomeHitTp1",
+          o.hit_sl as "outcomeHitSl",
+          o.window_status as "outcomeWindowStatus"
+        FROM signal_events e
+        LEFT JOIN signal_outcomes o
+          ON o.signal_id = e.signal_id
+          AND o.horizon_min = @horizonMin
+        WHERE e.run_id = @runId
+        ORDER BY e.id ASC
+        LIMIT @limit OFFSET @offset
+      `).all(bind) as any[];
+    } catch {
+      source = 'signals_fallback';
+      total = 0;
+      rows = [];
+    }
+
+    if (source === 'signal_events' && total === 0) {
+      source = 'signals_fallback';
+    }
+
+    if (source === 'signals_fallback') {
+      const countRow = await db.prepare(`
+        SELECT COUNT(1) as n
+        FROM signals
+        WHERE run_id = @runId
+      `).get({ runId }) as { n?: number } | undefined;
+      total = Number(countRow?.n ?? 0);
+      rows = await db.prepare(`
+        SELECT
+          s.id as "id",
+          s.id as "signalId",
+          s.run_id as "runId",
+          s.symbol as "symbol",
+          s.category as "category",
+          s.time as "time",
+          s.preset as "preset",
+          s.config_hash as "configHash",
+          s.instance_id as "instanceId",
+          s.created_at as "createdAt",
+          s.first_failed_gate as "firstFailedGate",
+          s.gate_snapshot_json as "gateSnapshotJson",
+          s.ready_debug_json as "readyDebugJson",
+          s.best_debug_json as "bestDebugJson",
+          s.entry_debug_json as "entryDebugJson",
+          s.config_snapshot_json as "configSnapshotJson",
+          s.blocked_reasons_json as "blockedReasonsJson",
+          NULL as "signalJson",
+          o.result as "outcomeResult",
+          o.hit_tp1 as "outcomeHitTp1",
+          o.hit_sl as "outcomeHitSl",
+          o.window_status as "outcomeWindowStatus"
+        FROM signals s
+        LEFT JOIN signal_outcomes o
+          ON o.signal_id = s.id
+          AND o.horizon_min = @horizonMin
+        WHERE s.run_id = @runId
+        ORDER BY s.id ASC
+        LIMIT @limit OFFSET @offset
+      `).all(bind) as any[];
+    }
+
+    const outRows = rows.map((r) => ({
+      id: Number(r.id ?? 0),
+      signalId: r.signalId == null ? null : Number(r.signalId),
+      runId: String(r.runId ?? runId),
+      symbol: String(r.symbol ?? ''),
+      category: String(r.category ?? ''),
+      time: Number(r.time ?? 0),
+      preset: r.preset == null ? null : String(r.preset),
+      configHash: r.configHash == null ? null : String(r.configHash),
+      instanceId: r.instanceId == null ? null : String(r.instanceId),
+      createdAt: Number(r.createdAt ?? 0),
+      firstFailedGate: r.firstFailedGate == null ? null : String(r.firstFailedGate),
+      gateSnapshot: safeJsonParse<any>(r.gateSnapshotJson),
+      readyDebug: safeJsonParse<any>(r.readyDebugJson),
+      bestDebug: safeJsonParse<any>(r.bestDebugJson),
+      entryDebug: safeJsonParse<any>(r.entryDebugJson),
+      configSnapshot: safeJsonParse<any>(r.configSnapshotJson),
+      blockedReasons: safeJsonParse<any>(r.blockedReasonsJson),
+      signal: safeJsonParse<any>(r.signalJson),
+      outcome: {
+        result: r.outcomeResult == null ? null : String(r.outcomeResult),
+        hitTp1: toBool(r.outcomeHitTp1),
+        hitSl: toBool(r.outcomeHitSl),
+        windowStatus: r.outcomeWindowStatus == null ? null : String(r.outcomeWindowStatus),
+      },
+    }));
+
+    res.json({
+      ok: true,
+      runId,
+      run,
+      meta: {
+        source,
+        limit,
+        offset,
+        total,
+        horizonMin,
+      },
+      rows: outRows,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
@@ -1576,11 +1775,13 @@ app.post('/api/debug/outcomes/run', async (req, res) => {
     await updateOutcomesOnce();
     const outcomes = getOutcomesHealth();
     const signalsTotal = await db.prepare('SELECT COUNT(1) as n FROM signals').get() as { n: number };
+    const signalEventsTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_events').get() as { n: number };
     const outcomesTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_outcomes').get() as { n: number };
     res.json({
       ok: true,
       outcomes,
       signalsTotal: signalsTotal?.n ?? 0,
+      signalEventsTotal: signalEventsTotal?.n ?? 0,
       outcomesTotal: outcomesTotal?.n ?? 0,
     });
   } catch (e) {
