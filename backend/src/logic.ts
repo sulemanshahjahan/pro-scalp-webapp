@@ -33,8 +33,8 @@ const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
 const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '0');
 const READY_RECLAIM_REQUIRED = (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
-const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false';
-const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false';
+const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'false').toLowerCase() !== 'false';
+const READY_VOL_SPIKE_REQUIRED = (process.env.READY_VOL_SPIKE_REQUIRED ?? 'false').toLowerCase() !== 'false';
 const READY_VOL_SPIKE_MAX = parseFloat(process.env.READY_VOL_SPIKE_MAX || '');
 const READY_SWEEP_REQUIRED = (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_BTC_REQUIRED = (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
@@ -53,10 +53,11 @@ const BEST_VWAP_EPS_PCT = parseFloat(process.env.BEST_VWAP_EPS_PCT || '0');
 const BEST_EMA_EPS_PCT = parseFloat(process.env.BEST_EMA_EPS_PCT || '0');
 const VWAP_TOUCH_SNAPSHOT_BARS = parseInt(process.env.VWAP_TOUCH_SNAPSHOT_BARS || '30', 10);
 
-const EMA15_SOFT_TOL = 0.10; // % below EMA200 allowed on 15m soft confirm
+const EMA15_SOFT_TOL = parseFloat(process.env.EMA15_SOFT_TOL || '0.35'); // % below EMA200 allowed on 15m soft confirm
 const RSI15_FLOOR_SOFT = 50; // 15m RSI soft floor
-const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '96', 10);
-const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.20');
+const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '64', 10);
+const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.60');
+const CONFIRM15_SOFT_REQUIRE_EMA = (process.env.CONFIRM15_SOFT_REQUIRE_EMA ?? 'false').toLowerCase() === 'true';
 
 // ✅ Make WATCH easier than BUY without changing preset thresholds
 const VWAP_WATCH_MIN_PCT = parseFloat(process.env.VWAP_WATCH_MIN_PCT || '0.80');   // WATCH near-VWAP minimum window
@@ -390,7 +391,7 @@ function confirm15_soft(data15: OHLCV[], dbg?: { reason?: string }): boolean {
   const nearOrAboveEma =
     closes[i] > e[i] ||
     (((e[i] - closes[i]) / e[i]) * 100 <= EMA15_SOFT_TOL);
-  if (!nearOrAboveEma) { if (dbg) dbg.reason = 'ema'; return false; }
+  if (CONFIRM15_SOFT_REQUIRE_EMA && !nearOrAboveEma) { if (dbg) dbg.reason = 'ema'; return false; }
 
   const rsiSoftOk =
     r[i] >= RSI15_FLOOR_SOFT &&
@@ -465,7 +466,7 @@ function confirm15_short_soft(data15: OHLCV[], dbg?: { reason?: string }): boole
   const nearOrBelowEma =
     closes[i] < e[i] ||
     (((closes[i] - e[i]) / e[i]) * 100 <= EMA15_SOFT_TOL);
-  if (!nearOrBelowEma) { if (dbg) dbg.reason = 'ema'; return false; }
+  if (CONFIRM15_SOFT_REQUIRE_EMA && !nearOrBelowEma) { if (dbg) dbg.reason = 'ema'; return false; }
 
   const rsiSoftOk =
     r[i] <= SHORT_RSI_MAX &&
@@ -1150,6 +1151,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
   let rsiShortOk = false;
   let strongBodyShort = false;
   let shortVolOk = false;
+  let shortVolOkReq = true;
   let shortSweepOk = false;
   let rrShortOk = false;
   let riskShortOk = false;
@@ -1194,6 +1196,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     const shortVolMinOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
     const shortVolMaxOk = Number.isFinite(READY_VOL_SPIKE_MAX) ? volSpikeNow <= READY_VOL_SPIKE_MAX : true;
     shortVolOk = shortVolMinOk && shortVolMaxOk;
+    shortVolOkReq = READY_VOL_SPIKE_REQUIRED ? shortVolOk : shortVolMaxOk;
 
     // Short liquidity sweep (sweep HIGH, not low)
     const liqShort = detectLiquiditySweepShort(data5, vwap_i, atrNow, LIQ_LOOKBACK);
@@ -1287,7 +1290,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
         readyPriceBelowVwap &&
         rsiShortOk &&
         nearVwapShort &&
-        shortVolOk &&
+        shortVolOkReq &&
         atrOkReady &&
         shortConfirmOk &&
         shortDailyVwapOk &&
@@ -1481,7 +1484,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
         confirm15: confirm15mOkShort,
         confirm15Strict: confirm15mStrictShort,
         trend: readyTrendOkShort,
-        volSpike: shortVolOk,
+        volSpike: shortVolOkReq,
         atr: atrOkReady,
         sweep: shortSweepOk,
         strongBody: strongBodyShort,

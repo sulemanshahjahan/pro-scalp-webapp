@@ -24,11 +24,16 @@ const MIN_QUOTE_USDT = parseFloat(process.env.MIN_QUOTE_USDT || '20000000'); // 
 const MIN_PRICE_USDT = parseFloat(process.env.MIN_PRICE_USDT || '0.00001');   // $0.00001
 const STABLE_BASES = new Set(['USDT','USDC','BUSD','FDUSD','TUSD','DAI','USDD','USDJ']);
 const LEVERAGED_SUFFIXES = /(UP|DOWN|BULL|BEAR)USDT$/i;
-const MIN_ATR_PCT_PRECHECK = parseFloat(process.env.MIN_ATR_PCT_PRECHECK || '0.20');
+const PRECHECK_ATR_MIN_PCT = parseFloat(process.env.PRECHECK_ATR_MIN_PCT || process.env.MIN_ATR_PCT_PRECHECK || '0.05');
+const PRECHECK_ATR_MAX_PCT = parseFloat(process.env.PRECHECK_ATR_MAX_PCT || '');
 const RSI_PRECHECK_MIN = parseFloat(process.env.RSI_PRECHECK_MIN || '45');
 const RSI_PRECHECK_MAX = parseFloat(process.env.RSI_PRECHECK_MAX || '85');
 const PRECHECK_VWAP_MAX_PCT = parseFloat(process.env.PRECHECK_VWAP_MAX_PCT || '1.5');
-const PRECHECK_EMA_SOFT_PCT = parseFloat(process.env.PRECHECK_EMA_SOFT_PCT || '0.5');
+const PRECHECK_EMA_SOFT_PCT = parseFloat(process.env.PRECHECK_EMA_SOFT_PCT || '5.0');
+const PRECHECK_EMA_SOFT_ENABLED = (process.env.PRECHECK_EMA_SOFT_ENABLED ?? 'false').toLowerCase() === 'true';
+const PRECHECK_DEBUG_LOG = (process.env.PRECHECK_DEBUG_LOG ?? 'true').toLowerCase() !== 'false';
+const PRECHECK_DEBUG_LOG_MAX = Math.max(0, parseInt(process.env.PRECHECK_DEBUG_LOG_MAX || '40', 10) || 40);
+const GATE_TRACE_LOG_MAX = Math.max(0, parseInt(process.env.GATE_TRACE_LOG_MAX || '0', 10) || 0);
 
 function isStableVsStable(sym: string): boolean {
   if (!sym.endsWith('USDT')) return false;
@@ -534,6 +539,9 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
 
   let adaptiveDelayMs = SYMBOL_DELAY_MS;
   let no429Streak = 0;
+  let precheckAtrLogCount = 0;
+  let precheckEmaSoftLogCount = 0;
+  let gateTraceLogCount = 0;
   const shouldAbort = Boolean(errorMessage && symbols.length === 0);
   for (const sym of (shouldAbort ? [] : symbols)) {
     if (isStableVsStable(sym)) { precheck.skip_stable += 1; continue; }
@@ -569,16 +577,30 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const rsiNow = rsi5[i5];
 
       if (!Number.isFinite(atrNow) || !Number.isFinite(rsiNow)) { precheck.fail_atr_rsi += 1; continue; }
-      if (atrNow < MIN_ATR_PCT_PRECHECK) { precheck.fail_atr_pct += 1; continue; }
+      const atrTooLow = Number.isFinite(PRECHECK_ATR_MIN_PCT) && atrNow < PRECHECK_ATR_MIN_PCT;
+      const atrTooHigh = Number.isFinite(PRECHECK_ATR_MAX_PCT) && atrNow > PRECHECK_ATR_MAX_PCT;
+      if (atrTooLow || atrTooHigh) {
+        precheck.fail_atr_pct += 1;
+        if (PRECHECK_DEBUG_LOG && precheckAtrLogCount < PRECHECK_DEBUG_LOG_MAX) {
+          precheckAtrLogCount += 1;
+          console.log(
+            `[precheck][atr_pct] ${sym} atrPct=${atrNow.toFixed(4)} ` +
+            `min=${Number.isFinite(PRECHECK_ATR_MIN_PCT) ? PRECHECK_ATR_MIN_PCT.toFixed(4) : 'n/a'} ` +
+            `max=${Number.isFinite(PRECHECK_ATR_MAX_PCT) ? PRECHECK_ATR_MAX_PCT.toFixed(4) : 'n/a'} ` +
+            `failed=${atrTooLow ? 'LOW' : 'HIGH'}`
+          );
+        }
+        continue;
+      }
       if (rsiNow < RSI_PRECHECK_MIN || rsiNow > RSI_PRECHECK_MAX) { precheck.fail_rsi_range += 1; continue; }
 
       // 5m prefilter: only pull 15m if price is near VWAP/EMA200 window
       const ema200_5 = ema(closes5, 200);
       const emaNow = ema200_5[i5];
       if (!Number.isFinite(emaNow) || emaNow <= 0) { precheck.fail_ema += 1; continue; }
-      const emaSoftOk =
-        last5.close >= emaNow ||
-        (((emaNow - last5.close) / emaNow) * 100 <= PRECHECK_EMA_SOFT_PCT);
+      const emaDistPct = ((last5.close - emaNow) / emaNow) * 100;
+      const emaSoftWouldFail = emaDistPct < -PRECHECK_EMA_SOFT_PCT;
+      const emaSoftOk = !emaSoftWouldFail;
 
       const vols5 = d5.map(d => d.volume);
       const tp5 = d5.map(d => (d.high + d.low + d.close) / 3);
@@ -589,7 +611,21 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
       const distToVwapPct = ((last5.close - vwap5) / vwap5) * 100;
       const nearVwapPre = Math.abs(distToVwapPct) <= Math.max(thresholds.vwapDistancePct, PRECHECK_VWAP_MAX_PCT);
 
-      if (!emaSoftOk) { precheck.fail_ema_soft += 1; continue; }
+      if (!emaSoftOk) {
+        if (PRECHECK_DEBUG_LOG && precheckEmaSoftLogCount < PRECHECK_DEBUG_LOG_MAX) {
+          precheckEmaSoftLogCount += 1;
+          console.log(
+            `[precheck][ema_soft] ${sym} side=${emaDistPct < 0 ? 'BELOW_EMA' : 'ABOVE_EMA'} ` +
+            `close=${last5.close.toFixed(6)} ema=${emaNow.toFixed(6)} ` +
+            `distPct=${emaDistPct.toFixed(4)} thresholdPct=${PRECHECK_EMA_SOFT_PCT.toFixed(4)} ` +
+            `enforced=${PRECHECK_EMA_SOFT_ENABLED ? 'YES' : 'NO'}`
+          );
+        }
+        if (PRECHECK_EMA_SOFT_ENABLED) {
+          precheck.fail_ema_soft += 1;
+          continue;
+        }
+      }
       if (!nearVwapPre) { precheck.fail_near_vwap_pre += 1; continue; }
       precheckPassed++;
 
@@ -853,6 +889,49 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           if (bestShort.corePreSweep && !bestShort.sweep) gateStats.bestShort.failed_sweep += 1;
           if (bestShort.corePreRr && !bestShort.rr) gateStats.bestShort.failed_rr += 1;
           if (bestShort.core && !bestShort.btc) gateStats.bestShort.failed_btc_gate += 1;
+        }
+
+        if (GATE_TRACE_LOG_MAX > 0 && gateTraceLogCount < GATE_TRACE_LOG_MAX) {
+          gateTraceLogCount += 1;
+          const bestFlags: Record<string, boolean> = {
+            nearVwapBuy: Boolean(best.nearVwap),
+            confirm15mOk: Boolean(best.confirm15),
+            trendOk: Boolean(best.trend),
+            bestVolOk: Boolean(best.volSpike),
+            atrOkBest: Boolean(best.atr),
+            sweepOk: Boolean(best.sweep),
+            rrOk: Boolean(best.rr),
+            btcOk: Boolean(best.btc),
+          };
+          const bestOrder = [
+            'nearVwapBuy',
+            'confirm15mOk',
+            'trendOk',
+            'bestVolOk',
+            'atrOkBest',
+            'sweepOk',
+            'rrOk',
+            'btcOk',
+          ];
+          const bestFirstFailed = bestOrder.find((k) => !bestFlags[k]) ?? null;
+
+          const shortFlags = short ? {
+            nearVwapShort: Boolean(short.nearVwap),
+            confirm15mOk: Boolean(short.confirm15),
+            trendOkShort: Boolean(short.trend),
+            readyVolOk: Boolean(short.volSpike),
+            atrOkReady: Boolean(short.atr),
+            sweepOk: Boolean(short.sweep),
+            rrOk: Boolean(short.rrOk),
+            btcOk: Boolean(short.btc),
+          } : null;
+          const shortOrder = ['nearVwapShort', 'confirm15mOk', 'trendOkShort', 'readyVolOk', 'atrOkReady', 'sweepOk', 'rrOk', 'btcOk'];
+          const shortFirstFailed = shortFlags ? shortOrder.find((k) => !(shortFlags as any)[k]) ?? null : null;
+
+          console.log(
+            `[gate-trace] ${sym} readyFirst=${firstFailed ?? null} bestFirst=${bestFirstFailed} shortFirst=${shortFirstFailed} ` +
+            `ready=${JSON.stringify(coreFlags)} best=${JSON.stringify(bestFlags)} short=${JSON.stringify(shortFlags)}`
+          );
         }
       }
 

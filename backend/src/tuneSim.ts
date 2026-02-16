@@ -116,8 +116,8 @@ function parseBool(v: any): boolean | null {
 export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
   const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
   const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
-  const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.20');
-  const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '96', 10);
+  const CONFIRM15_VWAP_EPS_PCT = parseFloat(process.env.CONFIRM15_VWAP_EPS_PCT || '0.60');
+  const CONFIRM15_VWAP_ROLL_BARS = parseInt(process.env.CONFIRM15_VWAP_ROLL_BARS || '64', 10);
   return {
     thresholds,
     RSI_BEST_MIN: parseFloat(process.env.RSI_BEST_MIN || '55'),
@@ -148,16 +148,16 @@ export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
     READY_NO_SWEEP_VWAP_CAP: 0.20,
     READY_RECLAIM_REQUIRED: (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_CONFIRM15_REQUIRED: (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false',
-    READY_TREND_REQUIRED: (process.env.READY_TREND_REQUIRED ?? 'true').toLowerCase() !== 'false',
-    READY_VOL_SPIKE_REQUIRED: (process.env.READY_VOL_SPIKE_REQUIRED ?? 'true').toLowerCase() !== 'false',
+    READY_TREND_REQUIRED: (process.env.READY_TREND_REQUIRED ?? 'false').toLowerCase() !== 'false',
+    READY_VOL_SPIKE_REQUIRED: (process.env.READY_VOL_SPIKE_REQUIRED ?? 'false').toLowerCase() !== 'false',
     READY_SWEEP_REQUIRED: (process.env.READY_SWEEP_REQUIRED ?? 'true').toLowerCase() !== 'false',
     READY_BTC_REQUIRED: (process.env.READY_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false',
     BEST_BTC_REQUIRED: (process.env.BEST_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false',
     BEST_VWAP_MAX_PCT: Number.isFinite(BEST_VWAP_MAX_PCT) ? BEST_VWAP_MAX_PCT : thresholds.vwapDistancePct,
     BEST_VWAP_EPS_PCT: parseFloat(process.env.BEST_VWAP_EPS_PCT || '0'),
     BEST_EMA_EPS_PCT: parseFloat(process.env.BEST_EMA_EPS_PCT || '0'),
-    CONFIRM15_VWAP_EPS_PCT: Number.isFinite(CONFIRM15_VWAP_EPS_PCT) ? CONFIRM15_VWAP_EPS_PCT : 0.20,
-    CONFIRM15_VWAP_ROLL_BARS: Number.isFinite(CONFIRM15_VWAP_ROLL_BARS) ? CONFIRM15_VWAP_ROLL_BARS : 96,
+    CONFIRM15_VWAP_EPS_PCT: Number.isFinite(CONFIRM15_VWAP_EPS_PCT) ? CONFIRM15_VWAP_EPS_PCT : 0.60,
+    CONFIRM15_VWAP_ROLL_BARS: Number.isFinite(CONFIRM15_VWAP_ROLL_BARS) ? CONFIRM15_VWAP_ROLL_BARS : 64,
     // Sweep parameters
     SWEEP_MIN_DEPTH_ATR_MULT: parseFloat(process.env.SWEEP_MIN_DEPTH_ATR_MULT || '0.35'),
     SWEEP_MAX_DEPTH_CAP: parseFloat(process.env.SWEEP_MAX_DEPTH_CAP || '0.25'),
