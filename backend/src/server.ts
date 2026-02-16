@@ -493,6 +493,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
     let scanRun = runId ? await getScanRunByRunId(runId) : null;
     let runIds: string[] = [];
     let runMeta: Array<{ runId: string; startedAt: number }> = [];
+    let selectedRuns: any[] = [];
 
     if (sourceMode === 'runids') {
       const ids = (runIdsRaw ?? [])
@@ -506,6 +507,9 @@ app.post('/api/tune/simBatch', async (req, res) => {
       runMeta = runIds
         .map((id) => ({ runId: id, startedAt: Number(runMap.get(id)?.startedAt ?? 0) }))
         .filter((r) => Number.isFinite(r.startedAt) && r.startedAt > 0);
+      selectedRuns = runIds
+        .map((id) => runMap.get(id))
+        .filter((r): r is any => Boolean(r));
       runId = runIds[0] || '';
       if (!runIds.length) return res.status(404).json({ ok: false, error: 'No scan runs found' });
     } else if (sourceMode === 'lastn') {
@@ -515,6 +519,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
       const runs = runsRaw.filter((r): r is any => Boolean(r));
       runIds = runs.map(r => r.runId);
       runMeta = runs.map(r => ({ runId: r.runId, startedAt: r.startedAt }));
+      selectedRuns = runs;
       runId = runIds[0] || '';
       if (!runIds.length) return res.status(404).json({ ok: false, error: 'No scan runs found' });
     } else {
@@ -525,6 +530,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
       }
       if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
       if (!scanRun && runId) scanRun = await getScanRunByRunId(runId);
+      selectedRuns = scanRun ? [scanRun] : [];
     }
 
     const preset = parsePreset(body.preset ?? scanRun?.preset ?? 'BALANCED');
@@ -561,6 +567,32 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
     const baseOverrideReport = applyOverrides(cfgBase, body.baseOverrides || {});
     const baseSim = runTuneSimRows(rows, baseOverrideReport.config, { includeExamples, examplesPerGate });
+    const hasActualCounts = selectedRuns.some((r) => r && typeof r.signalsByCategory === 'object' && r.signalsByCategory != null);
+    const zeroCounts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
+    const actualCounts = hasActualCounts
+      ? selectedRuns.reduce((acc, r) => {
+        const cats = r?.signalsByCategory ?? {};
+        acc.watch += Number(cats.WATCH ?? 0);
+        acc.early += Number(cats.EARLY_READY ?? 0);
+        acc.ready += Number(cats.READY_TO_BUY ?? 0);
+        acc.best += Number(cats.BEST_ENTRY ?? 0);
+        acc.watchShort += Number(cats.WATCH_SHORT ?? 0);
+        acc.earlyShort += Number(cats.EARLY_READY_SHORT ?? 0);
+        acc.readyShort += Number(cats.READY_TO_SELL ?? 0);
+        acc.bestShort += Number(cats.BEST_SHORT_ENTRY ?? 0);
+        return acc;
+      }, { ...zeroCounts })
+      : null;
+    const baseDiffVsActual = actualCounts ? {
+      watch: baseSim.counts.watch - actualCounts.watch,
+      early: baseSim.counts.early - actualCounts.early,
+      ready: baseSim.counts.ready - actualCounts.ready,
+      best: baseSim.counts.best - actualCounts.best,
+      watchShort: baseSim.counts.watchShort - actualCounts.watchShort,
+      earlyShort: baseSim.counts.earlyShort - actualCounts.earlyShort,
+      readyShort: baseSim.counts.readyShort - actualCounts.readyShort,
+      bestShort: baseSim.counts.bestShort - actualCounts.bestShort,
+    } : null;
 
     const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
       const added: string[] = [];
@@ -609,12 +641,26 @@ app.post('/api/tune/simBatch', async (req, res) => {
             early: sim.counts.early - baseSim.counts.early,
             ready: sim.counts.ready - baseSim.counts.ready,
             best: sim.counts.best - baseSim.counts.best,
+            watchShort: sim.counts.watchShort - baseSim.counts.watchShort,
+            earlyShort: sim.counts.earlyShort - baseSim.counts.earlyShort,
+            readyShort: sim.counts.readyShort - baseSim.counts.readyShort,
+            bestShort: sim.counts.bestShort - baseSim.counts.bestShort,
           },
           addedReadySymbols: readyDiff.added,
           removedReadySymbols: readyDiff.removed,
           addedBestSymbols: bestDiff.added,
           removedBestSymbols: bestDiff.removed,
         },
+        diffVsActual: actualCounts ? {
+          watch: sim.counts.watch - actualCounts.watch,
+          early: sim.counts.early - actualCounts.early,
+          ready: sim.counts.ready - actualCounts.ready,
+          best: sim.counts.best - actualCounts.best,
+          watchShort: sim.counts.watchShort - actualCounts.watchShort,
+          earlyShort: sim.counts.earlyShort - actualCounts.earlyShort,
+          readyShort: sim.counts.readyShort - actualCounts.readyShort,
+          bestShort: sim.counts.bestShort - actualCounts.bestShort,
+        } : null,
       };
     });
 
@@ -633,6 +679,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
         runId,
         runIds: runIdsOut,
         runCount: runIdsOut.length,
+        actualRunCount: selectedRuns.length,
         startedAt,
         startedAtRange,
         evaluated: rows.length,
@@ -652,6 +699,8 @@ app.post('/api/tune/simBatch', async (req, res) => {
       },
       base: {
         counts: baseSim.counts,
+        actualCounts,
+        diffVsActual: baseDiffVsActual,
         funnel: baseSim.funnel,
         postCoreFailed: baseSim.postCoreFailed,
         firstFailed: baseSim.firstFailed,

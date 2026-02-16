@@ -1086,6 +1086,24 @@ export default function TunePage() {
                 </div>
               </div>
             </div>
+            {batchResult?.base?.actualCounts ? (
+              <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-2 text-xs text-white/80 space-y-1">
+                <div>
+                  <span className="text-white/60">Actual (scan_runs): </span>
+                  Ready / Best {batchResult.base.actualCounts.ready ?? 0} / {batchResult.base.actualCounts.best ?? 0}
+                  {' | '}ReadyS / BestS {batchResult.base.actualCounts.readyShort ?? 0} / {batchResult.base.actualCounts.bestShort ?? 0}
+                </div>
+                <div>
+                  <span className="text-white/60">Sim - Actual: </span>
+                  Ready / Best {batchResult?.base?.diffVsActual?.ready ?? '--'} / {batchResult?.base?.diffVsActual?.best ?? '--'}
+                  {' | '}ReadyS / BestS {batchResult?.base?.diffVsActual?.readyShort ?? '--'} / {batchResult?.base?.diffVsActual?.bestShort ?? '--'}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 text-xs text-white/50">
+                Actual signal counts were not available for the selected runs.
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -1202,9 +1220,25 @@ export default function TunePage() {
                     <div>early: {selectedVariant?.diffVsBase?.counts?.early ?? '--'}</div>
                     <div>ready: {selectedVariant?.diffVsBase?.counts?.ready ?? '--'}</div>
                     <div>best: {selectedVariant?.diffVsBase?.counts?.best ?? '--'}</div>
+                    <div>readyShort: {selectedVariant?.diffVsBase?.counts?.readyShort ?? '--'}</div>
+                    <div>bestShort: {selectedVariant?.diffVsBase?.counts?.bestShort ?? '--'}</div>
                   </div>
                 </div>
               </div>
+
+              {selectedVariant?.diffVsActual ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm">
+                  <div className="text-xs text-white/60">Diff vs Actual</div>
+                  <div className="mt-2 text-sm text-white/80 space-y-1">
+                    <div>watch: {selectedVariant?.diffVsActual?.watch ?? '--'}</div>
+                    <div>early: {selectedVariant?.diffVsActual?.early ?? '--'}</div>
+                    <div>ready: {selectedVariant?.diffVsActual?.ready ?? '--'}</div>
+                    <div>best: {selectedVariant?.diffVsActual?.best ?? '--'}</div>
+                    <div>readyShort: {selectedVariant?.diffVsActual?.readyShort ?? '--'}</div>
+                    <div>bestShort: {selectedVariant?.diffVsActual?.bestShort ?? '--'}</div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
                 {(['ready', 'best'] as const).map((stage) => (
