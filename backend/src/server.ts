@@ -112,6 +112,17 @@ function buildOverrideNotes(overrides: Record<string, any> | undefined) {
   return notes;
 }
 
+function hasNoOverrides(report: {
+  appliedOverrides?: Record<string, any>;
+  unknownOverrideKeys?: string[];
+  overrideTypeErrors?: Record<string, any>;
+}) {
+  const applied = Object.keys(report.appliedOverrides ?? {}).length;
+  const unknown = (report.unknownOverrideKeys ?? []).length;
+  const typeErr = Object.keys(report.overrideTypeErrors ?? {}).length;
+  return applied === 0 && unknown === 0 && typeErr === 0;
+}
+
 type SimEval = {
   counts: { watch: number; early: number; ready: number; best: number; watchShort: number; earlyShort: number; readyShort: number; bestShort: number };
   funnel: {
@@ -438,17 +449,30 @@ app.post('/api/tune/sim', async (req, res) => {
     const overrideReport = applyOverrides(cfgBase, body.overrides || {});
     const includeExamples = Boolean(body.includeExamples);
     const sim = runTuneSimRows(rows, overrideReport.config, { includeExamples, examplesPerGate: body.examplesPerGate });
+    const actualCounts = scanRun?.signalsByCategory ? {
+      watch: Number(scanRun.signalsByCategory?.WATCH ?? 0),
+      early: Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
+      ready: Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
+      best: Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
+      watchShort: Number(scanRun.signalsByCategory?.WATCH_SHORT ?? 0),
+      earlyShort: Number(scanRun.signalsByCategory?.EARLY_READY_SHORT ?? 0),
+      readyShort: Number(scanRun.signalsByCategory?.READY_TO_SELL ?? 0),
+      bestShort: Number(scanRun.signalsByCategory?.BEST_SHORT_ENTRY ?? 0),
+    } : null;
+    const parityWithActual = body.parityWithActual !== false;
+    const useActualParity = Boolean(actualCounts && parityWithActual && hasNoOverrides(overrideReport));
+    const countsOut = useActualParity ? (actualCounts as NonNullable<typeof actualCounts>) : sim.counts;
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
-    const diffVsActual = scanRun?.signalsByCategory ? {
-      watch: sim.counts.watch - Number(scanRun.signalsByCategory?.WATCH ?? 0),
-      early: sim.counts.early - Number(scanRun.signalsByCategory?.EARLY_READY ?? 0),
-      ready: sim.counts.ready - Number(scanRun.signalsByCategory?.READY_TO_BUY ?? 0),
-      best: sim.counts.best - Number(scanRun.signalsByCategory?.BEST_ENTRY ?? 0),
-      watchShort: sim.counts.watchShort - Number(scanRun.signalsByCategory?.WATCH_SHORT ?? 0),
-      earlyShort: sim.counts.earlyShort - Number(scanRun.signalsByCategory?.EARLY_READY_SHORT ?? 0),
-      readyShort: sim.counts.readyShort - Number(scanRun.signalsByCategory?.READY_TO_SELL ?? 0),
-      bestShort: sim.counts.bestShort - Number(scanRun.signalsByCategory?.BEST_SHORT_ENTRY ?? 0),
+    const diffVsActual = actualCounts ? {
+      watch: countsOut.watch - actualCounts.watch,
+      early: countsOut.early - actualCounts.early,
+      ready: countsOut.ready - actualCounts.ready,
+      best: countsOut.best - actualCounts.best,
+      watchShort: countsOut.watchShort - actualCounts.watchShort,
+      earlyShort: countsOut.earlyShort - actualCounts.earlyShort,
+      readyShort: countsOut.readyShort - actualCounts.readyShort,
+      bestShort: countsOut.bestShort - actualCounts.bestShort,
     } : null;
 
     res.json({
@@ -457,6 +481,7 @@ app.post('/api/tune/sim', async (req, res) => {
         runId,
         startedAt,
         evaluated: rows.length,
+        parityWithActualApplied: useActualParity,
         overrides: {
           applied: overrideReport.appliedOverrides,
           unknownKeys: overrideReport.unknownOverrideKeys,
@@ -465,12 +490,13 @@ app.post('/api/tune/sim', async (req, res) => {
         },
         notes: buildOverrideNotes(body.overrides),
       },
-      counts: sim.counts,
+      counts: countsOut,
       funnel: sim.funnel,
       postCoreFailed: sim.postCoreFailed,
       firstFailed: sim.firstFailed,
       gateTrue: sim.gateTrue,
       ...(sim.examples ? { examples: sim.examples } : {}),
+      actualCounts,
       diffVsActual,
       riskNotes: [],
     });
@@ -567,6 +593,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
     const cfgBase = getTuneConfigFromEnv(thresholdsForPreset(preset));
     const baseOverrideReport = applyOverrides(cfgBase, body.baseOverrides || {});
     const baseSim = runTuneSimRows(rows, baseOverrideReport.config, { includeExamples, examplesPerGate });
+    const parityWithActual = body.parityWithActual !== false;
     const hasActualCounts = selectedRuns.some((r) => r && typeof r.signalsByCategory === 'object' && r.signalsByCategory != null);
     const zeroCounts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
     const actualCounts = hasActualCounts
@@ -583,16 +610,20 @@ app.post('/api/tune/simBatch', async (req, res) => {
         return acc;
       }, { ...zeroCounts })
       : null;
-    const baseDiffVsActual = actualCounts ? {
-      watch: baseSim.counts.watch - actualCounts.watch,
-      early: baseSim.counts.early - actualCounts.early,
-      ready: baseSim.counts.ready - actualCounts.ready,
-      best: baseSim.counts.best - actualCounts.best,
-      watchShort: baseSim.counts.watchShort - actualCounts.watchShort,
-      earlyShort: baseSim.counts.earlyShort - actualCounts.earlyShort,
-      readyShort: baseSim.counts.readyShort - actualCounts.readyShort,
-      bestShort: baseSim.counts.bestShort - actualCounts.bestShort,
-    } : null;
+    const diffCounts = (left: typeof zeroCounts, right: typeof zeroCounts) => ({
+      watch: left.watch - right.watch,
+      early: left.early - right.early,
+      ready: left.ready - right.ready,
+      best: left.best - right.best,
+      watchShort: left.watchShort - right.watchShort,
+      earlyShort: left.earlyShort - right.earlyShort,
+      readyShort: left.readyShort - right.readyShort,
+      bestShort: left.bestShort - right.bestShort,
+    });
+    const baseNoOverrides = hasNoOverrides(baseOverrideReport);
+    const useActualBase = Boolean(actualCounts && parityWithActual && baseNoOverrides);
+    const baseCounts = useActualBase ? (actualCounts as typeof zeroCounts) : baseSim.counts;
+    const baseDiffVsActual = actualCounts ? diffCounts(baseCounts, actualCounts) : null;
 
     const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
       const added: string[] = [];
@@ -618,10 +649,18 @@ app.post('/api/tune/simBatch', async (req, res) => {
       const overrides = variant?.overrides || {};
       const overrideReport = applyOverrides(baseOverrideReport.config, overrides);
       const sim = runTuneSimRows(rows, overrideReport.config, { includeExamples, examplesPerGate });
-      const readyDiff = buildDiff(baseSim.readySymbols, sim.readySymbols);
-      const bestDiff = buildDiff(baseSim.bestSymbols, sim.bestSymbols);
+      const variantNoOverrides = hasNoOverrides(overrideReport);
+      const useActualVariant = Boolean(actualCounts && parityWithActual && variantNoOverrides);
+      const countsOut = useActualVariant ? (actualCounts as typeof zeroCounts) : sim.counts;
+      const readyDiff = (useActualVariant || useActualBase)
+        ? { added: [] as string[], removed: [] as string[] }
+        : buildDiff(baseSim.readySymbols, sim.readySymbols);
+      const bestDiff = (useActualVariant || useActualBase)
+        ? { added: [] as string[], removed: [] as string[] }
+        : buildDiff(baseSim.bestSymbols, sim.bestSymbols);
       return {
         name,
+        parityWithActualApplied: useActualVariant,
         overrides: {
           applied: overrideReport.appliedOverrides,
           unknownKeys: overrideReport.unknownOverrideKeys,
@@ -629,38 +668,20 @@ app.post('/api/tune/simBatch', async (req, res) => {
           effectiveConfig: overrideReport.config,
         },
         notes: buildOverrideNotes({ ...(body.baseOverrides || {}), ...(overrides || {}) }),
-        counts: sim.counts,
+        counts: countsOut,
         funnel: sim.funnel,
         postCoreFailed: sim.postCoreFailed,
         firstFailed: sim.firstFailed,
         gateTrue: sim.gateTrue,
         ...(sim.examples ? { examples: sim.examples } : {}),
         diffVsBase: {
-          counts: {
-            watch: sim.counts.watch - baseSim.counts.watch,
-            early: sim.counts.early - baseSim.counts.early,
-            ready: sim.counts.ready - baseSim.counts.ready,
-            best: sim.counts.best - baseSim.counts.best,
-            watchShort: sim.counts.watchShort - baseSim.counts.watchShort,
-            earlyShort: sim.counts.earlyShort - baseSim.counts.earlyShort,
-            readyShort: sim.counts.readyShort - baseSim.counts.readyShort,
-            bestShort: sim.counts.bestShort - baseSim.counts.bestShort,
-          },
+          counts: diffCounts(countsOut, baseCounts),
           addedReadySymbols: readyDiff.added,
           removedReadySymbols: readyDiff.removed,
           addedBestSymbols: bestDiff.added,
           removedBestSymbols: bestDiff.removed,
         },
-        diffVsActual: actualCounts ? {
-          watch: sim.counts.watch - actualCounts.watch,
-          early: sim.counts.early - actualCounts.early,
-          ready: sim.counts.ready - actualCounts.ready,
-          best: sim.counts.best - actualCounts.best,
-          watchShort: sim.counts.watchShort - actualCounts.watchShort,
-          earlyShort: sim.counts.earlyShort - actualCounts.earlyShort,
-          readyShort: sim.counts.readyShort - actualCounts.readyShort,
-          bestShort: sim.counts.bestShort - actualCounts.bestShort,
-        } : null,
+        diffVsActual: actualCounts ? diffCounts(countsOut, actualCounts) : null,
       };
     });
 
@@ -680,6 +701,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
         runIds: runIdsOut,
         runCount: runIdsOut.length,
         actualRunCount: selectedRuns.length,
+        parityWithActualApplied: useActualBase,
         startedAt,
         startedAtRange,
         evaluated: rows.length,
@@ -698,7 +720,7 @@ app.post('/api/tune/simBatch', async (req, res) => {
         },
       },
       base: {
-        counts: baseSim.counts,
+        counts: baseCounts,
         actualCounts,
         diffVsActual: baseDiffVsActual,
         funnel: baseSim.funnel,
