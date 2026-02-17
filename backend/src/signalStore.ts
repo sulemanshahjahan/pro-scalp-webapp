@@ -3,6 +3,9 @@ import type { Signal } from './types.js';
 import { klinesFrom } from './binance.js';
 import { getDb } from './db/db.js';
 import { buildConfigSnapshot, computeConfigHash, parseEnvValue } from './configSnapshot.js';
+import pg from 'pg';
+
+const { Client: PgClient } = pg;
 
 const OUTCOME_HORIZONS_MIN = [15, 30, 60, 120, 240] as const;
 const OUTCOME_GRACE_MS = 2 * 60_000;
@@ -14,6 +17,11 @@ const OUTCOME_BUFFER_CANDLES = Math.max(0, parseInt(process.env.OUTCOME_BUFFER_C
 const OUTCOME_RETRY_AFTER_MS = parseInt(process.env.OUTCOME_RETRY_AFTER_MS || String(10 * 60_000), 10);
 const OUTCOME_RETRY_REASONS = ['API_ERROR', 'BAD_ALIGN', 'NO_DATA_IN_WINDOW', 'NOT_ENOUGH_BARS'];
 const OUTCOME_RESOLVE_VERSION = process.env.OUTCOME_RESOLVE_VERSION || 'v2';
+const OUTCOME_PG_ADVISORY_LOCK = (process.env.OUTCOME_PG_ADVISORY_LOCK ?? 'true').toLowerCase() !== 'false';
+const OUTCOME_PG_ADVISORY_LOCK_KEY = resolveOutcomeAdvisoryLockKey();
+const OUTCOME_PG_ADVISORY_LOCK_RETRIES = Math.max(0, Math.min(20, parseInt(process.env.OUTCOME_PG_ADVISORY_LOCK_RETRIES || '2', 10)));
+const OUTCOME_PG_ADVISORY_LOCK_RETRY_MS = Math.max(50, parseInt(process.env.OUTCOME_PG_ADVISORY_LOCK_RETRY_MS || '250', 10));
+const OUTCOME_BACKLOG_GRACE_MIN = Math.max(1, parseInt(process.env.OUTCOME_BACKLOG_GRACE_MIN || '10', 10));
 const OUTCOME_INTEGRITY_MS = parseInt(process.env.OUTCOME_INTEGRITY_MS || '600000', 10); // 10 min
 const OUTCOME_INTEGRITY_DAYS = parseInt(process.env.OUTCOME_INTEGRITY_DAYS || '14', 10);
 const OUTCOME_EXPIRE_AFTER_15M = (process.env.OUTCOME_EXPIRE_AFTER_15M ?? 'true').toLowerCase() !== 'false';
@@ -1001,6 +1009,114 @@ function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function hashLockSeed(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash * 31) + seed.charCodeAt(i)) | 0;
+  }
+  const normalized = Math.abs(hash);
+  return normalized > 0 ? normalized : 240615;
+}
+
+function resolveOutcomeAdvisoryLockKey() {
+  const explicit = Number(process.env.OUTCOME_PG_ADVISORY_LOCK_KEY);
+  if (Number.isFinite(explicit)) return Math.trunc(explicit);
+  const urlRaw = String(process.env.DATABASE_URL || '').trim();
+  let dbName = 'local';
+  try {
+    if (urlRaw) {
+      const u = new URL(urlRaw);
+      dbName = String(u.pathname || '').replace(/^\//, '') || dbName;
+    }
+  } catch {}
+  const envName = String(process.env.NODE_ENV || process.env.RAILWAY_ENVIRONMENT || 'development');
+  const seed = `outcomes|${envName}|${dbName}`;
+  return hashLockSeed(seed);
+}
+
+function pgSslConfig(url: string) {
+  const sslEnv = String(process.env.PG_SSL || '').toLowerCase();
+  if (
+    sslEnv === '1' ||
+    sslEnv === 'true' ||
+    url.includes('sslmode=require') ||
+    url.includes('ssl=true')
+  ) {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
+}
+
+async function acquireOutcomePgAdvisoryLock(lockKey: number, retries: number, retryMs: number) {
+  const url = String(process.env.DATABASE_URL || '').trim();
+  if (!url) {
+    throw new Error('DATABASE_URL is required to use Postgres advisory locks');
+  }
+  const client = new PgClient({
+    connectionString: url,
+    ssl: pgSslConfig(url),
+  });
+  await client.connect();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const row = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [lockKey]);
+    const locked = Boolean(row.rows?.[0]?.locked);
+    if (locked) {
+      return { client, attempts: attempt + 1 };
+    }
+    if (attempt < retries) {
+      await sleep(retryMs);
+    }
+  }
+  await client.end();
+  return null;
+}
+
+async function releaseOutcomePgAdvisoryLock(client: any, lockKey: number) {
+  if (!client) return;
+  try {
+    await client.query('SELECT pg_advisory_unlock($1)', [lockKey]);
+  } finally {
+    await client.end();
+  }
+}
+
+let activeOutcomeLockClient: any = null;
+let activeOutcomeLockKey: number | null = null;
+let outcomeLockSignalHandlersBound = false;
+
+function bindOutcomeLockSignalHandlers() {
+  if (outcomeLockSignalHandlersBound) return;
+  outcomeLockSignalHandlersBound = true;
+
+  const install = (signal: NodeJS.Signals) => {
+    process.once(signal, () => {
+      const client = activeOutcomeLockClient;
+      const key = activeOutcomeLockKey;
+      activeOutcomeLockClient = null;
+      activeOutcomeLockKey = null;
+      const rethrowSignal = () => {
+        try {
+          process.kill(process.pid, signal);
+        } catch {
+          process.exit(0);
+        }
+      };
+      if (client && Number.isFinite(key)) {
+        void releaseOutcomePgAdvisoryLock(client, Number(key))
+          .catch((e) => {
+            console.warn('[outcomes] advisory unlock on shutdown failed', String(e));
+          })
+          .finally(rethrowSignal);
+      } else {
+        rethrowSignal();
+      }
+    });
+  };
+
+  install('SIGTERM');
+  install('SIGINT');
+}
+
 function alignDown(ts: number, intervalMs: number) {
   return Math.floor(ts / intervalMs) * intervalMs;
 }
@@ -1962,11 +2078,58 @@ async function computeOneOutcome(
   return true;
 }
 
+function updateOutcomesCoordinatorState(next: {
+  strategy: 'in_process' | 'pg_advisory';
+  role: 'disabled' | 'leader' | 'follower' | 'error';
+  acquired: boolean;
+  reason: string | null;
+  attemptedAt: number;
+  lockKey: number | null;
+  lockAttempts: number;
+  running: boolean;
+}) {
+  if (next.role === 'leader') {
+    if (!outcomesLeaderSinceAt) outcomesLeaderSinceAt = next.attemptedAt;
+  } else {
+    outcomesLeaderSinceAt = null;
+  }
+  lastOutcomesCoordinator = {
+    strategy: next.strategy,
+    role: next.role,
+    active: true,
+    acquired: next.acquired,
+    reason: next.reason,
+    attemptedAt: next.attemptedAt,
+    lockKey: next.lockKey,
+    lockAttempts: next.lockAttempts,
+    leaderSince: outcomesLeaderSinceAt,
+    running: next.running,
+  };
+}
+
 export async function updateOutcomesOnce() {
-  if (outcomesRunning) return;
+  const attemptedAt = Date.now();
+  if (outcomesRunning) {
+    const alreadyLeader = lastOutcomesCoordinator?.role === 'leader';
+    updateOutcomesCoordinatorState({
+      strategy: 'in_process',
+      role: alreadyLeader ? 'leader' : 'follower',
+      acquired: alreadyLeader,
+      reason: 'IN_PROCESS_RUNNING',
+      attemptedAt,
+      lockKey: null,
+      lockAttempts: 0,
+      running: true,
+    });
+    return;
+  }
+
   outcomesRunning = true;
-  const d = await getDbReady();
-  const now = Date.now();
+  let d: any = null;
+  let pgLockClient: any = null;
+  let lockAttempts = 0;
+  let didRun = false;
+  const lockKey = Math.trunc(OUTCOME_PG_ADVISORY_LOCK_KEY);
   const runStart = Date.now();
   let processed = 0;
   const cache = new Map<string, { start: number; end: number; candles: any[] }>();
@@ -1983,6 +2146,79 @@ export async function updateOutcomesOnce() {
   }
 
   try {
+    d = await getDbReady();
+
+    if (d.driver === 'postgres' && OUTCOME_PG_ADVISORY_LOCK) {
+      try {
+        const acquired = await acquireOutcomePgAdvisoryLock(
+          lockKey,
+          OUTCOME_PG_ADVISORY_LOCK_RETRIES,
+          OUTCOME_PG_ADVISORY_LOCK_RETRY_MS
+        );
+        if (acquired) {
+          pgLockClient = acquired.client;
+          lockAttempts = acquired.attempts;
+          activeOutcomeLockClient = pgLockClient;
+          activeOutcomeLockKey = lockKey;
+          bindOutcomeLockSignalHandlers();
+        } else {
+          lockAttempts = OUTCOME_PG_ADVISORY_LOCK_RETRIES + 1;
+        }
+      } catch (e) {
+        updateOutcomesCoordinatorState({
+          strategy: 'pg_advisory',
+          role: 'error',
+          acquired: false,
+          reason: 'LOCK_ERROR',
+          attemptedAt,
+          lockKey,
+          lockAttempts: lockAttempts || 1,
+          running: false,
+        });
+        console.warn('[outcomes] advisory lock error', String(e));
+        return;
+      }
+
+      if (!pgLockClient) {
+        updateOutcomesCoordinatorState({
+          strategy: 'pg_advisory',
+          role: 'follower',
+          acquired: false,
+          reason: 'LOCK_HELD_BY_ANOTHER_REPLICA',
+          attemptedAt,
+          lockKey,
+          lockAttempts,
+          running: false,
+        });
+        return;
+      }
+
+      updateOutcomesCoordinatorState({
+        strategy: 'pg_advisory',
+        role: 'leader',
+        acquired: true,
+        reason: null,
+        attemptedAt,
+        lockKey,
+        lockAttempts,
+        running: true,
+      });
+    } else {
+      const lockDisabled = d.driver === 'postgres';
+      updateOutcomesCoordinatorState({
+        strategy: 'in_process',
+        role: lockDisabled ? 'disabled' : 'leader',
+        acquired: !lockDisabled,
+        reason: lockDisabled ? 'PG_ADVISORY_DISABLED' : null,
+        attemptedAt,
+        lockKey: null,
+        lockAttempts: 0,
+        running: true,
+      });
+    }
+
+    didRun = true;
+    const now = Date.now();
     const horizons = [...OUTCOME_HORIZONS_MIN].sort((a, b) => a - b);
     for (const horizonMin of horizons) {
       const needed = Math.max(1, Math.ceil(horizonMin / OUTCOME_INTERVAL_MIN));
@@ -2094,13 +2330,30 @@ export async function updateOutcomesOnce() {
       }
     }
   } finally {
+    if (pgLockClient) {
+      try {
+        await releaseOutcomePgAdvisoryLock(pgLockClient, lockKey);
+      } catch (e) {
+        console.warn('[outcomes] advisory unlock error', String(e));
+      } finally {
+        if (activeOutcomeLockClient === pgLockClient) {
+          activeOutcomeLockClient = null;
+          activeOutcomeLockKey = null;
+        }
+      }
+    }
     const runEnd = Date.now();
-    lastOutcomesHealth = {
-      startedAt: runStart,
-      finishedAt: runEnd,
-      durationMs: runEnd - runStart,
-      processed,
-    };
+    if (didRun) {
+      lastOutcomesHealth = {
+        startedAt: runStart,
+        finishedAt: runEnd,
+        durationMs: runEnd - runStart,
+        processed,
+      };
+    }
+    if (lastOutcomesCoordinator) {
+      lastOutcomesCoordinator.running = false;
+    }
     outcomesRunning = false;
   }
 }
@@ -2114,9 +2367,32 @@ let lastOutcomesHealth: {
   durationMs: number;
   processed: number;
 } | null = null;
+type OutcomesCoordinatorHealth = {
+  strategy: 'in_process' | 'pg_advisory';
+  role: 'disabled' | 'leader' | 'follower' | 'error';
+  active: boolean;
+  acquired: boolean;
+  reason: string | null;
+  attemptedAt: number;
+  lockKey: number | null;
+  lockAttempts: number;
+  leaderSince: number | null;
+  running: boolean;
+};
+let lastOutcomesCoordinator: OutcomesCoordinatorHealth | null = null;
+let outcomesLeaderSinceAt: number | null = null;
 
 export function getOutcomesHealth() {
   return lastOutcomesHealth;
+}
+
+export function getOutcomesCoordinatorHealth() {
+  if (!lastOutcomesCoordinator) return null;
+  const leaderUptimeMs =
+    lastOutcomesCoordinator.role === 'leader' && lastOutcomesCoordinator.leaderSince
+      ? Math.max(0, Date.now() - lastOutcomesCoordinator.leaderSince)
+      : 0;
+  return { ...lastOutcomesCoordinator, leaderUptimeMs };
 }
 
 export async function getOutcomesBacklogCount(params: {
@@ -2134,6 +2410,67 @@ export async function getOutcomesBacklogCount(params: {
       AND o.window_status != 'COMPLETE'
   `).get({ start, end }) as { n: number };
   return row?.n ?? 0;
+}
+
+export async function getOutcomesBacklogMetrics(params: {
+  graceMin?: number;
+  horizonMin?: number;
+} = {}) {
+  const d = await getDbReady();
+  const graceMin = Math.max(1, Number(params.graceMin) || OUTCOME_BACKLOG_GRACE_MIN);
+  const requestedHorizon = Number(params.horizonMin);
+  const requiredHorizons = Number.isFinite(requestedHorizon)
+    ? [Math.max(1, Math.trunc(requestedHorizon))]
+    : [...OUTCOME_HORIZONS_MIN];
+  const valuesSql = requiredHorizons.map((h) => `(${h})`).join(', ');
+  const cutoff = Date.now() - graceMin * 60_000;
+
+  const row = await d.prepare(`
+    WITH required_h(horizon_min) AS (
+      VALUES ${valuesSql}
+    ),
+    eligible_signals AS (
+      SELECT id, created_at
+      FROM signals
+      WHERE created_at <= @cutoff
+    ),
+    pending AS (
+      SELECT s.id as signal_id, s.created_at
+      FROM eligible_signals s
+      CROSS JOIN required_h h
+      LEFT JOIN signal_outcomes o
+        ON o.signal_id = s.id
+       AND o.horizon_min = h.horizon_min
+      WHERE
+        o.id IS NULL
+        OR o.resolve_version IS NULL
+        OR o.outcome_state NOT LIKE 'COMPLETE_%'
+    )
+    SELECT
+      COUNT(*) AS pending_outcome_rows,
+      COUNT(DISTINCT signal_id) AS pending_signals_n,
+      MIN(created_at) AS oldest_created_at
+    FROM pending
+  `).get({ cutoff }) as {
+    pending_outcome_rows?: number;
+    pending_signals_n?: number;
+    oldest_created_at?: number | null;
+  } | undefined;
+
+  const pendingOutcomeRows = Number(row?.pending_outcome_rows ?? 0);
+  const pendingSignals = Number(row?.pending_signals_n ?? 0);
+  const oldestCreatedAt = Number(row?.oldest_created_at ?? 0);
+  const oldestPendingMs = oldestCreatedAt > 0 ? Math.max(0, Date.now() - oldestCreatedAt) : 0;
+
+  return {
+    graceMin,
+    horizonMin: requiredHorizons.length === 1 ? requiredHorizons[0] : null,
+    requiredHorizons,
+    pendingCount: pendingSignals,
+    pendingSignals,
+    pendingOutcomeRows,
+    oldestPendingMs,
+  };
 }
 
 export function startOutcomeUpdater() {

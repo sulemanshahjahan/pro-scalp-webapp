@@ -449,6 +449,27 @@ export default function StatsPage() {
     return 0;
   })();
   const scanPct = Math.round(scanProgress * 100);
+  const outcomesCoordinator = health?.outcomes?.coordinator ?? null;
+  const outcomesLockRole = String(outcomesCoordinator?.role || '--').toUpperCase();
+  const outcomesLeaderUptimeMs = Number(outcomesCoordinator?.leaderUptimeMs) || 0;
+  const pendingOutcomesCount = Number(health?.outcomes?.pendingOutcomesCount) || 0;
+  const pendingOutcomeRows = Number(health?.outcomes?.pendingOutcomeRows) || 0;
+  const resolverLagMs = Number(health?.outcomes?.resolverLagMs) || 0;
+  const backlogGraceMin = Number(health?.outcomes?.backlogGraceMin) || 10;
+  const backlogHorizonMin = Number(health?.outcomes?.backlogHorizonMin) || 15;
+  const backlogHorizons = Array.isArray(health?.outcomes?.backlogHorizons)
+    ? (health.outcomes.backlogHorizons as any[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
+    : [];
+  const backlogHorizonLabel = backlogHorizons.length
+    ? `${backlogHorizons.join('/')}m`
+    : `${backlogHorizonMin}m`;
+  const outcomesCoordLabel = (() => {
+    if (!outcomesCoordinator) return '--';
+    const strategy = outcomesCoordinator.strategy === 'pg_advisory' ? 'pg-lock' : 'in-process';
+    const status = outcomesCoordinator.acquired ? 'acquired' : 'not-acquired';
+    const reason = outcomesCoordinator.reason ? ` (${outcomesCoordinator.reason})` : '';
+    return `${strategy} ${status}${reason}`;
+  })();
 
   const matrixMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -776,6 +797,12 @@ export default function StatsPage() {
             <div>429s: {scanLast?.errors429 ?? 0} - Other errors: {scanLast?.errorsOther ?? 0}</div>
             <div>Outcomes backlog: {health?.outcomes?.backlog ?? 0}</div>
             <div>Outcomes last run: {health?.outcomes?.lastRun?.finishedAt ? dt(health.outcomes.lastRun.finishedAt) : '--'}</div>
+            <div>Outcomes lock: {outcomesCoordLabel}</div>
+            <div>Coordinator role: {outcomesLockRole}</div>
+            <div>Leader uptime: {outcomesLeaderUptimeMs > 0 ? fmtMs(outcomesLeaderUptimeMs) : '--'}</div>
+            <div>Pending outcomes (&gt;{backlogGraceMin}m, {backlogHorizonLabel}): {pendingOutcomesCount}</div>
+            <div>Pending outcome rows: {pendingOutcomeRows}</div>
+            <div>Resolver lag: {resolverLagMs > 0 ? fmtMs(resolverLagMs) : '--'}</div>
           </div>
         </div>
 

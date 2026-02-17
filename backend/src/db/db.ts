@@ -3,7 +3,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import pg from 'pg';
 import { DB_DIR, DB_PATH } from '../dbPath.js';
-import { POSTGRES_SCHEMA } from './postgresSchema.js';
+import { POSTGRES_CONCURRENT_INDEXES, POSTGRES_SCHEMA } from './postgresSchema.js';
 
 const { Pool } = pg;
 
@@ -37,6 +37,22 @@ const driver: DbDriver =
       : process.env.DATABASE_URL
         ? 'postgres'
         : 'sqlite';
+
+const REQUIRED_PG_TABLES = [
+  'meta',
+  'signals',
+  'signal_events',
+  'signal_outcomes',
+  'outcome_skips',
+] as const;
+
+const REQUIRED_PG_OUTCOME_CHECKS = [
+  'so_horizon_min_positive',
+  'so_resolved_requires_non_pending',
+  'so_complete_requires_resolved_at',
+  'so_complete_requires_resolve_version',
+  'so_complete_requires_complete_state',
+] as const;
 
 export function getDb(): DbConn {
   if (db) return db;
@@ -101,6 +117,28 @@ function createPostgresDb(): DbConn {
     throw new Error('DATABASE_URL is required for postgres DB_DRIVER');
   }
 
+  const autoSchema = readBoolEnv('PG_AUTO_SCHEMA', process.env.NODE_ENV !== 'production');
+  const autoSchemaConcurrentIndexes = readBoolEnv('PG_AUTO_SCHEMA_CONCURRENT_INDEXES', true);
+  const autoSchemaConcurrentIndexLock = readBoolEnv('PG_AUTO_SCHEMA_CONCURRENT_INDEX_LOCK', true);
+  const autoSchemaConcurrentIndexLockKey = readIntEnv(
+    'PG_AUTO_SCHEMA_CONCURRENT_INDEX_LOCK_KEY',
+    deriveAutoSchemaConcurrentIndexLockKey(url),
+    1,
+    2147483647
+  );
+  const autoSchemaConcurrentIndexLockRetries = readIntEnv(
+    'PG_AUTO_SCHEMA_CONCURRENT_INDEX_LOCK_RETRIES',
+    2,
+    0,
+    20
+  );
+  const autoSchemaConcurrentIndexLockRetryMs = readIntEnv(
+    'PG_AUTO_SCHEMA_CONCURRENT_INDEX_LOCK_RETRY_MS',
+    250,
+    50,
+    10_000
+  );
+
   const sslEnv = String(process.env.PG_SSL || '').toLowerCase();
   const ssl =
     sslEnv === '1' ||
@@ -110,15 +148,163 @@ function createPostgresDb(): DbConn {
       ? { rejectUnauthorized: false }
       : undefined;
 
-  const pool = new Pool({ connectionString: url, ssl });
+  const pool = new Pool({
+    connectionString: url,
+    ssl,
+    max: readIntEnv('PG_POOL_MAX', 10, 1, 100),
+    idleTimeoutMillis: readIntEnv('PG_IDLE_TIMEOUT_MS', 30_000, 1_000, 300_000),
+    connectionTimeoutMillis: readIntEnv('PG_CONNECT_TIMEOUT_MS', 5_000, 500, 120_000),
+  });
 
   const pgExec = async (sql: string, params?: DbParams) => {
     const { text, values } = compileSql(sql, params);
     return pool.query(text, values);
   };
 
+  const applyConcurrentIndexes = async (client: any) => {
+    for (let i = 0; i < POSTGRES_CONCURRENT_INDEXES.length; i++) {
+      const sql = POSTGRES_CONCURRENT_INDEXES[i];
+      const label = `${i + 1}/${POSTGRES_CONCURRENT_INDEXES.length}`;
+      const startedAt = Date.now();
+      console.info(`[db] auto-schema concurrent index ${label} start: ${sqlPreview(sql)}`);
+      await client.query(sql);
+      console.info(`[db] auto-schema concurrent index ${label} done in ${Date.now() - startedAt}ms`);
+    }
+  };
+
+  const runConcurrentIndexesWithAdvisoryLock = async () => {
+    if (!autoSchemaConcurrentIndexes) return;
+    const client = await pool.connect();
+    let locked = false;
+    try {
+      if (!autoSchemaConcurrentIndexLock) {
+        await applyConcurrentIndexes(client);
+        return;
+      }
+
+      for (let attempt = 0; attempt <= autoSchemaConcurrentIndexLockRetries; attempt++) {
+        const row = await client.query(
+          'SELECT pg_try_advisory_lock($1) AS locked',
+          [autoSchemaConcurrentIndexLockKey]
+        );
+        locked = Boolean(row.rows?.[0]?.locked);
+        if (locked) break;
+        if (attempt < autoSchemaConcurrentIndexLockRetries) {
+          await sleep(autoSchemaConcurrentIndexLockRetryMs);
+        }
+      }
+
+      if (!locked) {
+        console.info(
+          `[db] auto-schema concurrent indexes skipped; lock held by another replica (key=${autoSchemaConcurrentIndexLockKey})`
+        );
+        return;
+      }
+
+      await applyConcurrentIndexes(client);
+    } finally {
+      if (locked) {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [autoSchemaConcurrentIndexLockKey]);
+        } catch (e) {
+          console.warn('[db] auto-schema advisory unlock failed', String(e));
+        }
+      }
+      client.release();
+    }
+  };
+
   const ensureSchemaOnce = async () => {
+    if (!autoSchema) return;
     await pgExec(POSTGRES_SCHEMA);
+    await runConcurrentIndexesWithAdvisoryLock();
+  };
+
+  const verifySchemaOnce = async () => {
+    const requiredTables = Array.from(REQUIRED_PG_TABLES);
+    const tableRows = await pool.query(
+      `
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND table_name = ANY($1::text[])
+      `,
+      [requiredTables]
+    );
+    const present = new Set(tableRows.rows.map((r: any) => String(r.table_name)));
+    const missing = requiredTables.filter((name) => !present.has(name));
+    if (missing.length) {
+      throw new Error(
+        `[db] missing postgres tables (${missing.join(', ')}). Run: npm --prefix backend run db:migrate`
+      );
+    }
+
+    const hasUniqueOnColumns = async (table: string, columnsCsvNoSpaces: string) => {
+      const constraint = await pool.query(
+        `
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname = current_schema()
+            AND t.relname = $1
+            AND c.contype = 'u'
+            AND regexp_replace(pg_get_constraintdef(c.oid), '\\s', '', 'g') ILIKE '%(' || $2 || ')%'
+          LIMIT 1
+        `,
+        [table, columnsCsvNoSpaces]
+      );
+      if (constraint.rowCount) return true;
+
+      const index = await pool.query(
+        `
+          SELECT 1
+          FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = $1
+            AND regexp_replace(indexdef, '\\s', '', 'g') ILIKE 'createuniqueindex%'
+            AND regexp_replace(indexdef, '\\s', '', 'g') ILIKE '%(' || $2 || ')%'
+          LIMIT 1
+        `,
+        [table, columnsCsvNoSpaces]
+      );
+      return Boolean(index.rowCount);
+    };
+
+    const hasSignalConflictTarget = await hasUniqueOnColumns('signals', 'symbol,category,time,config_hash');
+    if (!hasSignalConflictTarget) {
+      throw new Error(
+        '[db] signals unique key (symbol,category,time,config_hash) is missing. Run: npm --prefix backend run db:migrate'
+      );
+    }
+
+    const hasOutcomeConflictTarget = await hasUniqueOnColumns('signal_outcomes', 'signal_id,horizon_min');
+    if (!hasOutcomeConflictTarget) {
+      throw new Error(
+        '[db] signal_outcomes unique key (signal_id,horizon_min) is missing. Run: npm --prefix backend run db:migrate'
+      );
+    }
+
+    const checkRows = await pool.query(
+      `
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = current_schema()
+          AND t.relname = 'signal_outcomes'
+          AND c.contype = 'c'
+          AND c.conname = ANY($1::text[])
+      `,
+      [Array.from(REQUIRED_PG_OUTCOME_CHECKS)]
+    );
+    const presentChecks = new Set(checkRows.rows.map((r: any) => String(r.conname)));
+    const missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
+    if (missingChecks.length) {
+      throw new Error(
+        `[db] signal_outcomes invariant checks missing (${missingChecks.join(', ')}). Run: npm --prefix backend run db:migrate`
+      );
+    }
   };
 
   let schemaReady = false;
@@ -126,6 +312,7 @@ function createPostgresDb(): DbConn {
   const ensureSchema = async () => {
     if (schemaReady) return;
     await ensureSchemaOnce();
+    await verifySchemaOnce();
     schemaReady = true;
   };
 
@@ -252,4 +439,48 @@ function normalizeSqlForPg(sql: string) {
   }
   text = text.replace(/json_object\s*\(/gi, 'jsonb_build_object(');
   return text;
+}
+
+function readBoolEnv(name: string, fallback: boolean) {
+  const raw = String(process.env[name] ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
+function readIntEnv(name: string, fallback: number, min?: number, max?: number) {
+  const raw = Number(process.env[name]);
+  let out = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
+  if (typeof min === 'number') out = Math.max(min, out);
+  if (typeof max === 'number') out = Math.min(max, out);
+  return out;
+}
+
+function hashLockSeed(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash * 31) + seed.charCodeAt(i)) | 0;
+  }
+  const normalized = Math.abs(hash);
+  return normalized > 0 ? normalized : 240615;
+}
+
+function deriveAutoSchemaConcurrentIndexLockKey(url: string) {
+  let dbName = 'local';
+  try {
+    const u = new URL(url);
+    dbName = String(u.pathname || '').replace(/^\//, '') || dbName;
+  } catch {}
+  const envName = String(process.env.NODE_ENV || process.env.RAILWAY_ENVIRONMENT || 'development');
+  const seed = `pg_auto_schema_indexes|${envName}|${dbName}`;
+  return hashLockSeed(seed);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sqlPreview(sql: string) {
+  return sql.replace(/\s+/g, ' ').trim();
 }

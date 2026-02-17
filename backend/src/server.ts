@@ -20,7 +20,9 @@ import {
   deleteOutcomesByFilter,
   getInvalidReasons,
   getOutcomesBacklogCount,
+  getOutcomesBacklogMetrics,
   getOutcomesHealth,
+  getOutcomesCoordinatorHealth,
   getSignalById,
   getStats,
   getStatsBuckets,
@@ -985,6 +987,18 @@ void (async () => {
   }
 })();
 
+// Fail fast on Postgres when schema is missing/mismatched.
+void (async () => {
+  if (db.driver !== 'postgres') return;
+  try {
+    await db.prepare('SELECT 1 as ok').get();
+  } catch (e) {
+    console.error('[db] postgres startup verification failed. Run: npm --prefix backend run db:migrate');
+    console.error('[db] fatal:', e);
+    process.exit(1);
+  }
+})();
+
 // VAPID
 let publicKey = '';
 void ensureVapid()
@@ -1024,7 +1038,9 @@ app.get('/api/system/health', async (req, res) => {
     };
     const { market, at } = getLastBtcMarket();
     const outcomes = getOutcomesHealth();
+    const outcomesCoordinator = getOutcomesCoordinatorHealth();
     const backlog = await getOutcomesBacklogCount({ days: safeDays });
+    const backlogMetrics = await getOutcomesBacklogMetrics();
     res.json({
       ok: true,
       days: safeDays,
@@ -1037,7 +1053,14 @@ app.get('/api/system/health', async (req, res) => {
       btc: { market, at },
       outcomes: {
         lastRun: outcomes,
+        coordinator: outcomesCoordinator,
         backlog,
+        pendingOutcomesCount: backlogMetrics.pendingCount,
+        pendingOutcomeRows: backlogMetrics.pendingOutcomeRows,
+        resolverLagMs: backlogMetrics.oldestPendingMs,
+        backlogGraceMin: backlogMetrics.graceMin,
+        backlogHorizonMin: backlogMetrics.horizonMin,
+        backlogHorizons: backlogMetrics.requiredHorizons,
       },
     });
   } catch (e) {

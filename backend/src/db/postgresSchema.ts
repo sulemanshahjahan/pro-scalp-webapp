@@ -295,4 +295,84 @@ CREATE INDEX IF NOT EXISTS idx_signals_instance_id ON signals(instance_id);
 UPDATE scan_runs SET config_hash = 'legacy' WHERE config_hash IS NULL OR BTRIM(config_hash) = '';
 UPDATE scan_runs SET instance_id = 'legacy' WHERE instance_id IS NULL OR BTRIM(instance_id) = '';
 UPDATE signals SET instance_id = 'legacy' WHERE instance_id IS NULL OR BTRIM(instance_id) = '';
+
+-- Resolver invariants (rollout-safe: NOT VALID, validate in a controlled migration window)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_horizon_min_positive'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_horizon_min_positive
+      CHECK (horizon_min > 0)
+      NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_resolved_requires_non_pending'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_resolved_requires_non_pending
+      CHECK (resolved_at = 0 OR outcome_state <> 'PENDING')
+      NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_complete_requires_resolved_at'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_complete_requires_resolved_at
+      CHECK (window_status <> 'COMPLETE' OR resolved_at > 0)
+      NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_complete_requires_resolve_version'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_complete_requires_resolve_version
+      CHECK (window_status <> 'COMPLETE' OR resolve_version IS NOT NULL)
+      NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_complete_requires_complete_state'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_complete_requires_complete_state
+      CHECK (window_status <> 'COMPLETE' OR outcome_state LIKE 'COMPLETE_%')
+      NOT VALID;
+  END IF;
+END $$;
 `;
+
+export const POSTGRES_CONCURRENT_INDEXES = [
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_signals_created_at ON signals(created_at);`,
+] as const;
