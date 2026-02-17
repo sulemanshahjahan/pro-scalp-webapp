@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getReadyGateDebug } from '../services/api';
 import MarketConditionsDashboard from '../components/MarketConditionsDashboard';
+import { apiUrl as API } from '../config/apiBase';
 
 const HORIZONS = [15, 30, 60, 120, 240] as const;
 const CATEGORIES = [
@@ -22,12 +23,6 @@ const BUCKET_LABELS: Record<'deltaVwapPct' | 'rsi9' | 'atrPct' | 'volSpike' | 'r
   volSpike: 'Volume Spike',
   rr: 'Risk/Reward',
 };
-const rawApiBase = (import.meta.env.VITE_API_BASE ?? '').trim();
-const fallbackApiBase = import.meta.env.PROD
-  ? 'https://pro-scalp-backend-production.up.railway.app'
-  : '';
-const apiBase = (rawApiBase || fallbackApiBase).replace(/\/+$/, '');
-const API = (path: string) => apiBase + path;
 
 function num(v: unknown): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;

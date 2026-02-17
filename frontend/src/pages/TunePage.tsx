@@ -1,11 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-
-const rawApiBase = (import.meta.env.VITE_API_BASE ?? '').trim();
-const fallbackApiBase = import.meta.env.PROD
-  ? 'https://pro-scalp-backend-production.up.railway.app'
-  : '';
-const apiBase = (rawApiBase || fallbackApiBase).replace(/\/+$/, '');
-const API = (path: string) => apiBase + path;
+import { apiUrl as API } from '../config/apiBase';
 
 type Preset = 'BALANCED' | 'CONSERVATIVE' | 'AGGRESSIVE';
 

@@ -2,11 +2,7 @@
 // Market Conditions Dashboard - side + timeframe health metrics
 
 import { useCallback, useEffect, useState } from 'react';
-
-const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/+$/, '') ||
-  (import.meta.env.PROD ? 'https://pro-scalp-backend-production.up.railway.app' : '');
-
-const API = (path: string) => API_BASE + path;
+import { apiUrl as API } from '../config/apiBase';
 
 type TimeFrame = '1h' | '4h';
 type MarketSide = 'long' | 'short';
