@@ -359,7 +359,9 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const upperWickPct = num(metrics.upperWickPct);
 
   const sessionOk = Boolean(computed.sessionOk);
-  const reclaimOrTap = Boolean(computed.reclaimOrTap);
+  const reclaimOrTapRaw = computed.reclaimOrTap == null
+    ? Boolean(readyGate?.reclaimOrTap)
+    : Boolean(computed.reclaimOrTap);
   const trendOk = Boolean(computed.trendOk);
   const readyTrendOk = computed.readyTrendOk == null ? trendOk : Boolean(computed.readyTrendOk);
   const confirm15Strict = Boolean(computed.confirm15Strict);
@@ -445,7 +447,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const readyPriceAboveVwapRelaxedTrue =
     readyPriceAboveVwapRelaxedEligible &&
     vwapDistPct >= -cfg.READY_VWAP_EPS_PCT;
-  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOrTap;
+  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOrTapRaw;
   const bestPriceAboveVwap =
     vwapDistPct > 0 ||
     (nearVwapBuy && vwapDistPct >= -cfg.BEST_VWAP_EPS_PCT);
@@ -462,7 +464,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     cfg.thresholds.atrGuardPct === 2.5;
   const readyVolMinBase = isBalancedPreset ? 1.3 : Math.max(1.2, cfg.thresholds.volSpikeX);
   const readyVolMin =
-    isBalancedPreset && nearVwapReady && reclaimOrTap
+    isBalancedPreset && nearVwapReady && reclaimOrTapRaw
       ? 1.2
       : readyVolMinBase;
   const readyVolMinOk = volSpike >= readyVolMin;
@@ -473,7 +475,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const readyNoSweepVwapCap = cfg.READY_NO_SWEEP_VWAP_CAP;
   const nearVwapReadyNoSweep = Math.abs(vwapDistPct) <= readyNoSweepVwapCap;
 
-  const readyReclaimOk = cfg.READY_RECLAIM_REQUIRED ? reclaimOrTap : true;
+  const readyReclaimOk = cfg.READY_RECLAIM_REQUIRED ? reclaimOrTapRaw : true;
   const readyConfirmOk = cfg.READY_CONFIRM15_REQUIRED ? confirm15Ok : true;
   const readyTrendOkReq = cfg.READY_TREND_REQUIRED ? readyTrendOk : true;
   const readyVolOkReq = cfg.READY_VOL_SPIKE_REQUIRED ? readyVolMinOk : true;
@@ -503,7 +505,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     (btcBear && confirm15Strict && trendOk && strongBodyReady && readyVolOk)
   );
   const readyBtcOkReq = cfg.READY_BTC_REQUIRED ? readyBtcOk : true;
-  const readySweepFallbackOk = reclaimOrTap && confirm15Strict && readyTrendOk && nearVwapReadyNoSweep;
+  const readySweepFallbackOk = reclaimOrTapRaw && confirm15Strict && readyTrendOk && nearVwapReadyNoSweep;
   const readySweepOk = sweepOk || readySweepFallbackOk;
   const readySweepOkReq = cfg.READY_SWEEP_REQUIRED ? readySweepOk : true;
   const readyOk = readyCore && readySweepOkReq && readyBtcOkReq;
@@ -518,7 +520,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     trendOk &&
     sessionOk &&
     confirm15Ok &&
-    reclaimOrTap &&
+    reclaimOrTapRaw &&
     bestVolOk &&
     hasMarket;
   const bestCore =
@@ -618,7 +620,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
       rsiWatchOk &&
       emaWatchOk &&
       atrOkReady &&
-      reclaimOrTap &&
+      reclaimOrTapRaw &&
       priceAboveVwapEarly,
     readyOk,
     bestOk,
@@ -638,15 +640,19 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
       rsiWatchOk,
       emaWatchOk,
       atrOkReady,
-      reclaimOrTap,
+      reclaimOrTap: reclaimOrTapRaw,
       priceAboveVwap: priceAboveVwapEarly,
     },
     readyFlags: {
       sessionOK: sessionOk,
       priceAboveVwap: readyPriceAboveVwap,
+      priceAboveVwapStrict,
+      priceAboveVwapRelaxedEligible: readyPriceAboveVwapRelaxedEligible,
+      priceAboveVwapRelaxedTrue: readyPriceAboveVwapRelaxedTrue,
       priceAboveEma,
       nearVwapReady,
       reclaimOrTap: readyReclaimOk,
+      reclaimOrTapRaw,
       readyVolOk,
       atrOkReady,
       confirm15mOk: readyConfirmOk,
@@ -667,7 +673,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
       sessionOK: sessionOk,
       confirm15mOk: confirm15Ok,
       sweepOk,
-      reclaimOrTap,
+      reclaimOrTap: reclaimOrTapRaw,
       bestVolOk,
       rrOk,
       hasMarket,
