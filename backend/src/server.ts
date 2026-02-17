@@ -228,6 +228,11 @@ function toFiniteNumber(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function toBooleanOrNull(v: any): boolean | null {
+  if (v == null) return null;
+  return Boolean(v);
+}
+
 function bodyPctOpenToClose(bodyPctOpenAbs: number, bullish: boolean): number | null {
   if (!Number.isFinite(bodyPctOpenAbs) || bodyPctOpenAbs < 0) return null;
   const p = bodyPctOpenAbs / 100;
@@ -247,61 +252,142 @@ function buildStrongBodyBreakdown(metrics: any, computed: any, cfg: any, final: 
     : (bullish == null
       ? bodyPctOpenAbs
       : (bodyPctOpenToClose(bodyPctOpenAbs, bullish) ?? bodyPctOpenAbs));
-  const readyBodyAtrMult = toFiniteNumber(cfg?.READY_BODY_ATR_MULT) ?? 0;
-  const readyBodyMinPct = toFiniteNumber(cfg?.READY_BODY_MIN_PCT) ?? 0;
+  const readyBodyAtrMult = toFiniteNumber(cfg?.READY_BODY_ATR_MULT);
+  const readyBodyMinPct = toFiniteNumber(cfg?.READY_BODY_MIN_PCT);
+  const reqBodyPctAtr = atrPct != null && readyBodyAtrMult != null ? atrPct * readyBodyAtrMult : null;
+  const reqBodyPctFloor = readyBodyMinPct != null ? readyBodyMinPct * 100 : null;
   const requiredBodyPct = bodyPctCloseAbs == null
     ? null
-    : Math.max((atrPct ?? 0) * readyBodyAtrMult, readyBodyMinPct * 100);
+    : Math.max(reqBodyPctAtr ?? Number.NEGATIVE_INFINITY, reqBodyPctFloor ?? Number.NEGATIVE_INFINITY);
   const bodySize = close != null && bodyPctCloseAbs != null ? (close * bodyPctCloseAbs) / 100 : null;
   const requiredBody = close != null && requiredBodyPct != null ? (close * requiredBodyPct) / 100 : null;
+  const closePos = toFiniteNumber(metrics?.closePos);
+  const upperWickPct = toFiniteNumber(metrics?.upperWickPct);
+  const closePosMin = toFiniteNumber(cfg?.READY_CLOSE_POS_MIN);
+  const upperWickMax = toFiniteNumber(cfg?.READY_UPPER_WICK_MAX);
+  const pass_bullish = bullish;
+  const pass_bodySize = bodySize != null && requiredBody != null ? bodySize >= requiredBody : null;
+  const pass_closePos = closePos != null && closePosMin != null ? closePos >= closePosMin : null;
+  const pass_upperWick = upperWickPct != null && upperWickMax != null ? upperWickPct <= upperWickMax : null;
+  const pass_bodyPctOpen = bodyPctOpenAbs != null && requiredBodyPct != null ? bodyPctOpenAbs >= requiredBodyPct : null;
+  const pass_bodyPctClose = bodyPctCloseAbs != null && requiredBodyPct != null ? bodyPctCloseAbs >= requiredBodyPct : null;
+  const final_recomputed = [pass_bullish, pass_bodySize, pass_closePos, pass_upperWick].every((x) => x === true)
+    ? true
+    : ([pass_bullish, pass_bodySize, pass_closePos, pass_upperWick].some((x) => x === false) ? false : null);
   return {
     bullish,
     bodySize,
     requiredBody,
-    closePos: toFiniteNumber(metrics?.closePos),
-    upperWickPct: toFiniteNumber(metrics?.upperWickPct),
+    closePos,
+    upperWickPct,
     atrPct,
     bodyPctOpenAbs,
     bodyPctCloseAbs,
     requiredBodyPct,
-    final,
+    pass_bullish,
+    pass_bodySize,
+    pass_closePos,
+    pass_upperWick,
+    pass_bodyPctOpen,
+    pass_bodyPctClose,
+    final_from_flags: final,
+    final_recomputed,
+    final_consistent: final == null || final_recomputed == null ? null : final === final_recomputed,
+    bodyMinPct_used: readyBodyMinPct,
+    bodyAtrMult_used: readyBodyAtrMult,
+    minBodyPct_global_used: toFiniteNumber(cfg?.MIN_BODY_PCT),
+    readyBodyPct_used: toFiniteNumber(cfg?.READY_BODY_PCT),
+    closePosMin_used: closePosMin,
+    upperWickMax_used: upperWickMax,
+    requiredBodyPct_atr: reqBodyPctAtr,
+    requiredBodyPct_floor: reqBodyPctFloor,
   };
 }
 
 function buildLiveReadyVwapBreakdown(src: any, metrics: any, cfg: any, final: boolean | null) {
   const price = toFiniteNumber(metrics?.price);
   const vwap = toFiniteNumber(metrics?.vwap);
-  const strictFromMetrics = price != null && vwap != null ? price > vwap : null;
-  const strict = src?.priceAboveVwapStrict == null ? strictFromMetrics : Boolean(src.priceAboveVwapStrict);
-  const relaxedEligible = src?.priceAboveVwapRelaxedEligible == null ? null : Boolean(src.priceAboveVwapRelaxedEligible);
-  const relaxedTrue = src?.priceAboveVwapRelaxedTrue == null ? null : Boolean(src.priceAboveVwapRelaxedTrue);
+  const delta_frac = price != null && vwap != null && vwap !== 0 ? (price - vwap) / vwap : null;
+  const delta_pct = delta_frac == null ? null : delta_frac * 100;
+  const eps_pct_used = toFiniteNumber(cfg?.READY_VWAP_EPS_PCT);
+  const eps_frac_used = eps_pct_used == null ? null : eps_pct_used / 100;
+  const threshold_price = vwap != null && eps_frac_used != null ? vwap * (1 - eps_frac_used) : null;
+  const strict_calc = price != null && vwap != null ? price > vwap : null;
+  const strict = src?.priceAboveVwapStrict == null ? strict_calc : Boolean(src.priceAboveVwapStrict);
+  const nearVwapReady_used = src?.nearVwap == null ? null : Boolean(src.nearVwap);
+  const relaxedEligible_calc = strict_calc == null || nearVwapReady_used == null ? null : (!strict_calc && nearVwapReady_used);
+  const relaxedEligible = src?.priceAboveVwapRelaxedEligible == null ? relaxedEligible_calc : Boolean(src.priceAboveVwapRelaxedEligible);
+  const relaxedTrue_calc = relaxedEligible_calc == null || threshold_price == null || price == null
+    ? null
+    : (relaxedEligible_calc && price >= threshold_price);
+  const relaxedTrue = src?.priceAboveVwapRelaxedTrue == null ? relaxedTrue_calc : Boolean(src.priceAboveVwapRelaxedTrue);
   const reclaimOrTapRaw = src?.reclaimOrTap == null ? null : Boolean(src.reclaimOrTap);
-  const composed = (strict === true) || (relaxedTrue === true) || (reclaimOrTapRaw === true);
+  const pass_strict = strict;
+  const pass_relaxed = relaxedTrue;
+  const pass_reclaim = reclaimOrTapRaw;
+  const pass_final_composed = (pass_strict === true) || (pass_relaxed === true) || (pass_reclaim === true);
+  const delta_vs_eps_pass_pct = delta_pct != null && eps_pct_used != null ? delta_pct >= -eps_pct_used : null;
+  const delta_vs_eps_pass_frac = delta_frac != null && eps_frac_used != null ? delta_frac >= -eps_frac_used : null;
   return {
     strict,
     relaxedEligible,
     relaxedTrue,
     reclaimOrTapRaw,
-    final,
-    finalRawComposed: composed,
+    pass_strict,
+    pass_relaxed,
+    pass_reclaim,
+    pass_final_composed,
+    final_from_flags: final,
+    final_consistent: final == null ? null : final === pass_final_composed,
+    delta_frac,
+    delta_pct,
+    eps_pct_used,
+    eps_frac_used,
+    delta_vs_eps_pass_pct,
+    delta_vs_eps_pass_frac,
+    threshold_price,
     price_used: price,
     vwap_i_used: vwap,
-    nearVwapReady_used: src?.nearVwap == null ? null : Boolean(src.nearVwap),
-    eps_pct_used: toFiniteNumber(cfg?.READY_VWAP_EPS_PCT),
+    nearVwapReady_used,
   };
 }
 
 function buildSimReadyVwapBreakdown(simFlags: any, metrics: any, cfg: any) {
+  const price = toFiniteNumber(metrics?.price);
+  const vwap = toFiniteNumber(metrics?.vwap);
+  const delta_frac = price != null && vwap != null && vwap !== 0 ? (price - vwap) / vwap : null;
+  const delta_pct = delta_frac == null ? null : delta_frac * 100;
+  const eps_pct_used = toFiniteNumber(cfg?.READY_VWAP_EPS_PCT);
+  const eps_frac_used = eps_pct_used == null ? null : eps_pct_used / 100;
+  const threshold_price = vwap != null && eps_frac_used != null ? vwap * (1 - eps_frac_used) : null;
+  const strict = simFlags?.priceAboveVwapStrict == null ? null : Boolean(simFlags.priceAboveVwapStrict);
+  const relaxedEligible = simFlags?.priceAboveVwapRelaxedEligible == null ? null : Boolean(simFlags.priceAboveVwapRelaxedEligible);
+  const relaxedTrue = simFlags?.priceAboveVwapRelaxedTrue == null ? null : Boolean(simFlags.priceAboveVwapRelaxedTrue);
+  const reclaimOrTapRaw = simFlags?.reclaimOrTapRaw == null ? null : Boolean(simFlags.reclaimOrTapRaw);
+  const pass_final_composed = (strict === true) || (relaxedTrue === true) || (reclaimOrTapRaw === true);
+  const delta_vs_eps_pass_pct = delta_pct != null && eps_pct_used != null ? delta_pct >= -eps_pct_used : null;
+  const delta_vs_eps_pass_frac = delta_frac != null && eps_frac_used != null ? delta_frac >= -eps_frac_used : null;
   return {
-    strict: simFlags?.priceAboveVwapStrict == null ? null : Boolean(simFlags.priceAboveVwapStrict),
-    relaxedEligible: simFlags?.priceAboveVwapRelaxedEligible == null ? null : Boolean(simFlags.priceAboveVwapRelaxedEligible),
-    relaxedTrue: simFlags?.priceAboveVwapRelaxedTrue == null ? null : Boolean(simFlags.priceAboveVwapRelaxedTrue),
-    reclaimOrTapRaw: simFlags?.reclaimOrTapRaw == null ? null : Boolean(simFlags.reclaimOrTapRaw),
-    final: simFlags?.priceAboveVwap == null ? null : Boolean(simFlags.priceAboveVwap),
-    price_used: toFiniteNumber(metrics?.price),
-    vwap_i_used: toFiniteNumber(metrics?.vwap),
+    strict,
+    relaxedEligible,
+    relaxedTrue,
+    reclaimOrTapRaw,
+    pass_strict: strict,
+    pass_relaxed: relaxedTrue,
+    pass_reclaim: reclaimOrTapRaw,
+    pass_final_composed,
+    final_from_flags: simFlags?.priceAboveVwap == null ? null : Boolean(simFlags.priceAboveVwap),
+    final_consistent: simFlags?.priceAboveVwap == null ? null : Boolean(simFlags.priceAboveVwap) === pass_final_composed,
+    delta_frac,
+    delta_pct,
+    eps_pct_used,
+    eps_frac_used,
+    delta_vs_eps_pass_pct,
+    delta_vs_eps_pass_frac,
+    threshold_price,
+    price_used: price,
+    vwap_i_used: vwap,
     nearVwapReady_used: simFlags?.nearVwapReady == null ? null : Boolean(simFlags.nearVwapReady),
-    eps_pct_used: toFiniteNumber(cfg?.READY_VWAP_EPS_PCT),
   };
 }
 
@@ -556,6 +642,7 @@ function buildParityMismatches(params: {
 }) {
   const { rows, cfg, signalByKey, mismatchLimit } = params;
   const readyOrder = ['sessionOK', 'priceAboveVwap', 'priceAboveEma', 'nearVwapReady', 'reclaimOrTap', 'readyVolOk', 'atrOkReady', 'confirm15mOk', 'strongBody', 'rrOk', 'riskOk', 'rsiReadyOk', 'readyTrendOk', 'sweepOk', 'btcOk', 'core'];
+  const readyOrderRaw = ['sessionOK', 'priceAboveVwap', 'priceAboveEma', 'nearVwapReady', 'reclaimOrTapRaw', 'readyVolOk', 'atrOkReady', 'confirm15mOk', 'strongBody', 'rrOk', 'riskOk', 'rsiReadyOk', 'readyTrendOk', 'sweepOk', 'btcOk', 'core'];
   const shortOrder = ['sessionOK', 'priceBelowVwap', 'priceBelowEma', 'nearVwapShort', 'rsiShortOk', 'strongBody', 'readyVolOk', 'atrOkReady', 'confirm15mOk', 'trendOkShort', 'rrOk', 'riskOk', 'sweepOk', 'btcOk', 'core'];
   const ready: any[] = [];
   const readyShort: any[] = [];
@@ -582,7 +669,18 @@ function buildParityMismatches(params: {
       };
       const liveFlagsRequired = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: true });
       const liveFlagsRaw = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: false });
+      const liveFlagsRawForFailure = liveFlagsRaw == null
+        ? null
+        : {
+          ...liveFlagsRaw,
+          reclaimOrTapRaw: Boolean(liveFlagsRaw.reclaimOrTap),
+        };
       const divergence = firstDiff(readyOrder, simFlags, liveFlagsRequired);
+      const firstFailedLiveRequired = firstFalse(readyOrder, liveFlagsRequired);
+      const firstFailedLiveRaw = firstFalse(readyOrderRaw, liveFlagsRawForFailure as Record<string, boolean> | null);
+      const firstFailedLiveRawValue = firstFailedLiveRaw == null || !liveFlagsRawForFailure
+        ? null
+        : toBooleanOrNull((liveFlagsRawForFailure as Record<string, boolean>)[firstFailedLiveRaw]);
       ready.push({
         runId: String(row.runId ?? ''),
         symbol: String(row.symbol ?? ''),
@@ -592,12 +690,15 @@ function buildParityMismatches(params: {
         why_not_emitted: divergence
           ? `first_divergence:${divergence}`
           : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
-        first_failed_live: firstFalse(readyOrder, liveFlagsRequired),
-        first_failed_live_requiredAdjusted: firstFalse(readyOrder, liveFlagsRequired),
-        first_failed_live_raw: firstFalse(readyOrder, liveFlagsRaw),
+        first_failed_live: firstFailedLiveRequired,
+        first_failed_live_requiredAdjusted: firstFailedLiveRequired,
+        first_failed_live_raw: firstFailedLiveRaw,
+        first_failed_live_raw_value: firstFailedLiveRawValue,
+        reclaimOrTap_raw_bool_used: liveFlagsRawForFailure?.reclaimOrTapRaw ?? null,
         first_failed_sim: firstFalse(readyOrder, simFlags),
         sim_flags: simFlags,
         live_flags: liveFlagsRequired,
+        live_flags_raw: liveFlagsRaw,
         sim_breakdown: {
           priceAboveVwap_breakdown: buildSimReadyVwapBreakdown(simFlags, row.metrics, cfg),
           strongBody_breakdown: buildStrongBodyBreakdown(row.metrics, row.computed, cfg, simFlags?.strongBody == null ? null : Boolean(simFlags.strongBody)),
@@ -619,6 +720,11 @@ function buildParityMismatches(params: {
       const liveShortFlagsRequired = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: true });
       const liveShortFlagsRaw = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: false });
       const divergence = firstDiff(shortOrder, simShortFlags, liveShortFlagsRequired);
+      const firstFailedShortLiveRequired = firstFalse(shortOrder, liveShortFlagsRequired);
+      const firstFailedShortLiveRaw = firstFalse(shortOrder, liveShortFlagsRaw);
+      const firstFailedShortLiveRawValue = firstFailedShortLiveRaw == null || !liveShortFlagsRaw
+        ? null
+        : toBooleanOrNull((liveShortFlagsRaw as Record<string, boolean>)[firstFailedShortLiveRaw]);
       readyShort.push({
         runId: String(row.runId ?? ''),
         symbol: String(row.symbol ?? ''),
@@ -628,12 +734,14 @@ function buildParityMismatches(params: {
         why_not_emitted: divergence
           ? `first_divergence:${divergence}`
           : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
-        first_failed_live: firstFalse(shortOrder, liveShortFlagsRequired),
-        first_failed_live_requiredAdjusted: firstFalse(shortOrder, liveShortFlagsRequired),
-        first_failed_live_raw: firstFalse(shortOrder, liveShortFlagsRaw),
+        first_failed_live: firstFailedShortLiveRequired,
+        first_failed_live_requiredAdjusted: firstFailedShortLiveRequired,
+        first_failed_live_raw: firstFailedShortLiveRaw,
+        first_failed_live_raw_value: firstFailedShortLiveRawValue,
         first_failed_sim: firstFalse(shortOrder, simShortFlags),
         sim_flags: simShortFlags,
         live_flags: liveShortFlagsRequired,
+        live_flags_raw: liveShortFlagsRaw,
         live_source_has_snapshot: Boolean(liveShortSrc),
       });
     }
