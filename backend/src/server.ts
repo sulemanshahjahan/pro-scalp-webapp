@@ -213,33 +213,44 @@ function alignFunnelToCounts(funnel: SimFunnel, counts: SignalCounts): SimFunnel
   };
 }
 
-function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null): Record<string, boolean> | null {
+function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
   const src = computed?.readyGateSnapshot ?? gateSnapshot?.ready;
   if (!src || typeof src !== 'object') return null;
+  const requireReclaim = cfg?.READY_RECLAIM_REQUIRED !== false;
+  const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
+  const requireConfirm15 = cfg?.READY_CONFIRM15_REQUIRED !== false;
+  const requireTrend = cfg?.READY_TREND_REQUIRED !== false;
+  const requireSweep = cfg?.READY_SWEEP_REQUIRED !== false;
+  const requireBtc = cfg?.READY_BTC_REQUIRED !== false;
   const out: Record<string, boolean> = {
     sessionOK: Boolean(src.sessionOk),
     priceAboveVwap: Boolean(src.priceAboveVwap),
     priceAboveEma: Boolean(src.priceAboveEma),
     nearVwapReady: Boolean(src.nearVwap),
-    reclaimOrTap: Boolean(src.reclaimOrTap),
-    readyVolOk: Boolean(src.volSpike),
+    reclaimOrTap: requireReclaim ? Boolean(src.reclaimOrTap) : true,
+    readyVolOk: requireVol ? Boolean(src.volSpike) : true,
     atrOkReady: Boolean(src.atr),
-    confirm15mOk: Boolean(src.confirm15),
+    confirm15mOk: requireConfirm15 ? Boolean(src.confirm15) : true,
     strongBody: Boolean(src.strongBody),
     rrOk: Boolean(src.rrOk),
     riskOk: Boolean(src.riskOk),
     rsiReadyOk: Boolean(src.rsiReadyOk),
-    readyTrendOk: Boolean(src.trend),
-    sweepOk: Boolean(src.sweep),
-    btcOk: Boolean(src.btc),
+    readyTrendOk: requireTrend ? Boolean(src.trend) : true,
+    sweepOk: requireSweep ? Boolean(src.sweep) : true,
+    btcOk: requireBtc ? Boolean(src.btc) : true,
     core: Boolean(src.core),
   };
   return out;
 }
 
-function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null): Record<string, boolean> | null {
+function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
   const src = computed?.shortGateSnapshot ?? gateSnapshot?.short;
   if (!src || typeof src !== 'object') return null;
+  const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
+  const requireConfirm15 = cfg?.SHORT_CONFIRM15_REQUIRED !== false;
+  const requireTrend = cfg?.SHORT_TREND_REQUIRED !== false;
+  const requireSweep = cfg?.SHORT_SWEEP_REQUIRED !== false;
+  const requireBtc = cfg?.SHORT_BTC_REQUIRED !== false;
   const out: Record<string, boolean> = {
     sessionOK: Boolean(src.sessionOk),
     priceBelowVwap: Boolean(src.priceBelowVwap),
@@ -247,14 +258,14 @@ function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null): Recor
     nearVwapShort: Boolean(src.nearVwap),
     rsiShortOk: Boolean(src.rsiShortOk),
     strongBody: Boolean(src.strongBody),
-    readyVolOk: Boolean(src.volSpike),
+    readyVolOk: requireVol ? Boolean(src.volSpike) : true,
     atrOkReady: Boolean(src.atr),
-    confirm15mOk: Boolean(src.confirm15),
-    trendOkShort: Boolean(src.trend),
+    confirm15mOk: requireConfirm15 ? Boolean(src.confirm15) : true,
+    trendOkShort: requireTrend ? Boolean(src.trend) : true,
     rrOk: Boolean(src.rrOk),
     riskOk: Boolean(src.riskOk),
-    sweepOk: Boolean(src.sweep),
-    btcOk: Boolean(src.btc),
+    sweepOk: requireSweep ? Boolean(src.sweep) : true,
+    btcOk: requireBtc ? Boolean(src.btc) : true,
     core: Boolean(src.core),
   };
   return out;
@@ -458,7 +469,7 @@ function buildParityMismatches(params: {
         btcOk: Boolean(simRes.readyBtcOk),
         core: Boolean(simRes.readyCore),
       };
-      const liveFlags = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null);
+      const liveFlags = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg);
       const divergence = firstDiff(readyOrder, simFlags, liveFlags);
       ready.push({
         runId: String(row.runId ?? ''),
@@ -483,7 +494,7 @@ function buildParityMismatches(params: {
         btcOk: Boolean(simRes.readyShortBtcOk),
         core: Boolean(simRes.readyShortCore),
       };
-      const liveShortFlags = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null);
+      const liveShortFlags = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg);
       const divergence = firstDiff(shortOrder, simShortFlags, liveShortFlags);
       readyShort.push({
         runId: String(row.runId ?? ''),
