@@ -213,15 +213,113 @@ function alignFunnelToCounts(funnel: SimFunnel, counts: SignalCounts): SimFunnel
   };
 }
 
-function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
+function getLiveReadySource(computed: any, gateSnapshot: any | null): Record<string, any> | null {
   const src = gateSnapshot?.ready ?? computed?.readyGateSnapshot;
+  return src && typeof src === 'object' ? src : null;
+}
+
+function getLiveShortSource(computed: any, gateSnapshot: any | null): Record<string, any> | null {
+  const src = gateSnapshot?.short ?? computed?.shortGateSnapshot;
+  return src && typeof src === 'object' ? src : null;
+}
+
+function toFiniteNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function bodyPctOpenToClose(bodyPctOpenAbs: number, bullish: boolean): number | null {
+  if (!Number.isFinite(bodyPctOpenAbs) || bodyPctOpenAbs < 0) return null;
+  const p = bodyPctOpenAbs / 100;
+  const denom = bullish ? (1 + p) : (1 - p);
+  if (!(denom > 0)) return null;
+  return (p / denom) * 100;
+}
+
+function buildStrongBodyBreakdown(metrics: any, computed: any, cfg: any, final: boolean | null) {
+  const close = toFiniteNumber(metrics?.price);
+  const atrPct = toFiniteNumber(metrics?.atrPct);
+  const bodyPctOpenAbsRaw = toFiniteNumber(metrics?.bodyPct);
+  const bodyPctOpenAbs = bodyPctOpenAbsRaw == null ? null : Math.abs(bodyPctOpenAbsRaw);
+  const bullish = computed?.bullish == null ? null : Boolean(computed.bullish);
+  const bodyPctCloseAbs = bodyPctOpenAbs == null
+    ? null
+    : (bullish == null
+      ? bodyPctOpenAbs
+      : (bodyPctOpenToClose(bodyPctOpenAbs, bullish) ?? bodyPctOpenAbs));
+  const readyBodyAtrMult = toFiniteNumber(cfg?.READY_BODY_ATR_MULT) ?? 0;
+  const readyBodyMinPct = toFiniteNumber(cfg?.READY_BODY_MIN_PCT) ?? 0;
+  const requiredBodyPct = bodyPctCloseAbs == null
+    ? null
+    : Math.max((atrPct ?? 0) * readyBodyAtrMult, readyBodyMinPct * 100);
+  const bodySize = close != null && bodyPctCloseAbs != null ? (close * bodyPctCloseAbs) / 100 : null;
+  const requiredBody = close != null && requiredBodyPct != null ? (close * requiredBodyPct) / 100 : null;
+  return {
+    bullish,
+    bodySize,
+    requiredBody,
+    closePos: toFiniteNumber(metrics?.closePos),
+    upperWickPct: toFiniteNumber(metrics?.upperWickPct),
+    atrPct,
+    bodyPctOpenAbs,
+    bodyPctCloseAbs,
+    requiredBodyPct,
+    final,
+  };
+}
+
+function buildLiveReadyVwapBreakdown(src: any, metrics: any, cfg: any, final: boolean | null) {
+  const price = toFiniteNumber(metrics?.price);
+  const vwap = toFiniteNumber(metrics?.vwap);
+  const strictFromMetrics = price != null && vwap != null ? price > vwap : null;
+  const strict = src?.priceAboveVwapStrict == null ? strictFromMetrics : Boolean(src.priceAboveVwapStrict);
+  const relaxedEligible = src?.priceAboveVwapRelaxedEligible == null ? null : Boolean(src.priceAboveVwapRelaxedEligible);
+  const relaxedTrue = src?.priceAboveVwapRelaxedTrue == null ? null : Boolean(src.priceAboveVwapRelaxedTrue);
+  const reclaimOrTapRaw = src?.reclaimOrTap == null ? null : Boolean(src.reclaimOrTap);
+  const composed = (strict === true) || (relaxedTrue === true) || (reclaimOrTapRaw === true);
+  return {
+    strict,
+    relaxedEligible,
+    relaxedTrue,
+    reclaimOrTapRaw,
+    final,
+    finalRawComposed: composed,
+    price_used: price,
+    vwap_i_used: vwap,
+    nearVwapReady_used: src?.nearVwap == null ? null : Boolean(src.nearVwap),
+    eps_pct_used: toFiniteNumber(cfg?.READY_VWAP_EPS_PCT),
+  };
+}
+
+function buildSimReadyVwapBreakdown(simFlags: any, metrics: any, cfg: any) {
+  return {
+    strict: simFlags?.priceAboveVwapStrict == null ? null : Boolean(simFlags.priceAboveVwapStrict),
+    relaxedEligible: simFlags?.priceAboveVwapRelaxedEligible == null ? null : Boolean(simFlags.priceAboveVwapRelaxedEligible),
+    relaxedTrue: simFlags?.priceAboveVwapRelaxedTrue == null ? null : Boolean(simFlags.priceAboveVwapRelaxedTrue),
+    reclaimOrTapRaw: simFlags?.reclaimOrTapRaw == null ? null : Boolean(simFlags.reclaimOrTapRaw),
+    final: simFlags?.priceAboveVwap == null ? null : Boolean(simFlags.priceAboveVwap),
+    price_used: toFiniteNumber(metrics?.price),
+    vwap_i_used: toFiniteNumber(metrics?.vwap),
+    nearVwapReady_used: simFlags?.nearVwapReady == null ? null : Boolean(simFlags.nearVwapReady),
+    eps_pct_used: toFiniteNumber(cfg?.READY_VWAP_EPS_PCT),
+  };
+}
+
+function normalizeLiveReadyFlags(
+  computed: any,
+  gateSnapshot: any | null,
+  cfg?: any,
+  opts?: { adjustRequired?: boolean }
+): Record<string, boolean> | null {
+  const src = getLiveReadySource(computed, gateSnapshot);
   if (!src || typeof src !== 'object') return null;
-  const requireReclaim = cfg?.READY_RECLAIM_REQUIRED !== false;
-  const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
-  const requireConfirm15 = cfg?.READY_CONFIRM15_REQUIRED !== false;
-  const requireTrend = cfg?.READY_TREND_REQUIRED !== false;
-  const requireSweep = cfg?.READY_SWEEP_REQUIRED !== false;
-  const requireBtc = cfg?.READY_BTC_REQUIRED !== false;
+  const adjustRequired = opts?.adjustRequired !== false;
+  const requireReclaim = adjustRequired ? (cfg?.READY_RECLAIM_REQUIRED !== false) : true;
+  const requireVol = adjustRequired ? (cfg?.READY_VOL_SPIKE_REQUIRED !== false) : true;
+  const requireConfirm15 = adjustRequired ? (cfg?.READY_CONFIRM15_REQUIRED !== false) : true;
+  const requireTrend = adjustRequired ? (cfg?.READY_TREND_REQUIRED !== false) : true;
+  const requireSweep = adjustRequired ? (cfg?.READY_SWEEP_REQUIRED !== false) : true;
+  const requireBtc = adjustRequired ? (cfg?.READY_BTC_REQUIRED !== false) : true;
   const rawReclaim = Boolean(src.reclaimOrTap);
   const rawPriceAboveVwap = Boolean(src.priceAboveVwap);
   const rawPriceAboveVwapRelaxedTrue = Boolean(src.priceAboveVwapRelaxedTrue);
@@ -248,14 +346,20 @@ function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: 
   return out;
 }
 
-function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
-  const src = gateSnapshot?.short ?? computed?.shortGateSnapshot;
+function normalizeLiveShortFlags(
+  computed: any,
+  gateSnapshot: any | null,
+  cfg?: any,
+  opts?: { adjustRequired?: boolean }
+): Record<string, boolean> | null {
+  const src = getLiveShortSource(computed, gateSnapshot);
   if (!src || typeof src !== 'object') return null;
-  const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
-  const requireConfirm15 = cfg?.SHORT_CONFIRM15_REQUIRED !== false;
-  const requireTrend = cfg?.SHORT_TREND_REQUIRED !== false;
-  const requireSweep = cfg?.SHORT_SWEEP_REQUIRED !== false;
-  const requireBtc = cfg?.SHORT_BTC_REQUIRED !== false;
+  const adjustRequired = opts?.adjustRequired !== false;
+  const requireVol = adjustRequired ? (cfg?.READY_VOL_SPIKE_REQUIRED !== false) : true;
+  const requireConfirm15 = adjustRequired ? (cfg?.SHORT_CONFIRM15_REQUIRED !== false) : true;
+  const requireTrend = adjustRequired ? (cfg?.SHORT_TREND_REQUIRED !== false) : true;
+  const requireSweep = adjustRequired ? (cfg?.SHORT_SWEEP_REQUIRED !== false) : true;
+  const requireBtc = adjustRequired ? (cfg?.SHORT_BTC_REQUIRED !== false) : true;
   const out: Record<string, boolean> = {
     sessionOK: Boolean(src.sessionOk),
     priceBelowVwap: Boolean(src.priceBelowVwap),
@@ -461,6 +565,8 @@ function buildParityMismatches(params: {
     const simRes: any = evalFromFeatures({ metrics: row.metrics, computed: row.computed }, cfg);
     const key = `${String(row.runId ?? '')}|${String(row.symbol ?? '').toUpperCase()}`;
     const actual = signalByKey.get(key) ?? null;
+    const liveReadySrc = getLiveReadySource(row.computed, actual?.gateSnapshot ?? null);
+    const liveShortSrc = getLiveShortSource(row.computed, actual?.gateSnapshot ?? null);
     const actualCategory = actual?.category
       ?? (row.computed?.finalCategory != null ? String(row.computed.finalCategory) : null)
       ?? null;
@@ -474,8 +580,9 @@ function buildParityMismatches(params: {
         btcOk: Boolean(simRes.readyBtcOk),
         core: Boolean(simRes.readyCore),
       };
-      const liveFlags = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg);
-      const divergence = firstDiff(readyOrder, simFlags, liveFlags);
+      const liveFlagsRequired = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: true });
+      const liveFlagsRaw = normalizeLiveReadyFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: false });
+      const divergence = firstDiff(readyOrder, simFlags, liveFlagsRequired);
       ready.push({
         runId: String(row.runId ?? ''),
         symbol: String(row.symbol ?? ''),
@@ -485,10 +592,20 @@ function buildParityMismatches(params: {
         why_not_emitted: divergence
           ? `first_divergence:${divergence}`
           : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
-        first_failed_live: firstFalse(readyOrder, liveFlags),
+        first_failed_live: firstFalse(readyOrder, liveFlagsRequired),
+        first_failed_live_requiredAdjusted: firstFalse(readyOrder, liveFlagsRequired),
+        first_failed_live_raw: firstFalse(readyOrder, liveFlagsRaw),
         first_failed_sim: firstFalse(readyOrder, simFlags),
         sim_flags: simFlags,
-        live_flags: liveFlags,
+        live_flags: liveFlagsRequired,
+        sim_breakdown: {
+          priceAboveVwap_breakdown: buildSimReadyVwapBreakdown(simFlags, row.metrics, cfg),
+          strongBody_breakdown: buildStrongBodyBreakdown(row.metrics, row.computed, cfg, simFlags?.strongBody == null ? null : Boolean(simFlags.strongBody)),
+        },
+        live_breakdown: {
+          priceAboveVwap_breakdown: buildLiveReadyVwapBreakdown(liveReadySrc, row.metrics, cfg, liveFlagsRaw?.priceAboveVwap ?? null),
+          strongBody_breakdown: buildStrongBodyBreakdown(row.metrics, row.computed, cfg, liveFlagsRaw?.strongBody ?? null),
+        },
       });
     }
 
@@ -499,8 +616,9 @@ function buildParityMismatches(params: {
         btcOk: Boolean(simRes.readyShortBtcOk),
         core: Boolean(simRes.readyShortCore),
       };
-      const liveShortFlags = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg);
-      const divergence = firstDiff(shortOrder, simShortFlags, liveShortFlags);
+      const liveShortFlagsRequired = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: true });
+      const liveShortFlagsRaw = normalizeLiveShortFlags(row.computed, actual?.gateSnapshot ?? null, cfg, { adjustRequired: false });
+      const divergence = firstDiff(shortOrder, simShortFlags, liveShortFlagsRequired);
       readyShort.push({
         runId: String(row.runId ?? ''),
         symbol: String(row.symbol ?? ''),
@@ -510,10 +628,13 @@ function buildParityMismatches(params: {
         why_not_emitted: divergence
           ? `first_divergence:${divergence}`
           : (actualCategory ? `actual_category:${actualCategory}` : 'actual_category:none'),
-        first_failed_live: firstFalse(shortOrder, liveShortFlags),
+        first_failed_live: firstFalse(shortOrder, liveShortFlagsRequired),
+        first_failed_live_requiredAdjusted: firstFalse(shortOrder, liveShortFlagsRequired),
+        first_failed_live_raw: firstFalse(shortOrder, liveShortFlagsRaw),
         first_failed_sim: firstFalse(shortOrder, simShortFlags),
         sim_flags: simShortFlags,
-        live_flags: liveShortFlags,
+        live_flags: liveShortFlagsRequired,
+        live_source_has_snapshot: Boolean(liveShortSrc),
       });
     }
   }
