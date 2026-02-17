@@ -53,6 +53,90 @@ const REQUIRED_PG_OUTCOME_CHECKS = [
   'so_complete_requires_resolve_version',
   'so_complete_requires_complete_state',
 ] as const;
+type RequiredPgOutcomeCheck = (typeof REQUIRED_PG_OUTCOME_CHECKS)[number];
+
+const PG_OUTCOME_CHECK_ENSURE_SQL: Record<RequiredPgOutcomeCheck, string> = {
+  so_horizon_min_positive: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_horizon_min_positive'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_horizon_min_positive
+          CHECK (horizon_min > 0)
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+  so_resolved_requires_non_pending: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_resolved_requires_non_pending'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_resolved_requires_non_pending
+          CHECK (resolved_at = 0 OR outcome_state <> 'PENDING')
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+  so_complete_requires_resolved_at: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_complete_requires_resolved_at'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_complete_requires_resolved_at
+          CHECK (window_status <> 'COMPLETE' OR resolved_at > 0)
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+  so_complete_requires_resolve_version: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_complete_requires_resolve_version'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_complete_requires_resolve_version
+          CHECK (window_status <> 'COMPLETE' OR resolve_version IS NOT NULL)
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+  so_complete_requires_complete_state: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_complete_requires_complete_state'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_complete_requires_complete_state
+          CHECK (window_status <> 'COMPLETE' OR outcome_state LIKE 'COMPLETE_%')
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+};
 
 export function getDb(): DbConn {
   if (db) return db;
@@ -118,6 +202,7 @@ function createPostgresDb(): DbConn {
   }
 
   const autoSchema = readBoolEnv('PG_AUTO_SCHEMA', process.env.NODE_ENV !== 'production');
+  const autoRepairOutcomeChecks = readBoolEnv('PG_AUTO_REPAIR_OUTCOME_CHECKS', true);
   const autoSchemaConcurrentIndexes = readBoolEnv('PG_AUTO_SCHEMA_CONCURRENT_INDEXES', true);
   const autoSchemaConcurrentIndexLock = readBoolEnv('PG_AUTO_SCHEMA_CONCURRENT_INDEX_LOCK', true);
   const autoSchemaConcurrentIndexLockKey = readIntEnv(
@@ -353,21 +438,40 @@ function createPostgresDb(): DbConn {
       );
     }
 
-    const checkRows = await pool.query(
-      `
-        SELECT c.conname
-        FROM pg_constraint c
-        JOIN pg_class t ON t.oid = c.conrelid
-        JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE n.nspname = current_schema()
-          AND t.relname = 'signal_outcomes'
-          AND c.contype = 'c'
-          AND c.conname = ANY($1::text[])
-      `,
-      [Array.from(REQUIRED_PG_OUTCOME_CHECKS)]
-    );
-    const presentChecks = new Set(checkRows.rows.map((r: any) => String(r.conname)));
-    const missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
+    const loadPresentOutcomeChecks = async () => {
+      const checkRows = await pool.query(
+        `
+          SELECT c.conname
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname = current_schema()
+            AND t.relname = 'signal_outcomes'
+            AND c.contype = 'c'
+            AND c.conname = ANY($1::text[])
+        `,
+        [Array.from(REQUIRED_PG_OUTCOME_CHECKS)]
+      );
+      return new Set(checkRows.rows.map((r: any) => String(r.conname)));
+    };
+
+    let presentChecks = await loadPresentOutcomeChecks();
+    let missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
+    if (missingChecks.length && autoRepairOutcomeChecks) {
+      try {
+        for (const checkName of missingChecks) {
+          await pool.query(PG_OUTCOME_CHECK_ENSURE_SQL[checkName as RequiredPgOutcomeCheck]);
+        }
+        presentChecks = await loadPresentOutcomeChecks();
+        missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
+        if (!missingChecks.length) {
+          console.info('[db] auto-repaired missing signal_outcomes invariant checks');
+        }
+      } catch (e) {
+        console.warn('[db] auto-repair of signal_outcomes invariant checks failed', String(e));
+      }
+    }
+
     if (missingChecks.length) {
       throw new Error(
         `[db] signal_outcomes invariant checks missing (${missingChecks.join(', ')}). Run: npm --prefix backend run db:migrate`
