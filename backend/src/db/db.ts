@@ -239,9 +239,52 @@ function createPostgresDb(): DbConn {
       );
     }
 
-    const normalizeColumns = (columns: string[]) => columns
-      .map((col) => String(col || '').replace(/"/g, '').trim().toLowerCase())
-      .filter(Boolean);
+    const parsePgArrayString = (raw: string) => {
+      const input = String(raw || '').trim();
+      if (!input) return [] as string[];
+      if (!(input.startsWith('{') && input.endsWith('}'))) return [input];
+      const body = input.slice(1, -1);
+      if (!body) return [] as string[];
+
+      const out: string[] = [];
+      let token = '';
+      let inQuotes = false;
+      let escaped = false;
+
+      for (let i = 0; i < body.length; i++) {
+        const ch = body[i];
+        if (escaped) {
+          token += ch;
+          escaped = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inQuotes = !inQuotes;
+          continue;
+        }
+        if (ch === ',' && !inQuotes) {
+          out.push(token);
+          token = '';
+          continue;
+        }
+        token += ch;
+      }
+      out.push(token);
+      return out;
+    };
+
+    const normalizeColumns = (columns: unknown) => {
+      const source = Array.isArray(columns)
+        ? columns
+        : (typeof columns === 'string' ? parsePgArrayString(columns) : []);
+      return source
+        .map((col) => String(col || '').replace(/"/g, '').trim().toLowerCase())
+        .filter(Boolean);
+    };
 
     const sameColumns = (actual: string[], expected: string[]) => {
       if (actual.length !== expected.length) return false;
@@ -290,7 +333,7 @@ function createPostgresDb(): DbConn {
         [table]
       );
 
-      return rows.rows.some((row: { cols?: string[] | null }) => {
+      return rows.rows.some((row: { cols?: unknown }) => {
         const cols = normalizeColumns(row?.cols ?? []);
         return sameColumns(cols, expectedColumns);
       });
