@@ -214,7 +214,7 @@ function alignFunnelToCounts(funnel: SimFunnel, counts: SignalCounts): SimFunnel
 }
 
 function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
-  const src = computed?.readyGateSnapshot ?? gateSnapshot?.ready;
+  const src = gateSnapshot?.ready ?? computed?.readyGateSnapshot;
   if (!src || typeof src !== 'object') return null;
   const requireReclaim = cfg?.READY_RECLAIM_REQUIRED !== false;
   const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
@@ -222,12 +222,17 @@ function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: 
   const requireTrend = cfg?.READY_TREND_REQUIRED !== false;
   const requireSweep = cfg?.READY_SWEEP_REQUIRED !== false;
   const requireBtc = cfg?.READY_BTC_REQUIRED !== false;
+  const rawReclaim = Boolean(src.reclaimOrTap);
+  const rawPriceAboveVwap = Boolean(src.priceAboveVwap);
+  const rawPriceAboveVwapRelaxedTrue = Boolean(src.priceAboveVwapRelaxedTrue);
+  // Historical snapshots may store strict-above only; compose with relaxed/reclaim paths.
+  const composedPriceAboveVwap = rawPriceAboveVwap || rawPriceAboveVwapRelaxedTrue || rawReclaim;
   const out: Record<string, boolean> = {
     sessionOK: Boolean(src.sessionOk),
-    priceAboveVwap: Boolean(src.priceAboveVwap),
+    priceAboveVwap: composedPriceAboveVwap,
     priceAboveEma: Boolean(src.priceAboveEma),
     nearVwapReady: Boolean(src.nearVwap),
-    reclaimOrTap: requireReclaim ? Boolean(src.reclaimOrTap) : true,
+    reclaimOrTap: requireReclaim ? rawReclaim : true,
     readyVolOk: requireVol ? Boolean(src.volSpike) : true,
     atrOkReady: Boolean(src.atr),
     confirm15mOk: requireConfirm15 ? Boolean(src.confirm15) : true,
@@ -244,7 +249,7 @@ function normalizeLiveReadyFlags(computed: any, gateSnapshot: any | null, cfg?: 
 }
 
 function normalizeLiveShortFlags(computed: any, gateSnapshot: any | null, cfg?: any): Record<string, boolean> | null {
-  const src = computed?.shortGateSnapshot ?? gateSnapshot?.short;
+  const src = gateSnapshot?.short ?? computed?.shortGateSnapshot;
   if (!src || typeof src !== 'object') return null;
   const requireVol = cfg?.READY_VOL_SPIKE_REQUIRED !== false;
   const requireConfirm15 = cfg?.SHORT_CONFIRM15_REQUIRED !== false;

@@ -127,6 +127,14 @@ function parseBool(v: any): boolean | null {
   return null;
 }
 
+function bodyPctOpenToClose(bodyPctOpenAbs: number, bullish: boolean): number {
+  if (!Number.isFinite(bodyPctOpenAbs) || bodyPctOpenAbs < 0) return NaN;
+  const p = bodyPctOpenAbs / 100;
+  const denom = bullish ? (1 + p) : (1 - p);
+  if (!(denom > 0)) return NaN;
+  return (p / denom) * 100;
+}
+
 export function getTuneConfigFromEnv(thresholds: Thresholds): TuneConfig {
   const READY_VWAP_MAX_PCT = parseFloat(process.env.READY_VWAP_MAX_PCT || '');
   const BEST_VWAP_MAX_PCT = parseFloat(process.env.BEST_VWAP_MAX_PCT || '');
@@ -311,6 +319,9 @@ export function applyOverrides(cfg: TuneConfig, overrides?: Record<string, any>)
 export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): EvalResult {
   const metrics = f.metrics ?? ({} as any);
   const computed = f.computed ?? ({} as any);
+  const readyGate = computed?.readyGateSnapshot && typeof computed.readyGateSnapshot === 'object'
+    ? (computed.readyGateSnapshot as Record<string, any>)
+    : null;
 
   const price = num(metrics.price);
   const vwap = num(metrics.vwap);
@@ -343,7 +354,7 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const riskPct = num(metrics.riskPct);
   const volSpike = num(metrics.volSpike);
   const bodyPct = num(metrics.bodyPct);
-  const bodyPctAbs = Math.abs(bodyPct);
+  const bodyPctOpenAbs = Math.abs(bodyPct);
   const closePos = num(metrics.closePos);
   const upperWickPct = num(metrics.upperWickPct);
 
@@ -362,7 +373,17 @@ export function evalFromFeatures(f: CandidateFeatureInput, cfg: TuneConfig): Eva
   const hasMarket = Boolean(computed.hasMarket);
   const btcBull = Boolean(computed.btcBull);
   const btcBear = Boolean(computed.btcBear);
-  const bullish = computed.bullish == null ? true : Boolean(computed.bullish);
+  const bullishRaw = computed.bullish == null ? true : Boolean(computed.bullish);
+  // Older rows may miss `bullish`; avoid overstating long body quality in that case.
+  const bullish = computed.bullish == null ? Boolean(readyGate?.strongBody) : Boolean(computed.bullish);
+  const bodyPctCloseAbsLongRaw = bodyPctOpenToClose(bodyPctOpenAbs, bullish);
+  const bodyPctCloseAbsLong = Number.isFinite(bodyPctCloseAbsLongRaw)
+    ? bodyPctCloseAbsLongRaw
+    : bodyPctOpenAbs;
+  const bodyPctCloseAbsShortRaw = bodyPctOpenToClose(bodyPctOpenAbs, false);
+  const bodyPctCloseAbsShort = Number.isFinite(bodyPctCloseAbsShortRaw)
+    ? bodyPctCloseAbsShortRaw
+    : bodyPctOpenAbs;
 
   // Use explicit env config or default to 0.80% (not preset threshold to avoid sim/live drift)
 const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT) 
@@ -408,13 +429,13 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const requiredReadyBodyPct = Math.max(readyBodyAtrPct, readyBodyFloorPct);
   const requiredBestBodyPct = Math.max(bestBodyAtrPct, bestBodyFloorPct);
   const strongBodyReady = bullish &&
-    Number.isFinite(bodyPctAbs) &&
-    bodyPctAbs >= requiredReadyBodyPct &&
+    Number.isFinite(bodyPctCloseAbsLong) &&
+    bodyPctCloseAbsLong >= requiredReadyBodyPct &&
     closePos >= cfg.READY_CLOSE_POS_MIN &&
     upperWickPct <= cfg.READY_UPPER_WICK_MAX;
   const strongBodyBest = bullish &&
-    Number.isFinite(bodyPctAbs) &&
-    bodyPctAbs >= requiredBestBodyPct &&
+    Number.isFinite(bodyPctCloseAbsLong) &&
+    bodyPctCloseAbsLong >= requiredBestBodyPct &&
     closePos >= cfg.READY_CLOSE_POS_MIN &&
     upperWickPct <= cfg.READY_UPPER_WICK_MAX;
 
@@ -525,7 +546,7 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const rsiShortOk = shortGate?.rsiShortOk == null
     ? (rsi >= cfg.SHORT_RSI_MIN && rsi <= cfg.SHORT_RSI_MAX && rsiDelta <= cfg.SHORT_RSI_DELTA_STRICT)
     : Boolean(shortGate.rsiShortOk);
-  const bearish = !bullish;
+  const bearish = !bullishRaw;
   const shortBodyAtrPct = Number.isFinite(atrPct) ? atrPct * cfg.SHORT_BODY_ATR_MULT : 0;
   const shortBodyFloorPct = Number.isFinite(cfg.SHORT_BODY_MIN_PCT) ? cfg.SHORT_BODY_MIN_PCT * 100 : 0;
   const requiredShortBodyPct = Math.max(shortBodyAtrPct, shortBodyFloorPct);
@@ -534,8 +555,8 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
   const strongBodyShort = shortGate?.strongBody == null
     ? (
       bearish &&
-      Number.isFinite(bodyPctAbs) &&
-      bodyPctAbs >= requiredShortBodyPct &&
+      Number.isFinite(bodyPctCloseAbsShort) &&
+      bodyPctCloseAbsShort >= requiredShortBodyPct &&
       closePos <= cfg.SHORT_CLOSE_POS_MAX &&
       lowerWickPctShort <= cfg.SHORT_LOWER_WICK_MAX
     )
