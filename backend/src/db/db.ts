@@ -239,36 +239,61 @@ function createPostgresDb(): DbConn {
       );
     }
 
-    const hasUniqueOnColumns = async (table: string, columnsCsvNoSpaces: string) => {
-      const constraint = await pool.query(
-        `
-          SELECT 1
-          FROM pg_constraint c
-          JOIN pg_class t ON t.oid = c.conrelid
-          JOIN pg_namespace n ON n.oid = t.relnamespace
-          WHERE n.nspname = current_schema()
-            AND t.relname = $1
-            AND c.contype = 'u'
-            AND regexp_replace(pg_get_constraintdef(c.oid), '\\s', '', 'g') ILIKE '%(' || $2 || ')%'
-          LIMIT 1
-        `,
-        [table, columnsCsvNoSpaces]
-      );
-      if (constraint.rowCount) return true;
+    const normalizeColumns = (columns: string[]) => columns
+      .map((col) => String(col || '').replace(/"/g, '').trim().toLowerCase())
+      .filter(Boolean);
 
-      const index = await pool.query(
+    const sameColumns = (actual: string[], expected: string[]) => {
+      if (actual.length !== expected.length) return false;
+      if (actual.every((col, i) => col === expected[i])) return true;
+      const left = [...actual].sort();
+      const right = [...expected].sort();
+      return left.every((col, i) => col === right[i]);
+    };
+
+    const hasUniqueOnColumns = async (table: string, columnsCsvNoSpaces: string) => {
+      const expectedColumns = normalizeColumns(columnsCsvNoSpaces.split(','));
+      const rows = await pool.query(
         `
-          SELECT 1
-          FROM pg_indexes
-          WHERE schemaname = current_schema()
-            AND tablename = $1
-            AND regexp_replace(indexdef, '\\s', '', 'g') ILIKE 'createuniqueindex%'
-            AND regexp_replace(indexdef, '\\s', '', 'g') ILIKE '%(' || $2 || ')%'
-          LIMIT 1
+          WITH unique_sets AS (
+            SELECT ARRAY_AGG(att.attname ORDER BY ck.ord) AS cols
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS ck(attnum, ord) ON TRUE
+            JOIN pg_attribute att ON att.attrelid = t.oid AND att.attnum = ck.attnum
+            WHERE n.nspname = current_schema()
+              AND t.relname = $1
+              AND c.contype = 'u'
+            GROUP BY c.oid
+
+            UNION ALL
+
+            SELECT ARRAY_AGG(att.attname ORDER BY ik.ord) AS cols
+            FROM pg_index i
+            JOIN pg_class t ON t.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS ik(attnum, ord) ON TRUE
+            JOIN pg_attribute att ON att.attrelid = t.oid AND att.attnum = ik.attnum
+            WHERE n.nspname = current_schema()
+              AND t.relname = $1
+              AND i.indisunique = TRUE
+              AND i.indpred IS NULL
+              AND i.indexprs IS NULL
+              AND ik.attnum > 0
+              AND ik.ord <= i.indnkeyatts
+            GROUP BY i.indexrelid
+          )
+          SELECT cols
+          FROM unique_sets
         `,
-        [table, columnsCsvNoSpaces]
+        [table]
       );
-      return Boolean(index.rowCount);
+
+      return rows.rows.some((row: { cols?: string[] | null }) => {
+        const cols = normalizeColumns(row?.cols ?? []);
+        return sameColumns(cols, expectedColumns);
+      });
     };
 
     const hasSignalConflictTarget = await hasUniqueOnColumns('signals', 'symbol,category,time,config_hash');
