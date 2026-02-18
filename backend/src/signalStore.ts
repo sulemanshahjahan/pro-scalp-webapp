@@ -872,6 +872,7 @@ async function seedPendingOutcomeRowsForSignal(d: any, params: {
   const invalidReason = params.invalidReason ?? 'FUTURE_WINDOW';
   const intervalMin = Math.max(1, OUTCOME_INTERVAL_MIN);
   const intervalMs = intervalMin * 60_000;
+  // Cast timestamps to BIGINT explicitly to avoid type inference issues
   await d.prepare(`
     WITH horizons(horizon_min) AS (
       VALUES ${OUTCOME_HORIZON_VALUES_SQL}
@@ -891,16 +892,16 @@ async function seedPendingOutcomeRowsForSignal(d: any, params: {
       attempted_at, computed_at, resolved_at, resolve_version, outcome_debug_json
     )
     SELECT
-      @signalId, h.horizon_min,
-      @entryTime, @entryCandleOpenTime, @entryRule, @entryTime,
-      @entryTime + ((CAST((h.horizon_min + @intervalMin - 1) / @intervalMin AS INTEGER) - 1) * @intervalMs),
+      @signalId::bigint, h.horizon_min,
+      @entryTime::bigint, @entryCandleOpenTime::bigint, @entryRule, @entryTime::bigint,
+      @entryTime::bigint + ((CAST((h.horizon_min + @intervalMin - 1) / @intervalMin AS INTEGER) - 1) * @intervalMs::bigint),
       @intervalMin, 0, CAST((h.horizon_min + @intervalMin - 1) / @intervalMin AS INTEGER), 0,
       @entryPrice, @entryPrice, @entryPrice, @entryPrice, @entryPrice,
       0, 0, 0, 0, 0, 0,
       0, 0, 0,
       0, 0, 0, 0, 0,
       0, 0,
-      'NONE', NULL, NULL, 'PENDING', @entryPrice, @entryTime,
+      'NONE', NULL, NULL, 'PENDING', @entryPrice, @entryTime::bigint,
       'PARTIAL', 'PENDING', NULL, 0, @invalidReason, 0,
       0, NULL,
       0, 0, 0, NULL, NULL
