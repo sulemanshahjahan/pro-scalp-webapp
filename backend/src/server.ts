@@ -10,6 +10,7 @@ import { listCandidateFeatures, listCandidateFeaturesMulti } from './candidateFe
 import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSim.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
+import { isEmailEnabled } from './mailer.js';
 import { getDb } from './db/db.js';
 import { getLatestTuningBundle, listRecentTuningBundles, getTuningBundleById } from './tuningBundleStore.js';
 import { generateTuningBundle } from './tuning/generateTuningBundle.js';
