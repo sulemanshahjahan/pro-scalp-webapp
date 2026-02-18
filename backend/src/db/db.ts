@@ -122,16 +122,25 @@ const PG_OUTCOME_CHECK_ENSURE_SQL: Record<RequiredPgOutcomeCheck, string> = {
   `,
   so_complete_requires_complete_state: `
     DO $$
+    DECLARE def TEXT;
     BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'so_complete_requires_complete_state'
-          AND conrelid = 'signal_outcomes'::regclass
-      ) THEN
+      SELECT pg_get_constraintdef(c.oid)
+      INTO def
+      FROM pg_constraint c
+      WHERE c.conname = 'so_complete_requires_complete_state'
+        AND c.conrelid = 'signal_outcomes'::regclass;
+
+      IF def IS NULL THEN
         ALTER TABLE signal_outcomes
           ADD CONSTRAINT so_complete_requires_complete_state
-          CHECK (window_status <> 'COMPLETE' OR outcome_state LIKE 'COMPLETE_%')
+          CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
+          NOT VALID;
+      ELSIF def NOT LIKE '%outcome_state = ''COMPLETE''%' THEN
+        ALTER TABLE signal_outcomes
+          DROP CONSTRAINT so_complete_requires_complete_state;
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_complete_requires_complete_state
+          CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
           NOT VALID;
       END IF;
     END $$;
@@ -457,14 +466,15 @@ function createPostgresDb(): DbConn {
 
     let presentChecks = await loadPresentOutcomeChecks();
     let missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
-    if (missingChecks.length && autoRepairOutcomeChecks) {
+    if (autoRepairOutcomeChecks) {
+      const missingBefore = [...missingChecks];
       try {
-        for (const checkName of missingChecks) {
+        for (const checkName of REQUIRED_PG_OUTCOME_CHECKS) {
           await pool.query(PG_OUTCOME_CHECK_ENSURE_SQL[checkName as RequiredPgOutcomeCheck]);
         }
         presentChecks = await loadPresentOutcomeChecks();
         missingChecks = Array.from(REQUIRED_PG_OUTCOME_CHECKS).filter((name) => !presentChecks.has(name));
-        if (!missingChecks.length) {
+        if (!missingChecks.length && missingBefore.length) {
           console.info('[db] auto-repaired missing signal_outcomes invariant checks');
         }
       } catch (e) {

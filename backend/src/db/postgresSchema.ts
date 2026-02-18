@@ -296,6 +296,28 @@ UPDATE scan_runs SET config_hash = 'legacy' WHERE config_hash IS NULL OR BTRIM(c
 UPDATE scan_runs SET instance_id = 'legacy' WHERE instance_id IS NULL OR BTRIM(instance_id) = '';
 UPDATE signals SET instance_id = 'legacy' WHERE instance_id IS NULL OR BTRIM(instance_id) = '';
 
+-- Normalize legacy outcome states to coarse enum values.
+UPDATE signal_outcomes
+SET window_status = CASE
+  WHEN window_status LIKE 'COMPLETE_%' THEN 'COMPLETE'
+  WHEN window_status = 'PENDING' THEN 'PARTIAL'
+  WHEN COALESCE(BTRIM(window_status), '') = '' THEN 'PARTIAL'
+  ELSE window_status
+END;
+
+UPDATE signal_outcomes
+SET outcome_state = CASE
+  WHEN outcome_state IN ('PENDING', 'COMPLETE', 'INVALID') THEN outcome_state
+  WHEN outcome_state LIKE 'COMPLETE_%' OR window_status = 'COMPLETE' THEN 'COMPLETE'
+  WHEN window_status = 'INVALID' OR invalid_levels = 1 THEN 'INVALID'
+  ELSE 'PENDING'
+END;
+
+UPDATE signal_outcomes
+SET computed_at = 0
+WHERE outcome_state = 'PENDING'
+  AND computed_at <> 0;
+
 -- Resolver invariants (rollout-safe: NOT VALID, validate in a controlled migration window)
 DO $$
 BEGIN
@@ -358,16 +380,25 @@ BEGIN
 END $$;
 
 DO $$
+DECLARE def TEXT;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'so_complete_requires_complete_state'
-      AND conrelid = 'signal_outcomes'::regclass
-  ) THEN
+  SELECT pg_get_constraintdef(c.oid)
+  INTO def
+  FROM pg_constraint c
+  WHERE c.conname = 'so_complete_requires_complete_state'
+    AND c.conrelid = 'signal_outcomes'::regclass;
+
+  IF def IS NULL THEN
     ALTER TABLE signal_outcomes
       ADD CONSTRAINT so_complete_requires_complete_state
-      CHECK (window_status <> 'COMPLETE' OR outcome_state LIKE 'COMPLETE_%')
+      CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
+      NOT VALID;
+  ELSIF def NOT LIKE '%outcome_state = ''COMPLETE''%' THEN
+    ALTER TABLE signal_outcomes
+      DROP CONSTRAINT so_complete_requires_complete_state;
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_complete_requires_complete_state
+      CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
       NOT VALID;
   END IF;
 END $$;
