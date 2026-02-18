@@ -1880,9 +1880,21 @@ app.post('/api/debug/push', async (req, res) => {
 // --- DEBUG: email ---
 app.get('/api/debug/email', async (_req, res) => {
   try {
+    // Check email config
+    const emailConfig = {
+      enabled: process.env.EMAIL_ENABLED,
+      smtpHost: process.env.SMTP_HOST,
+      smtpPort: process.env.SMTP_PORT,
+      smtpUser: process.env.SMTP_USER,
+      smtpPassSet: !!process.env.SMTP_PASS,
+      alertEmails: process.env.ALERT_EMAILS,
+      fromName: process.env.EMAIL_FROM_NAME,
+      isEnabled: isEmailEnabled(),
+    };
+
     const fakeSignal: any = {
       symbol: 'TESTUSDT',
-      category: 'BEST_ENTRY',
+      category: 'READY_TO_BUY',
       price: 123.45,
       rsi9: 55.2,
       vwapDistancePct: 0.001,
@@ -1890,10 +1902,20 @@ app.get('/api/debug/email', async (_req, res) => {
       volume: 99999,
       chartUrl: 'https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT'
     };
+
+    if (!isEmailEnabled()) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'Email not enabled',
+        config: emailConfig,
+        hint: 'Set EMAIL_ENABLED=true and SMTP_* vars in Railway'
+      });
+    }
+
     await emailNotify(undefined, fakeSignal);
-    res.json({ ok: true, sent: fakeSignal });
+    res.json({ ok: true, sent: fakeSignal, config: emailConfig });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String(err) });
+    res.status(500).json({ ok: false, error: String(err), stack: (err as any)?.stack });
   }
 });
 
