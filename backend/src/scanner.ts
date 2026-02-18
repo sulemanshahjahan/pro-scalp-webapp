@@ -1012,10 +1012,13 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
     try { await emailNotify(undefined, n.sig); } catch (e) { console.error('emailNotify error', e); }
     try {
       // Hold time recommendation based on outcome analysis
-      const holdHours = Number(process.env.SIGNAL_HOLD_MINUTES || 120) / 60;
+      const holdMin = Number(process.env.SIGNAL_HOLD_MINUTES || 120);
+      const holdHours = holdMin / 60;
+      const winRateLong = process.env.SIGNAL_WIN_RATE_LONG || '37-44%';
+      const holdMaxHours = Number(process.env.SIGNAL_HOLD_MAX_HOURS || 4);
       const holdRec = n.sig.category?.toUpperCase().includes('BEST') 
-        ? `Hold ${holdHours}-4h for optimal R (37-44% win rate)`
-        : `Consider ${holdHours}-4h hold`;
+        ? `Hold ${holdHours}-${holdMaxHours}h for optimal R (${winRateLong} win rate)`
+        : `Consider ${holdHours}-${holdMaxHours}h hold`;
       
       await pushToAll({
         title: n.title,

@@ -1,6 +1,36 @@
 import React from 'react';
 import RiskCalc from './RiskCalc';
 
+// Hold time config from env (build-time only)
+const HOLD_MINUTES = Number(import.meta.env.VITE_SIGNAL_HOLD_MINUTES || 120);
+const HOLD_MAX_HOURS = Number(import.meta.env.VITE_SIGNAL_HOLD_MAX_HOURS || 4);
+const WIN_RATE_SHORT = import.meta.env.VITE_SIGNAL_WIN_RATE_SHORT || '7%';
+const WIN_RATE_LONG = import.meta.env.VITE_SIGNAL_WIN_RATE_LONG || '37-44%';
+
+function HoldTimeRecommendation({ category }: { category: string }) {
+  const holdHours = (HOLD_MINUTES / 60).toFixed(1);
+  const isBest = category?.toUpperCase().includes('BEST');
+  
+  return (
+    <div className="mt-2 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-emerald-300/90">
+      <span className="font-semibold">⏱️ Hold Time:</span>{' '}
+      {isBest ? (
+        <>
+          Hold {holdHours}-{HOLD_MAX_HOURS}h for optimal R.{' '}
+          <span className="text-emerald-300/60">
+            (Data: {WIN_RATE_LONG} win rate at {holdHours}-{HOLD_MAX_HOURS}h vs {WIN_RATE_SHORT} at 15m)
+          </span>
+        </>
+      ) : (
+        <>
+          Consider {holdHours}-{HOLD_MAX_HOURS}h hold.{' '}
+          <span className="text-emerald-300/60">(Longer horizons outperform)</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 type Props = {
   s: any;
   onFav?: (symbol: string) => void;
@@ -132,10 +162,7 @@ export default function SignalCard({ s }: Props) {
         </div>
       ) : null}
       {(s.category === 'BEST_ENTRY' || s.category === 'READY_TO_BUY' || s.category === 'BEST_SHORT_ENTRY' || s.category === 'READY_TO_SELL') ? (
-        <div className="mt-2 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-emerald-300/90">
-          <span className="font-semibold">⏱️ Hold Time:</span> 2-4 hours for optimal R. 
-          <span className="text-emerald-300/60">(Data: 37-44% win rate at 2-4h vs 7% at 15m)</span>
-        </div>
+        <HoldTimeRecommendation category={s.category} />
       ) : null}
 
       <div className="mt-2 text-xs text-white/70">

@@ -1,6 +1,9 @@
 // Hold time recommendation based on outcome analysis
 // 120m/240m show 37-44% win rate vs 6-20% for shorter horizons
 const DEFAULT_HOLD_MIN = Number(process.env.SIGNAL_HOLD_MINUTES || 120);
+const WIN_RATE_SHORT = process.env.SIGNAL_WIN_RATE_SHORT || '7%';
+const WIN_RATE_LONG = process.env.SIGNAL_WIN_RATE_LONG || '37-44%';
+const HOLD_MAX_HOURS = Number(process.env.SIGNAL_HOLD_MAX_HOURS || 4);
 
 function getHoldRecommendation(category: string): string {
   const holdMin = DEFAULT_HOLD_MIN;
@@ -8,10 +11,10 @@ function getHoldRecommendation(category: string): string {
   
   const c = String(category || '').toUpperCase();
   if (c.includes('BEST')) {
-    return `⏱️ Hold ${holdHours}-4h for optimal R (data: 37-44% win rate at 2-4h vs 7% at 15m)`;
+    return `⏱️ Hold ${holdHours}-${HOLD_MAX_HOURS}h for optimal R (data: ${WIN_RATE_LONG} win rate at ${holdHours}-${HOLD_MAX_HOURS}h vs ${WIN_RATE_SHORT} at 15m)`;
   }
   if (c.includes('READY')) {
-    return `⏱️ Consider ${holdHours}-4h hold (data: longer horizons significantly outperform)`;
+    return `⏱️ Consider ${holdHours}-${HOLD_MAX_HOURS}h hold (data: longer horizons outperform)`;
   }
   return `⏱️ Watch for ${holdHours}m+ for full move development`;
 }
@@ -86,6 +89,8 @@ export function htmlFor(signal: AnySignal) {
 export function textFor(signal: AnySignal) {
   const tag = categoryTag(signal.category);
   const holdRec = getHoldRecommendation(signal.category);
+  const holdMin = DEFAULT_HOLD_MIN;
+  const holdHours = (holdMin / 60).toFixed(1);
   return [
     `Pro Scalp Scanner - ${tag}`,
     `Symbol: ${signal.symbol}`,
@@ -97,6 +102,7 @@ export function textFor(signal: AnySignal) {
     `When: ${new Date().toISOString()}`,
     `---`,
     holdRec,
+    `(Hold ${holdHours}-${HOLD_MAX_HOURS}h for optimal R: ${WIN_RATE_LONG} vs ${WIN_RATE_SHORT})`,
     signal.chartUrl ? `Chart: ${signal.chartUrl}` : '',
   ].filter(Boolean).join('\n');
 }
