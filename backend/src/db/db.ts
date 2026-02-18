@@ -151,6 +151,17 @@ const PG_OUTCOME_CHECK_ENSURE_SQL: Record<RequiredPgOutcomeCheck, string> = {
     BEGIN
       IF NOT EXISTS (
         SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'signal_outcomes'
+          AND column_name = 'complete_reason'
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD COLUMN complete_reason TEXT;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1
         FROM pg_constraint
         WHERE conname = 'so_complete_requires_complete_reason'
           AND conrelid = 'signal_outcomes'::regclass
