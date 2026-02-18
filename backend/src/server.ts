@@ -1920,6 +1920,65 @@ app.get('/api/debug/email', async (_req, res) => {
   }
 });
 
+// --- DEBUG: record signal test ---
+app.get('/api/debug/record-signal', async (_req, res) => {
+  try {
+    const testSignal = {
+      symbol: 'DEBUGUSDT',
+      category: 'READY_TO_BUY',
+      time: Date.now(),
+      price: 100.50,
+      vwap: 100.25,
+      ema200: 99.80,
+      rsi9: 65.0,
+      volSpike: 2.0,
+      atrPct: 1.5,
+      confirm15m: false,
+      deltaVwapPct: 0.25,
+      stop: 99.00,
+      tp1: 102.00,
+      tp2: 104.00,
+      target: 104.00,
+      rr: 2.0,
+      riskPct: 1.5,
+      sessionOk: true,
+      sweepOk: false,
+      trendOk: true,
+      blockedByBtc: false,
+      runId: 'debug_run_' + Date.now(),
+      instanceId: 'debug_instance',
+      reasons: ['Debug test'],
+      thresholdVwapDistancePct: 0.3,
+      thresholdVolSpikeX: 1.5,
+      thresholdAtrGuardPct: 2.5,
+    };
+
+    console.log('[debug] Testing recordSignal...');
+    const signalId = await recordSignal(testSignal as any, 'BALANCED');
+    console.log('[debug] recordSignal returned:', signalId);
+
+    // Check what was created
+    const d = getDb();
+    const events = await d.prepare('SELECT COUNT(*) as n FROM signal_events WHERE signal_id = ?').get(signalId);
+    const outcomes = await d.prepare('SELECT COUNT(*) as n FROM signal_outcomes WHERE signal_id = ?').all(signalId);
+
+    res.json({
+      ok: true,
+      signalId,
+      eventsCreated: events?.n ?? 0,
+      outcomesCreated: outcomes?.length ?? 0,
+      signal: testSignal,
+    });
+  } catch (err) {
+    console.error('[debug] recordSignal test failed:', err);
+    res.status(500).json({ 
+      ok: false, 
+      error: String(err),
+      stack: (err as any)?.stack 
+    });
+  }
+});
+
 // --- DEBUG: outcomes health ---
 app.get('/api/debug/outcomes/health', async (req, res) => {
   const enabled = (process.env.DEBUG_ENDPOINTS ?? 'false').toLowerCase() === 'true';
