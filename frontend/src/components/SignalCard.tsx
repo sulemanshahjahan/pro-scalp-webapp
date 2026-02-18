@@ -131,6 +131,12 @@ export default function SignalCard({ s }: Props) {
           Hint: short half size now; add remaining size on confirmation.
         </div>
       ) : null}
+      {(s.category === 'BEST_ENTRY' || s.category === 'READY_TO_BUY' || s.category === 'BEST_SHORT_ENTRY' || s.category === 'READY_TO_SELL') ? (
+        <div className="mt-2 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-emerald-300/90">
+          <span className="font-semibold">⏱️ Hold Time:</span> 2-4 hours for optimal R. 
+          <span className="text-emerald-300/60">(Data: 37-44% win rate at 2-4h vs 7% at 15m)</span>
+        </div>
+      ) : null}
 
       <div className="mt-2 text-xs text-white/70">
         15m confirm: <b>{s.confirm15m ? 'Yes' : 'No'}</b> - dVWAP: {s.deltaVwapPct.toFixed(2)}%

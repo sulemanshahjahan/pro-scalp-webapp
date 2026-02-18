@@ -25,7 +25,10 @@ const OUTCOME_PG_ADVISORY_LOCK_RETRY_MS = Math.max(50, parseInt(process.env.OUTC
 const OUTCOME_BACKLOG_GRACE_MIN = Math.max(1, parseInt(process.env.OUTCOME_BACKLOG_GRACE_MIN || '10', 10));
 const OUTCOME_INTEGRITY_MS = parseInt(process.env.OUTCOME_INTEGRITY_MS || '600000', 10); // 10 min
 const OUTCOME_INTEGRITY_DAYS = parseInt(process.env.OUTCOME_INTEGRITY_DAYS || '14', 10);
-const OUTCOME_EXPIRE_AFTER_15M = (process.env.OUTCOME_EXPIRE_AFTER_15M ?? 'true').toLowerCase() !== 'false';
+const OUTCOME_EXPIRE_AFTER_15M_RAW = process.env.OUTCOME_EXPIRE_AFTER_15M;
+// Default: DISABLED. Set to 'true' to enable 15m expiry for ALL horizons (not recommended).
+// Set to '15' to only expire the 15m horizon itself (recommended for multi-horizon analysis).
+const OUTCOME_EXPIRE_AFTER_15M = OUTCOME_EXPIRE_AFTER_15M_RAW === 'true' || OUTCOME_EXPIRE_AFTER_15M_RAW === '15';
 const ENTRY_DRIFT_ATR = parseFloat(process.env.ENTRY_DRIFT_ATR || '1.0');
 const SIGNAL_INTERVAL_MIN = Math.max(1, parseInt(process.env.SIGNAL_INTERVAL_MIN || '5', 10));
 const ENTRY_RULE = process.env.ENTRY_RULE || 'signal_close';
@@ -1982,7 +1985,11 @@ async function computeOneOutcome(
     windowStatus = 'PARTIAL';
     invalidReason = 'FUTURE_WINDOW';
   } else {
-    if (OUTCOME_EXPIRE_AFTER_15M && horizonMin > 15) {
+    // Only check 15m expiry for longer horizons if EXPLICITLY enabled with 'true'
+    // If set to '15', only the 15m horizon itself can expire this way
+    const expireAfter15mForLongHorizons = OUTCOME_EXPIRE_AFTER_15M_RAW === 'true' && horizonMin > 15;
+    const expireAfter15mFor15mOnly = OUTCOME_EXPIRE_AFTER_15M_RAW === '15' && horizonMin === 15;
+    if (OUTCOME_EXPIRE_AFTER_15M && (expireAfter15mForLongHorizons || expireAfter15mFor15mOnly)) {
       const short = await d.prepare(`
         SELECT
           outcome_state, window_status, resolve_version, exit_reason,
@@ -2033,6 +2040,7 @@ async function computeOneOutcome(
           nCandles = needed;
           coveragePct = 100;
           windowSlice = [];
+          const rRealized = Number.isFinite(Number(short.r_realized)) ? Number(short.r_realized) : 0;
           expiredOut = {
             maxHigh: Number.isFinite(Number(short.max_high)) ? Number(short.max_high) : entryShort,
             minLow: Number.isFinite(Number(short.min_low)) ? Number(short.min_low) : entryShort,
@@ -2041,7 +2049,7 @@ async function computeOneOutcome(
             rClose: Number.isFinite(Number(short.r_close)) ? Number(short.r_close) : 0,
             rMfe: Number.isFinite(Number(short.r_mfe)) ? Number(short.r_mfe) : 0,
             rMae: Number.isFinite(Number(short.r_mae)) ? Number(short.r_mae) : 0,
-            rRealized: Number.isFinite(Number(short.r_realized)) ? Number(short.r_realized) : 0,
+            rRealized: rRealized,
             hitSL: 0,
             hitTP1: 0,
             hitTP2: 0,
@@ -2052,7 +2060,7 @@ async function computeOneOutcome(
             barsToExit: needed,
             mfePct: Number.isFinite(Number(short.mfe_pct)) ? Number(short.mfe_pct) : 0,
             maePct: Number.isFinite(Number(short.mae_pct)) ? Number(short.mae_pct) : 0,
-            result: 'NONE' as const,
+            result: rRealized > 0 ? 'WIN' : rRealized < 0 ? 'LOSS' : 'FLAT' as const,
             exitReason: 'EXPIRED_AFTER_15M' as const,
             exitPrice: Number.isFinite(Number(short.exit_price)) ? Number(short.exit_price) : closeShort,
             exitTime: Number.isFinite(Number(short.exit_time)) ? Number(short.exit_time) : endTime,
@@ -2253,8 +2261,17 @@ async function computeOneOutcome(
     ? resolveCompleteReason(out.exitReason, tradeState)
     : null;
 
+  // Derive proper result from r_realized if not already set
+  let finalResult = out.result;
+  if (canCompute && finalResult === 'NONE') {
+    if (out.rRealized > 0) finalResult = 'WIN';
+    else if (out.rRealized < 0) finalResult = 'LOSS';
+    else finalResult = 'FLAT';
+  }
+
+  // Compute outcome_driver for ALL complete outcomes (not just FAILED_SL)
   let outcomeDriver: string | null = null;
-  if (windowStatus === 'COMPLETE' && !invalidLevels && tradeState === 'FAILED_SL') {
+  if (windowStatus === 'COMPLETE' && !invalidLevels) {
     const rr = Number(signalRow.rr);
     const deltaVwapPct = Number(signalRow.deltaVwapPct);
     const volSpike = Number(signalRow.volSpike);
@@ -2300,14 +2317,32 @@ async function computeOneOutcome(
       : (btcBear === true && (category === 'READY_TO_BUY' || category === 'BEST_ENTRY'));
     const sessionOff = sessionOk === false;
 
-    if (rrBelowMin) outcomeDriver = 'RR_BELOW_MIN';
-    else if (vwapTooFar) outcomeDriver = 'VWAP_TOO_FAR';
-    else if (noSweep) outcomeDriver = 'NO_SWEEP';
-    else if (volSpikeNotMet) outcomeDriver = 'VOL_SPIKE_NOT_MET';
-    else if (rsiNotInWindow) outcomeDriver = 'RSI_NOT_IN_WINDOW';
-    else if (btcContra) outcomeDriver = 'BTC_CONTRA_TREND';
-    else if (sessionOff) outcomeDriver = 'SESSION_OFF';
-    else outcomeDriver = 'OTHER';
+    // First check if this is a STOP hit - use quality drivers
+    if (tradeState === 'FAILED_SL') {
+      if (rrBelowMin) outcomeDriver = 'RR_BELOW_MIN';
+      else if (vwapTooFar) outcomeDriver = 'VWAP_TOO_FAR';
+      else if (noSweep) outcomeDriver = 'NO_SWEEP';
+      else if (volSpikeNotMet) outcomeDriver = 'VOL_SPIKE_NOT_MET';
+      else if (rsiNotInWindow) outcomeDriver = 'RSI_NOT_IN_WINDOW';
+      else if (btcContra) outcomeDriver = 'BTC_CONTRA_TREND';
+      else if (sessionOff) outcomeDriver = 'SESSION_OFF';
+      else outcomeDriver = 'STOP_HIT';
+    } else if (tradeState === 'COMPLETED_TP1' || tradeState === 'COMPLETED_TP2') {
+      // Win drivers - what led to the win
+      if (btcContra) outcomeDriver = 'BTC_CONTRA_BUT_WIN';  // Won despite bad BTC
+      else if (btcBull && !shortSignal) outcomeDriver = 'BTC_BULL_TAILWIND';
+      else if (btcBear && shortSignal) outcomeDriver = 'BTC_BEAR_TAILWIND';
+      else outcomeDriver = 'SETUP_WORKED';
+    } else if (tradeState === 'EXPIRED') {
+      // Timeout/expire drivers
+      if (out.exitReason === 'EXPIRED_AFTER_15M') {
+        outcomeDriver = 'EXPIRED_AFTER_15M';
+      } else {
+        outcomeDriver = 'TIMEOUT_NO_HIT';
+      }
+    } else {
+      outcomeDriver = 'OTHER';
+    }
   }
 
   const resolvedAt = outcomeState === 'COMPLETE' ? Date.now() : 0;
@@ -2429,7 +2464,7 @@ async function computeOneOutcome(
     bars_to_exit: canCompute ? out.barsToExit : 0,
     mfe_pct: out.mfePct,
     mae_pct: out.maePct,
-    result: canCompute ? out.result : 'NONE',
+    result: canCompute ? finalResult : 'NONE',
     exit_reason: canCompute ? out.exitReason : null,
     outcome_driver: outcomeDriver,
     trade_state: tradeState,

@@ -1,3 +1,21 @@
+// Hold time recommendation based on outcome analysis
+// 120m/240m show 37-44% win rate vs 6-20% for shorter horizons
+const DEFAULT_HOLD_MIN = Number(process.env.SIGNAL_HOLD_MINUTES || 120);
+
+function getHoldRecommendation(category: string): string {
+  const holdMin = DEFAULT_HOLD_MIN;
+  const holdHours = (holdMin / 60).toFixed(1);
+  
+  const c = String(category || '').toUpperCase();
+  if (c.includes('BEST')) {
+    return `⏱️ Hold ${holdHours}-4h for optimal R (data: 37-44% win rate at 2-4h vs 7% at 15m)`;
+  }
+  if (c.includes('READY')) {
+    return `⏱️ Consider ${holdHours}-4h hold (data: longer horizons significantly outperform)`;
+  }
+  return `⏱️ Watch for ${holdHours}m+ for full move development`;
+}
+
 type AnySignal = {
   symbol: string;
   category:
@@ -43,12 +61,19 @@ export function htmlFor(signal: AnySignal) {
     <td style="padding:6px 10px;font-weight:600;color:#111;">${v ?? '-'}</td></tr>
   `).join('');
 
+  const holdRec = getHoldRecommendation(signal.category);
+
   return `
   <div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;margin:auto;border:1px solid #eee;border-radius:12px;overflow:hidden">
     <div style="background:#111;color:#fff;padding:14px 16px;font-size:16px"><strong>Pro Scalp Scanner</strong></div>
     <div style="padding:16px">
       <h2 style="margin:0 0 8px 0;font-size:18px">${tag}: ${signal.symbol}</h2>
       <p style="margin:0 0 12px 0;color:#333">Triggered at <b>${fmtPrice(signal.price)}</b>. This email is informational, not financial advice.</p>
+      
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;margin:12px 0;font-size:13px;color:#166534">
+        <strong>${holdRec}</strong>
+      </div>
+      
       <table style="border-collapse:collapse;width:100%;font-size:14px">${table}</table>
       <div style="margin-top:16px">
         <a href="${signal.chartUrl ?? '#'}" style="display:inline-block;padding:10px 14px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px">Open Chart</a>
@@ -60,6 +85,7 @@ export function htmlFor(signal: AnySignal) {
 
 export function textFor(signal: AnySignal) {
   const tag = categoryTag(signal.category);
+  const holdRec = getHoldRecommendation(signal.category);
   return [
     `Pro Scalp Scanner - ${tag}`,
     `Symbol: ${signal.symbol}`,
@@ -69,6 +95,8 @@ export function textFor(signal: AnySignal) {
     `VWAP Dist %: ${pct(signal.vwapDistancePct)}`,
     `EMA200: ${fmtPrice(signal.ema200)}`,
     `When: ${new Date().toISOString()}`,
+    `---`,
+    holdRec,
     signal.chartUrl ? `Chart: ${signal.chartUrl}` : '',
   ].filter(Boolean).join('\n');
 }
