@@ -273,9 +273,15 @@ function createPostgresDb(): DbConn {
   const pool = new Pool({
     connectionString: url,
     ssl,
-    max: readIntEnv('PG_POOL_MAX', 10, 1, 100),
-    idleTimeoutMillis: readIntEnv('PG_IDLE_TIMEOUT_MS', 30_000, 1_000, 300_000),
-    connectionTimeoutMillis: readIntEnv('PG_CONNECT_TIMEOUT_MS', 5_000, 500, 120_000),
+    max: readIntEnv('PG_POOL_MAX', 5, 1, 100),
+    idleTimeoutMillis: readIntEnv('PG_IDLE_TIMEOUT_MS', 60_000, 1_000, 300_000),
+    connectionTimeoutMillis: readIntEnv('PG_CONNECT_TIMEOUT_MS', 30_000, 500, 120_000),
+  });
+
+  // Add connection error handler with retry
+  pool.on('error', (err: any) => {
+    console.error('[db] Unexpected pool error:', err.message);
+    // Don't crash - let retry logic handle it
   });
 
   const pgExec = async (sql: string, params?: DbParams) => {
@@ -519,11 +525,27 @@ function createPostgresDb(): DbConn {
 
   let schemaReady = false;
 
+  const ensureSchemaWithRetry = async (retries = 3, delayMs = 2000) => {
+    if (schemaReady) return;
+    for (let i = 0; i < retries; i++) {
+      try {
+        await ensureSchemaOnce();
+        await verifySchemaOnce();
+        schemaReady = true;
+        return;
+      } catch (err: any) {
+        const isLast = i === retries - 1;
+        console.warn(`[db] schema ensure attempt ${i + 1}/${retries} failed:`, err.message);
+        if (isLast) throw err;
+        console.log(`[db] retrying in ${delayMs}ms...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  };
+
   const ensureSchema = async () => {
     if (schemaReady) return;
-    await ensureSchemaOnce();
-    await verifySchemaOnce();
-    schemaReady = true;
+    await ensureSchemaWithRetry();
   };
 
   return {
