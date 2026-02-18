@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS signal_outcomes (
   exit_time BIGINT NOT NULL DEFAULT 0,
   window_status TEXT NOT NULL DEFAULT 'PARTIAL',
   outcome_state TEXT NOT NULL DEFAULT 'PENDING',
+  complete_reason TEXT,
   invalid_levels INTEGER NOT NULL DEFAULT 0,
   invalid_reason TEXT,
   ambiguous INTEGER NOT NULL DEFAULT 0,
@@ -287,6 +288,7 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS blocked_reasons_json TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS first_failed_gate TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS gate_score INTEGER;
 ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS outcome_debug_json TEXT;
+ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS complete_reason TEXT;
 ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS config_hash TEXT;
 ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS instance_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_scan_runs_config_hash ON scan_runs(config_hash);
@@ -317,6 +319,24 @@ UPDATE signal_outcomes
 SET computed_at = 0
 WHERE outcome_state = 'PENDING'
   AND computed_at <> 0;
+
+UPDATE signal_outcomes
+SET complete_reason = CASE
+  WHEN outcome_state <> 'COMPLETE' THEN NULL
+  WHEN exit_reason = 'TP2' THEN 'HIT_TP2'
+  WHEN exit_reason = 'TP1' THEN 'HIT_TP1'
+  WHEN exit_reason = 'STOP' THEN 'HIT_STOP'
+  WHEN exit_reason = 'TIMEOUT' OR exit_reason = 'EXPIRED_AFTER_15M' THEN 'TIMEOUT_NO_HIT'
+  WHEN trade_state = 'COMPLETED_TP2' THEN 'HIT_TP2'
+  WHEN trade_state = 'COMPLETED_TP1' THEN 'HIT_TP1'
+  WHEN trade_state = 'FAILED_SL' THEN 'HIT_STOP'
+  WHEN trade_state = 'EXPIRED' THEN 'TIMEOUT_NO_HIT'
+  WHEN result = 'TP2' THEN 'HIT_TP2'
+  WHEN result = 'TP1' THEN 'HIT_TP1'
+  WHEN result = 'SL' THEN 'HIT_STOP'
+  WHEN result = 'NONE' THEN 'TIMEOUT_NO_HIT'
+  ELSE complete_reason
+END;
 
 -- Resolver invariants (rollout-safe: NOT VALID, validate in a controlled migration window)
 DO $$
@@ -399,6 +419,21 @@ BEGIN
     ALTER TABLE signal_outcomes
       ADD CONSTRAINT so_complete_requires_complete_state
       CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
+      NOT VALID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'so_complete_requires_complete_reason'
+      AND conrelid = 'signal_outcomes'::regclass
+  ) THEN
+    ALTER TABLE signal_outcomes
+      ADD CONSTRAINT so_complete_requires_complete_reason
+      CHECK (window_status <> 'COMPLETE' OR complete_reason IS NOT NULL)
       NOT VALID;
   END IF;
 END $$;

@@ -52,6 +52,7 @@ const REQUIRED_PG_OUTCOME_CHECKS = [
   'so_complete_requires_resolved_at',
   'so_complete_requires_resolve_version',
   'so_complete_requires_complete_state',
+  'so_complete_requires_complete_reason',
 ] as const;
 type RequiredPgOutcomeCheck = (typeof REQUIRED_PG_OUTCOME_CHECKS)[number];
 
@@ -141,6 +142,22 @@ const PG_OUTCOME_CHECK_ENSURE_SQL: Record<RequiredPgOutcomeCheck, string> = {
         ALTER TABLE signal_outcomes
           ADD CONSTRAINT so_complete_requires_complete_state
           CHECK (window_status <> 'COMPLETE' OR outcome_state = 'COMPLETE')
+          NOT VALID;
+      END IF;
+    END $$;
+  `,
+  so_complete_requires_complete_reason: `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'so_complete_requires_complete_reason'
+          AND conrelid = 'signal_outcomes'::regclass
+      ) THEN
+        ALTER TABLE signal_outcomes
+          ADD CONSTRAINT so_complete_requires_complete_reason
+          CHECK (window_status <> 'COMPLETE' OR complete_reason IS NOT NULL)
           NOT VALID;
       END IF;
     END $$;

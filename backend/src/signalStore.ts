@@ -329,6 +329,7 @@ async function ensureSchema() {
       exit_time INTEGER NOT NULL DEFAULT 0,
       window_status TEXT NOT NULL DEFAULT 'PARTIAL',
       outcome_state TEXT NOT NULL DEFAULT 'PENDING',
+      complete_reason TEXT,
       invalid_levels INTEGER NOT NULL DEFAULT 0,
       invalid_reason TEXT,
       ambiguous INTEGER NOT NULL DEFAULT 0,
@@ -449,6 +450,7 @@ async function ensureSchema() {
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN exit_time INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN window_status TEXT NOT NULL DEFAULT 'PARTIAL'`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN outcome_state TEXT NOT NULL DEFAULT 'PENDING'`); } catch {}
+  try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN complete_reason TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN invalid_levels INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN invalid_reason TEXT`); } catch {}
   try { await d.exec(`ALTER TABLE signal_outcomes ADD COLUMN ambiguous INTEGER NOT NULL DEFAULT 0`); } catch {}
@@ -483,6 +485,7 @@ async function ensureSchema() {
         SET window_status = 'PARTIAL',
             trade_state = 'PENDING',
             result = 'NONE',
+            complete_reason = NULL,
             hit_sl = 0,
             hit_tp1 = 0,
             hit_tp2 = 0,
@@ -527,6 +530,7 @@ async function ensureSchema() {
             computed_at = 0,
             result = 'NONE',
             exit_reason = NULL,
+            complete_reason = NULL,
             hit_sl = 0,
             hit_tp1 = 0,
             hit_tp2 = 0,
@@ -583,10 +587,12 @@ async function ensureSchema() {
         SET
           window_status = 'PARTIAL',
           outcome_state = 'PENDING',
+          complete_reason = NULL,
           invalid_reason = 'STALE_RESOLVE',
           prev_snapshot = json_object(
             'outcome_state', outcome_state,
             'window_status', window_status,
+            'complete_reason', complete_reason,
             'result', result,
             'exit_reason', exit_reason,
             'trade_state', trade_state,
@@ -669,6 +675,21 @@ async function ensureSchema() {
           result = CASE
             WHEN outcome_state = 'COMPLETE' THEN result
             ELSE 'NONE'
+          END,
+          complete_reason = CASE
+            WHEN outcome_state = 'COMPLETE' THEN
+              CASE
+                WHEN exit_reason = 'TP2' THEN 'HIT_TP2'
+                WHEN exit_reason = 'TP1' THEN 'HIT_TP1'
+                WHEN exit_reason = 'STOP' THEN 'HIT_STOP'
+                WHEN exit_reason = 'TIMEOUT' OR exit_reason = 'EXPIRED_AFTER_15M' THEN 'TIMEOUT_NO_HIT'
+                WHEN result = 'TP2' THEN 'HIT_TP2'
+                WHEN result = 'TP1' THEN 'HIT_TP1'
+                WHEN result = 'SL' THEN 'HIT_STOP'
+                WHEN result = 'NONE' THEN 'TIMEOUT_NO_HIT'
+                ELSE complete_reason
+              END
+            ELSE NULL
           END
       `).run({ ver: OUTCOME_RESOLVE_VERSION });
 
@@ -693,6 +714,33 @@ async function ensureSchema() {
         END
       `).run();
       await d.prepare(`INSERT INTO meta(key, value) VALUES(?, ?)`).run('trade_state_v1', String(Date.now()));
+    }
+  } catch {}
+
+  // One-time migration: backfill complete_reason for COMPLETE outcomes
+  try {
+    const row = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get('complete_reason_v1') as { value?: string } | undefined;
+    if (!row?.value) {
+      await d.prepare(`
+        UPDATE signal_outcomes
+        SET complete_reason = CASE
+          WHEN outcome_state != 'COMPLETE' THEN NULL
+          WHEN exit_reason = 'TP2' THEN 'HIT_TP2'
+          WHEN exit_reason = 'TP1' THEN 'HIT_TP1'
+          WHEN exit_reason = 'STOP' THEN 'HIT_STOP'
+          WHEN exit_reason = 'TIMEOUT' OR exit_reason = 'EXPIRED_AFTER_15M' THEN 'TIMEOUT_NO_HIT'
+          WHEN trade_state = 'COMPLETED_TP2' THEN 'HIT_TP2'
+          WHEN trade_state = 'COMPLETED_TP1' THEN 'HIT_TP1'
+          WHEN trade_state = 'FAILED_SL' THEN 'HIT_STOP'
+          WHEN trade_state = 'EXPIRED' THEN 'TIMEOUT_NO_HIT'
+          WHEN result = 'TP2' THEN 'HIT_TP2'
+          WHEN result = 'TP1' THEN 'HIT_TP1'
+          WHEN result = 'SL' THEN 'HIT_STOP'
+          WHEN result = 'NONE' THEN 'TIMEOUT_NO_HIT'
+          ELSE complete_reason
+        END
+      `).run();
+      await d.prepare(`INSERT INTO meta(key, value) VALUES(?, ?)`).run('complete_reason_v1', String(Date.now()));
     }
   } catch {}
 
@@ -774,6 +822,25 @@ function isShortCategory(category: string | null | undefined) {
   return c === 'READY_TO_SELL' || c === 'BEST_SHORT_ENTRY' || c === 'EARLY_READY_SHORT';
 }
 
+type CompleteReason = 'HIT_TP1' | 'HIT_TP2' | 'HIT_STOP' | 'TIMEOUT_NO_HIT';
+
+function resolveCompleteReason(
+  exitReason: string | null | undefined,
+  tradeState?: string | null,
+): CompleteReason | null {
+  if (exitReason === 'TP2') return 'HIT_TP2';
+  if (exitReason === 'TP1') return 'HIT_TP1';
+  if (exitReason === 'STOP') return 'HIT_STOP';
+  if (exitReason === 'TIMEOUT' || exitReason === 'EXPIRED_AFTER_15M') return 'TIMEOUT_NO_HIT';
+
+  const ts = String(tradeState || '').toUpperCase();
+  if (ts === 'COMPLETED_TP2') return 'HIT_TP2';
+  if (ts === 'COMPLETED_TP1') return 'HIT_TP1';
+  if (ts === 'FAILED_SL') return 'HIT_STOP';
+  if (ts === 'EXPIRED') return 'TIMEOUT_NO_HIT';
+  return null;
+}
+
 async function getDbReady() {
   const d = getDb();
   await ensureSchema();
@@ -816,7 +883,7 @@ async function seedPendingOutcomeRowsForSignal(d: any, params: {
       tp1_hit_time, sl_hit_time, tp2_hit_time, bars_to_exit, time_to_first_hit_ms,
       mfe_pct, mae_pct,
       result, exit_reason, outcome_driver, trade_state, exit_price, exit_time,
-      window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
+      window_status, outcome_state, complete_reason, invalid_levels, invalid_reason, ambiguous,
       expired_after_15m, expired_reason,
       attempted_at, computed_at, resolved_at, resolve_version, outcome_debug_json
     )
@@ -831,7 +898,7 @@ async function seedPendingOutcomeRowsForSignal(d: any, params: {
       0, 0, 0, 0, 0,
       0, 0,
       'NONE', NULL, NULL, 'PENDING', @entryPrice, @entryTime,
-      'PARTIAL', 'PENDING', 0, @invalidReason, 0,
+      'PARTIAL', 'PENDING', NULL, 0, @invalidReason, 0,
       0, NULL,
       0, 0, 0, NULL, NULL
     FROM horizons h
@@ -884,7 +951,7 @@ async function backfillPendingOutcomeRowsOnce(d: any, days = OUTCOME_PENDING_BAC
         tp1_hit_time, sl_hit_time, tp2_hit_time, bars_to_exit, time_to_first_hit_ms,
         mfe_pct, mae_pct,
         result, exit_reason, outcome_driver, trade_state, exit_price, exit_time,
-        window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
+        window_status, outcome_state, complete_reason, invalid_levels, invalid_reason, ambiguous,
         expired_after_15m, expired_reason,
         attempted_at, computed_at, resolved_at, resolve_version, outcome_debug_json
       )
@@ -899,7 +966,7 @@ async function backfillPendingOutcomeRowsOnce(d: any, days = OUTCOME_PENDING_BAC
         0, 0, 0, 0, 0,
         0, 0,
         'NONE', NULL, NULL, 'PENDING', s.entry_price, s.entry_time,
-        'PARTIAL', 'PENDING', 0, 'FUTURE_WINDOW', 0,
+        'PARTIAL', 'PENDING', NULL, 0, 'FUTURE_WINDOW', 0,
         0, NULL,
         0, 0, 0, NULL, NULL
       FROM recent_signals s
@@ -923,45 +990,84 @@ async function backfillPendingOutcomeRowsOnce(d: any, days = OUTCOME_PENDING_BAC
 }
 
 async function normalizeLegacyOutcomeStatesOnce(d: any) {
-  const key = 'outcome_state_normalized_v2';
+  const stateKey = 'outcome_state_normalized_v2';
+  const reasonKey = 'outcome_complete_reason_normalized_v1';
+  let needsStateNormalization = true;
+  let needsReasonNormalization = true;
   try {
-    const row = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as { value?: string } | undefined;
-    if (row?.value) return;
+    const row = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(stateKey) as { value?: string } | undefined;
+    if (row?.value) needsStateNormalization = false;
+  } catch {}
+  try {
+    const row = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(reasonKey) as { value?: string } | undefined;
+    if (row?.value) needsReasonNormalization = false;
   } catch {}
 
+  if (!needsStateNormalization && !needsReasonNormalization) return;
+
   try {
-    await d.prepare(`
-      UPDATE signal_outcomes
-      SET window_status = CASE
-        WHEN window_status LIKE 'COMPLETE_%' THEN 'COMPLETE'
-        WHEN window_status = 'PENDING' THEN 'PARTIAL'
-        WHEN COALESCE(TRIM(window_status), '') = '' THEN 'PARTIAL'
-        ELSE window_status
-      END
-    `).run();
+    if (needsStateNormalization) {
+      await d.prepare(`
+        UPDATE signal_outcomes
+        SET window_status = CASE
+          WHEN window_status LIKE 'COMPLETE_%' THEN 'COMPLETE'
+          WHEN window_status = 'PENDING' THEN 'PARTIAL'
+          WHEN COALESCE(TRIM(window_status), '') = '' THEN 'PARTIAL'
+          ELSE window_status
+        END
+      `).run();
 
-    await d.prepare(`
-      UPDATE signal_outcomes
-      SET outcome_state = CASE
-        WHEN outcome_state IN ('PENDING', 'COMPLETE', 'INVALID') THEN outcome_state
-        WHEN outcome_state LIKE 'COMPLETE_%' OR window_status = 'COMPLETE' THEN 'COMPLETE'
-        WHEN window_status = 'INVALID' OR invalid_levels = 1 THEN 'INVALID'
-        ELSE 'PENDING'
-      END
-    `).run();
+      await d.prepare(`
+        UPDATE signal_outcomes
+        SET outcome_state = CASE
+          WHEN outcome_state IN ('PENDING', 'COMPLETE', 'INVALID') THEN outcome_state
+          WHEN outcome_state LIKE 'COMPLETE_%' OR window_status = 'COMPLETE' THEN 'COMPLETE'
+          WHEN window_status = 'INVALID' OR invalid_levels = 1 THEN 'INVALID'
+          ELSE 'PENDING'
+        END
+      `).run();
 
-    await d.prepare(`
-      UPDATE signal_outcomes
-      SET computed_at = 0
-      WHERE outcome_state = 'PENDING'
-        AND computed_at <> 0
-    `).run();
+      await d.prepare(`
+        UPDATE signal_outcomes
+        SET computed_at = 0
+        WHERE outcome_state = 'PENDING'
+          AND computed_at <> 0
+      `).run();
+    }
+
+    if (needsReasonNormalization) {
+      await d.prepare(`
+        UPDATE signal_outcomes
+        SET complete_reason = CASE
+          WHEN outcome_state != 'COMPLETE' THEN NULL
+          WHEN exit_reason = 'TP2' THEN 'HIT_TP2'
+          WHEN exit_reason = 'TP1' THEN 'HIT_TP1'
+          WHEN exit_reason = 'STOP' THEN 'HIT_STOP'
+          WHEN exit_reason = 'TIMEOUT' OR exit_reason = 'EXPIRED_AFTER_15M' THEN 'TIMEOUT_NO_HIT'
+          WHEN trade_state = 'COMPLETED_TP2' THEN 'HIT_TP2'
+          WHEN trade_state = 'COMPLETED_TP1' THEN 'HIT_TP1'
+          WHEN trade_state = 'FAILED_SL' THEN 'HIT_STOP'
+          WHEN trade_state = 'EXPIRED' THEN 'TIMEOUT_NO_HIT'
+          WHEN result = 'TP2' THEN 'HIT_TP2'
+          WHEN result = 'TP1' THEN 'HIT_TP1'
+          WHEN result = 'SL' THEN 'HIT_STOP'
+          WHEN result = 'NONE' THEN 'TIMEOUT_NO_HIT'
+          ELSE complete_reason
+        END
+      `).run();
+    }
   } catch (e) {
     console.warn('[outcomes] legacy outcome-state normalization failed', String(e));
   }
 
   try {
-    await d.prepare(`INSERT INTO meta(key, value) VALUES(?, ?)`).run(key, String(Date.now()));
+    const now = String(Date.now());
+    if (needsStateNormalization) {
+      await d.prepare(`INSERT INTO meta(key, value) VALUES(?, ?)`).run(stateKey, now);
+    }
+    if (needsReasonNormalization) {
+      await d.prepare(`INSERT INTO meta(key, value) VALUES(?, ?)`).run(reasonKey, now);
+    }
   } catch {}
 }
 
@@ -1221,6 +1327,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
           trade_state = 'PENDING',
           result = 'NONE',
           exit_reason = NULL,
+          complete_reason = NULL,
           outcome_driver = NULL,
           invalid_levels = 0,
           invalid_reason = 'STALE_SIGNAL',
@@ -2142,6 +2249,9 @@ async function computeOneOutcome(
     else if (out.exitReason === 'STOP') tradeState = 'FAILED_SL';
     else tradeState = 'EXPIRED';
   }
+  const completeReason = outcomeState === 'COMPLETE'
+    ? resolveCompleteReason(out.exitReason, tradeState)
+    : null;
 
   let outcomeDriver: string | null = null;
   if (windowStatus === 'COMPLETE' && !invalidLevels && tradeState === 'FAILED_SL') {
@@ -2216,7 +2326,7 @@ async function computeOneOutcome(
       bars_to_exit,
       mfe_pct, mae_pct,
       result, exit_reason, outcome_driver, trade_state, exit_price, exit_time,
-      window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
+      window_status, outcome_state, complete_reason, invalid_levels, invalid_reason, ambiguous,
       expired_after_15m, expired_reason,
       attempted_at, computed_at, resolved_at, resolve_version,
       outcome_debug_json
@@ -2230,7 +2340,7 @@ async function computeOneOutcome(
       @bars_to_exit,
       @mfe_pct, @mae_pct,
       @result, @exit_reason, @outcome_driver, @trade_state, @exit_price, @exit_time,
-      @window_status, @outcome_state, @invalid_levels, @invalid_reason, @ambiguous,
+      @window_status, @outcome_state, @complete_reason, @invalid_levels, @invalid_reason, @ambiguous,
       @expired_after_15m, @expired_reason,
       @attempted_at, @computed_at, @resolved_at, @resolve_version,
       @outcome_debug_json
@@ -2274,6 +2384,7 @@ async function computeOneOutcome(
       exit_time=excluded.exit_time,
       window_status=excluded.window_status,
       outcome_state=excluded.outcome_state,
+      complete_reason=excluded.complete_reason,
       invalid_levels=excluded.invalid_levels,
       invalid_reason=excluded.invalid_reason,
       ambiguous=excluded.ambiguous,
@@ -2326,6 +2437,7 @@ async function computeOneOutcome(
     exit_time: canCompute ? out.exitTime : startTime,
     window_status: windowStatus,
     outcome_state: outcomeState,
+    complete_reason: completeReason,
     invalid_levels: invalidLevels ? 1 : 0,
     invalid_reason: outcomeState === 'COMPLETE' ? null : invalidReason,
     ambiguous: canCompute ? out.ambiguous : 0,
@@ -2536,7 +2648,7 @@ export async function updateOutcomesOnce() {
                 tp1_hit_time, sl_hit_time, tp2_hit_time, time_to_first_hit_ms,
                 mfe_pct, mae_pct,
                 result, exit_reason, trade_state, exit_price, exit_time,
-                window_status, outcome_state, invalid_levels, invalid_reason, ambiguous,
+                window_status, outcome_state, complete_reason, invalid_levels, invalid_reason, ambiguous,
                 attempted_at, computed_at, resolved_at, resolve_version
               ) VALUES (
                 @signal_id, @horizon_min, @entry_time, @entry_candle_open_time, @entry_rule, @start_time, @end_time,
@@ -2547,12 +2659,13 @@ export async function updateOutcomesOnce() {
                 0, 0, 0, 0,
                 0, 0,
                 'NONE', NULL, 'PENDING', 0, 0,
-                'PARTIAL', 'PENDING', 0, 'API_ERROR', 0,
+                'PARTIAL', 'PENDING', NULL, 0, 'API_ERROR', 0,
                 @attempted_at, @computed_at, 0, NULL
               )
               ON CONFLICT(signal_id, horizon_min) DO UPDATE SET
                 window_status=excluded.window_status,
                 outcome_state=excluded.outcome_state,
+                complete_reason=excluded.complete_reason,
                 invalid_reason=excluded.invalid_reason,
                 attempted_at=excluded.attempted_at,
                 computed_at=excluded.computed_at
@@ -3777,6 +3890,7 @@ export async function listOutcomes(params: {
       o.mae_pct as "maePct",
       o.result as "result",
       o.exit_reason as "exitReason",
+      o.complete_reason as "completeReason",
       o.outcome_driver as "outcomeDriver",
       o.trade_state as "tradeState",
       o.exit_price as "exitPrice",
@@ -3899,6 +4013,7 @@ export async function listRecentOutcomes(params: {
       o.outcome_state as "outcomeState",
       o.result as "result",
       o.exit_reason as "exitReason",
+      o.complete_reason as "completeReason",
       o.mfe_pct as "mfePct",
       o.mae_pct as "maePct",
       o.bars_to_exit as "barsToExit",
@@ -4136,6 +4251,7 @@ export async function rebuildOutcomesByFilter(params: {
         trade_state = 'PENDING',
         result = 'NONE',
         exit_reason = NULL,
+        complete_reason = NULL,
         outcome_driver = NULL,
         hit_sl = 0,
         hit_tp1 = 0,
@@ -4378,6 +4494,7 @@ export async function getSignalById(id: number) {
       mae_pct as maePct,
       result as result,
       exit_reason as exitReason,
+      complete_reason as completeReason,
       outcome_driver as outcomeDriver,
       trade_state as tradeState,
       exit_price as exitPrice,
