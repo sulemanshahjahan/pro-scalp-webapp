@@ -1162,7 +1162,7 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
 
   let signalId: number | null = null;
   if (shouldUpsertSignal) {
-    await d.prepare(`
+    const insertedRow = await d.prepare(`
       INSERT INTO signals (
         symbol, category, time, preset, strategy_version,
         threshold_vwap_distance_pct, threshold_vol_spike_x, threshold_atr_guard_pct,
@@ -1243,7 +1243,8 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
         market_json=excluded.market_json,
         reasons_json=excluded.reasons_json,
         updated_at=excluded.updated_at
-    `).run({
+      RETURNING id
+    `).get({
       symbol: sig.symbol,
       category: sig.category,
       time: signalClose,
@@ -1306,21 +1307,28 @@ export async function recordSignal(sig: Signal, preset?: string): Promise<number
 
       created_at: now,
       updated_at: now,
-    });
+    }) as { id: number | string } | undefined;
+    
+    signalId = Number(insertedRow?.id ?? 0) || null;
 
-    const row = await d
-      .prepare(`SELECT id FROM signals WHERE symbol=? AND category=? AND time=? AND config_hash=?`)
-      .get(sig.symbol, sig.category, signalClose, configHash) as { id: number | string } | undefined;
-    signalId = Number(row?.id ?? 0) || null;
+    if (!signalId) {
+      console.warn(`[recordSignal] INSERT did not return id for: ${sig.symbol} ${sig.category} @ ${signalClose}`);
+    }
 
     if (signalId) {
-      await seedPendingOutcomeRowsForSignal(d, {
-        signalId,
-        entryTime: entryTimeAligned,
-        entryCandleOpenTime,
-        entryRule: ENTRY_RULE,
-        entryPrice: Number(sig.price),
-      });
+      try {
+        await seedPendingOutcomeRowsForSignal(d, {
+          signalId,
+          entryTime: entryTimeAligned,
+          entryCandleOpenTime,
+          entryRule: ENTRY_RULE,
+          entryPrice: Number(sig.price),
+        });
+        console.log(`[recordSignal] Seeded outcomes for signal ${signalId} (${sig.symbol} ${sig.category})`);
+      } catch (seedErr) {
+        console.error(`[recordSignal] FAILED to seed outcomes for signal ${signalId}:`, seedErr);
+        // Don't throw - we still want the signal to be recorded even if outcome seeding fails
+      }
 
       // Any upserted signal payload can change outcome math; force recompute from pending state.
       await d.prepare(`
