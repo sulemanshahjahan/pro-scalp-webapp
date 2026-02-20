@@ -1736,7 +1736,104 @@ export async function backfillManagedPnlForCompleted(
         expiresAt: expiresAt,
       };
       
-      const managedPnl = evaluateManagedPnl(managedPnlInput, evaluationCandles);
+      let managedPnl = evaluateManagedPnl(managedPnlInput, evaluationCandles);
+      
+      // DIRECT FALLBACK: If managedPnl returned null managedR for a completed trade,
+      // assign values directly based on official status
+      const riskUsd = getRiskPerTradeUsd();
+      if (managedPnl.managedR === null && storedStatus) {
+        console.log(`[extended-outcomes] Using direct fallback for ${signalId}, status: ${storedStatus}`);
+        
+        if (storedStatus === 'WIN_TP2' || storedTp2At) {
+          // TP2 hit = +1.5R
+          managedPnl = {
+            ...managedPnl,
+            managedStatus: 'CLOSED_TP2',
+            managedR: 1.5,
+            managedPnlUsd: 1.5 * riskUsd,
+            realizedR: 1.5,
+            unrealizedRunnerR: null,
+            liveManagedR: 1.5,
+            tp1PartialAt: storedFirstTp1At,
+            runnerBeAt: null,
+            runnerExitAt: storedTp2At || expiresAt,
+            runnerExitReason: 'TP2',
+            timeoutExitPrice: null,
+            riskUsdSnapshot: riskUsd,
+          };
+        } else if (storedStatus === 'LOSS_STOP' && storedStopAt) {
+          // Check if TP1 was hit before stop
+          if (storedFirstTp1At && storedFirstTp1At < storedStopAt) {
+            // TP1 then stop (at BE) = +0.5R
+            managedPnl = {
+              ...managedPnl,
+              managedStatus: 'CLOSED_BE_AFTER_TP1',
+              managedR: 0.5,
+              managedPnlUsd: 0.5 * riskUsd,
+              realizedR: 0.5,
+              unrealizedRunnerR: null,
+              liveManagedR: 0.5,
+              tp1PartialAt: storedFirstTp1At,
+              runnerBeAt: storedStopAt,
+              runnerExitAt: storedStopAt,
+              runnerExitReason: 'BREAK_EVEN',
+              timeoutExitPrice: null,
+              riskUsdSnapshot: riskUsd,
+            };
+          } else {
+            // Stop before TP1 = -1.0R
+            managedPnl = {
+              ...managedPnl,
+              managedStatus: 'CLOSED_STOP',
+              managedR: -1.0,
+              managedPnlUsd: -1.0 * riskUsd,
+              realizedR: -1.0,
+              unrealizedRunnerR: null,
+              liveManagedR: -1.0,
+              tp1PartialAt: null,
+              runnerBeAt: null,
+              runnerExitAt: storedStopAt,
+              runnerExitReason: 'STOP_BEFORE_TP1',
+              timeoutExitPrice: null,
+              riskUsdSnapshot: riskUsd,
+            };
+          }
+        } else if (storedStatus === 'WIN_TP1' && storedFirstTp1At) {
+          // TP1 hit, no TP2, timeout = +0.5R (conservative: assume BE hit)
+          managedPnl = {
+            ...managedPnl,
+            managedStatus: 'CLOSED_BE_AFTER_TP1',
+            managedR: 0.5,
+            managedPnlUsd: 0.5 * riskUsd,
+            realizedR: 0.5,
+            unrealizedRunnerR: null,
+            liveManagedR: 0.5,
+            tp1PartialAt: storedFirstTp1At,
+            runnerBeAt: expiresAt, // Assume BE at expiry
+            runnerExitAt: expiresAt,
+            runnerExitReason: 'BREAK_EVEN',
+            timeoutExitPrice: null,
+            riskUsdSnapshot: riskUsd,
+          };
+        } else if (storedStatus === 'FLAT_TIMEOUT_24H') {
+          // No TP1, timeout = 0R (conservative)
+          managedPnl = {
+            ...managedPnl,
+            managedStatus: 'CLOSED_TIMEOUT',
+            managedR: 0,
+            managedPnlUsd: 0,
+            realizedR: 0,
+            unrealizedRunnerR: null,
+            liveManagedR: 0,
+            tp1PartialAt: null,
+            runnerBeAt: null,
+            runnerExitAt: expiresAt,
+            runnerExitReason: 'TIMEOUT_MARKET',
+            timeoutExitPrice: signal.entryPrice, // Assume exit at entry
+            riskUsdSnapshot: riskUsd,
+          };
+        }
+      }
       
       // Update only the managed PnL fields
       const now = Date.now();
