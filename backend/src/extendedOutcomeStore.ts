@@ -1683,10 +1683,20 @@ export async function backfillManagedPnlForCompleted(
   let updated = 0;
   let errors = 0;
 
+  console.log(`[extended-outcomes] backfillManagedPnlForCompleted: found ${completedMissingManaged.length} rows to process`);
+  
   for (const row of completedMissingManaged) {
     processed++;
     try {
       const signalId = Number(row.signal_id);
+      const storedStatus = String(row.status);
+      
+      console.log(`[extended-outcomes] Processing signal ${signalId}:`, {
+        status: storedStatus,
+        firstTp1At: row.first_tp1_at,
+        tp2At: row.tp2_at,
+        stopAt: row.stop_at,
+      });
       
       const signal: ExtendedOutcomeInput = {
         signalId: signalId,
@@ -1713,9 +1723,7 @@ export async function backfillManagedPnlForCompleted(
       // Evaluate with the actual outcome data
       const result = await evaluateExtended24hOutcome(signal, evaluationCandles);
       
-      // Force the status to match the stored status (in case candle data is incomplete)
-      // This ensures we get the right managed PnL based on the official outcome
-      const storedStatus = String(row.status) as ExtendedOutcomeStatus;
+      // Get stored timestamps for fallback logic
       const storedFirstTp1At = row.first_tp1_at != null ? Number(row.first_tp1_at) : null;
       const storedTp2At = row.tp2_at != null ? Number(row.tp2_at) : null;
       const storedStopAt = row.stop_at != null ? Number(row.stop_at) : null;
@@ -1741,10 +1749,12 @@ export async function backfillManagedPnlForCompleted(
       // DIRECT FALLBACK: If managedPnl returned null managedR for a completed trade,
       // assign values directly based on official status
       const riskUsd = getRiskPerTradeUsd();
+      console.log(`[extended-outcomes] Checking fallback: managedR=${managedPnl.managedR}, status='${storedStatus}', tp2At=${storedTp2At}, stopAt=${storedStopAt}, firstTp1At=${storedFirstTp1At}`);
+      
       if (managedPnl.managedR === null && storedStatus) {
-        console.log(`[extended-outcomes] Using direct fallback for ${signalId}, status: ${storedStatus}`);
+        console.log(`[extended-outcomes] Using direct fallback for ${signalId}, status: '${storedStatus}'`);
         
-        if (storedStatus === 'WIN_TP2' || storedTp2At) {
+        if (storedStatus === 'WIN_TP2' || storedStatus.includes('WIN') && storedStatus.includes('TP2') || storedTp2At) {
           // TP2 hit = +1.5R
           managedPnl = {
             ...managedPnl,
@@ -1761,7 +1771,7 @@ export async function backfillManagedPnlForCompleted(
             timeoutExitPrice: null,
             riskUsdSnapshot: riskUsd,
           };
-        } else if (storedStatus === 'LOSS_STOP' && storedStopAt) {
+        } else if ((storedStatus === 'LOSS_STOP' || storedStatus.includes('LOSS') && storedStatus.includes('STOP')) && storedStopAt) {
           // Check if TP1 was hit before stop
           if (storedFirstTp1At && storedFirstTp1At < storedStopAt) {
             // TP1 then stop (at BE) = +0.5R
@@ -1798,7 +1808,7 @@ export async function backfillManagedPnlForCompleted(
               riskUsdSnapshot: riskUsd,
             };
           }
-        } else if (storedStatus === 'WIN_TP1' && storedFirstTp1At) {
+        } else if ((storedStatus === 'WIN_TP1' || storedStatus.includes('WIN') && storedStatus.includes('TP1')) && storedFirstTp1At) {
           // TP1 hit, no TP2, timeout = +0.5R (conservative: assume BE hit)
           managedPnl = {
             ...managedPnl,
@@ -1815,7 +1825,7 @@ export async function backfillManagedPnlForCompleted(
             timeoutExitPrice: null,
             riskUsdSnapshot: riskUsd,
           };
-        } else if (storedStatus === 'FLAT_TIMEOUT_24H') {
+        } else if (storedStatus === 'FLAT_TIMEOUT_24H' || storedStatus.includes('FLAT') || storedStatus.includes('TIMEOUT')) {
           // No TP1, timeout = 0R (conservative)
           managedPnl = {
             ...managedPnl,
