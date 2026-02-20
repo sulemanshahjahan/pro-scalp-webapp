@@ -580,7 +580,16 @@ export async function getOrCreateExtendedOutcome(
 
   // Create new record
   const direction = getSignalDirection(signal.category);
-  const expiresAt = signal.signalTime + EXTENDED_WINDOW_MS;
+  const expiresAt = Math.floor(Number(signal.signalTime)) + EXTENDED_WINDOW_MS;
+  
+  // Ensure all values are proper numbers for PostgreSQL
+  const signalIdNum = Math.floor(Number(signal.signalId));
+  const signalTimeNum = Math.floor(Number(signal.signalTime));
+  const entryPriceNum = Number(signal.entryPrice);
+  const stopPriceNum = signal.stopPrice != null ? Number(signal.stopPrice) : null;
+  const tp1PriceNum = signal.tp1Price != null ? Number(signal.tp1Price) : null;
+  const tp2PriceNum = signal.tp2Price != null ? Number(signal.tp2Price) : null;
+  const candlesExpected = Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS);
 
   const result = await d.prepare(`
     INSERT INTO extended_outcomes (
@@ -591,18 +600,18 @@ export async function getOrCreateExtendedOutcome(
       resolve_version
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
   `).run(
-    signal.signalId,
+    signalIdNum,
     signal.symbol,
     signal.category,
     direction,
-    signal.signalTime,
-    signal.signalTime,
+    signalTimeNum,
+    signalTimeNum,
     expiresAt,
-    signal.entryPrice,
-    signal.stopPrice,
-    signal.tp1Price,
-    signal.tp2Price,
-    Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS),
+    entryPriceNum,
+    stopPriceNum,
+    tp1PriceNum,
+    tp2PriceNum,
+    candlesExpected,
     RESOLVE_VERSION
   );
 
@@ -624,7 +633,23 @@ export async function updateExtendedOutcome(
   const d = getDb();
 
   const now = Date.now();
-  const completedAt = result.completed ? now : null;
+  const completedAt = result.completed ? Math.floor(now) : null;
+  
+  // Ensure all numeric values are proper numbers for PostgreSQL
+  const signalIdNum = Math.floor(Number(signalId));
+  const firstTp1AtNum = result.firstTp1At != null ? Math.floor(Number(result.firstTp1At)) : null;
+  const tp2AtNum = result.tp2At != null ? Math.floor(Number(result.tp2At)) : null;
+  const stopAtNum = result.stopAt != null ? Math.floor(Number(result.stopAt)) : null;
+  const timeToFirstHit = result.timeToFirstHitSeconds != null ? Math.floor(Number(result.timeToFirstHitSeconds)) : null;
+  const timeToTp1 = result.timeToTp1Seconds != null ? Math.floor(Number(result.timeToTp1Seconds)) : null;
+  const timeToTp2 = result.timeToTp2Seconds != null ? Math.floor(Number(result.timeToTp2Seconds)) : null;
+  const timeToStop = result.timeToStopSeconds != null ? Math.floor(Number(result.timeToStopSeconds)) : null;
+  const mfePct = result.maxFavorableExcursionPct != null ? Number(result.maxFavorableExcursionPct) : null;
+  const maePct = result.maxAdverseExcursionPct != null ? Number(result.maxAdverseExcursionPct) : null;
+  const coverage = Math.floor(Number(result.coveragePct));
+  const nCandles = Math.floor(Number(result.nCandlesEvaluated));
+  const lastEvalAt = Math.floor(now);
+  const updatedAt = Math.floor(now);
 
   await d.prepare(`
     UPDATE extended_outcomes SET
@@ -648,21 +673,21 @@ export async function updateExtendedOutcome(
   `).run(
     result.status,
     completedAt,
-    result.firstTp1At,
-    result.tp2At,
-    result.stopAt,
-    result.timeToFirstHitSeconds,
-    result.timeToTp1Seconds,
-    result.timeToTp2Seconds,
-    result.timeToStopSeconds,
-    result.maxFavorableExcursionPct,
-    result.maxAdverseExcursionPct,
-    result.coveragePct,
-    result.nCandlesEvaluated,
-    now,
+    firstTp1AtNum,
+    tp2AtNum,
+    stopAtNum,
+    timeToFirstHit,
+    timeToTp1,
+    timeToTp2,
+    timeToStop,
+    mfePct,
+    maePct,
+    coverage,
+    nCandles,
+    lastEvalAt,
     JSON.stringify(result.debug),
-    now,
-    signalId
+    updatedAt,
+    signalIdNum
   );
 }
 
@@ -971,16 +996,17 @@ export async function backfillExtendedOutcomes(
 
   for (const signal of signals) {
     try {
+      // Ensure all values are properly typed as numbers
       await getOrCreateExtendedOutcome({
-        signalId: signal.id,
-        symbol: signal.symbol,
-        category: signal.category,
-        direction: getSignalDirection(signal.category),
-        signalTime: signal.time,
-        entryPrice: signal.price,
-        stopPrice: signal.stop,
-        tp1Price: signal.tp1,
-        tp2Price: signal.tp2,
+        signalId: Number(signal.id),
+        symbol: String(signal.symbol),
+        category: String(signal.category),
+        direction: getSignalDirection(String(signal.category)),
+        signalTime: Number(signal.time),
+        entryPrice: Number(signal.price),
+        stopPrice: signal.stop != null ? Number(signal.stop) : null,
+        tp1Price: signal.tp1 != null ? Number(signal.tp1) : null,
+        tp2Price: signal.tp2 != null ? Number(signal.tp2) : null,
       });
       processed++;
     } catch (e) {
@@ -1016,16 +1042,17 @@ export async function reevaluatePendingExtendedOutcomes(
 
   for (const outcome of pending) {
     try {
+      // Ensure all values are properly typed as numbers
       const signal: ExtendedOutcomeInput = {
-        signalId: outcome.signalId,
-        symbol: outcome.symbol,
-        category: outcome.category,
-        direction: outcome.direction as SignalDirection,
-        signalTime: outcome.signalTime,
-        entryPrice: outcome.entryPrice,
-        stopPrice: outcome.stopPrice,
-        tp1Price: outcome.tp1Price,
-        tp2Price: outcome.tp2Price,
+        signalId: Number(outcome.signalId),
+        symbol: String(outcome.symbol),
+        category: String(outcome.category),
+        direction: String(outcome.direction) as SignalDirection,
+        signalTime: Number(outcome.signalTime),
+        entryPrice: Number(outcome.entryPrice),
+        stopPrice: outcome.stopPrice != null ? Number(outcome.stopPrice) : null,
+        tp1Price: outcome.tp1Price != null ? Number(outcome.tp1Price) : null,
+        tp2Price: outcome.tp2Price != null ? Number(outcome.tp2Price) : null,
       };
 
       const result = await evaluateAndUpdateExtendedOutcome(signal);
