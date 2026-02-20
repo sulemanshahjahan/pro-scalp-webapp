@@ -225,6 +225,15 @@ export function evaluateManagedPnl(
     expiresAt,
   } = input;
 
+  console.log('[managed-pnl] Evaluating:', { 
+    status, 
+    completed, 
+    firstTp1At, 
+    tp2At, 
+    stopAt,
+    candles: candles.length 
+  });
+
   // Initialize debug
   const debug: ManagedPnlDebug = {
     fullPositionStopHit: false,
@@ -529,11 +538,14 @@ export function evaluateManagedPnl(
 
   // Check if completed via extended outcome status (PRIORITY PATH)
   // This is the MAIN path for finalized outcomes - derive managed state from official status
+  console.log('[managed-pnl] Checking completed path:', { completed, status, hasFirstTp1At: !!firstTp1At, hasTp2At: !!tp2At, hasStopAt: !!stopAt });
+  
   if (completed || status === 'LOSS_STOP' || status === 'WIN_TP2' || status === 'WIN_TP1' || status === 'FLAT_TIMEOUT_24H') {
     
     // === LOSS_STOP ===
     // Stop was hit - determine if before or after TP1
     if (status === 'LOSS_STOP' && stopAt) {
+      console.log('[managed-pnl] LOSS_STOP path:', { firstTp1At, stopAt, tp1BeforeStop: firstTp1At && firstTp1At < stopAt });
       // If TP1 was hit BEFORE stop, it's a BE exit (+0.5R)
       // If no TP1 hit, it's a full stop loss (-1.0R)
       if (firstTp1At && firstTp1At < stopAt) {
@@ -571,6 +583,7 @@ export function evaluateManagedPnl(
     // === WIN_TP2 ===
     // TP2 was hit - full success (+1.5R)
     if (status === 'WIN_TP2' || tp2At) {
+      console.log('[managed-pnl] WIN_TP2 path:', { status, tp2At, realizedR: 1.5 });
       managedStatus = 'CLOSED_TP2';
       runnerExitReason = 'TP2';
       runnerExitAt = tp2At || expiresAt;
@@ -699,6 +712,7 @@ export function evaluateManagedPnl(
   }
 
   // Fallback to pending
+  console.log('[managed-pnl] Fallback path:', { firstTp1At, status, completed });
   return {
     managedStatus: firstTp1At ? 'PARTIAL_TP1_OPEN' : 'PENDING',
     managedR: null,

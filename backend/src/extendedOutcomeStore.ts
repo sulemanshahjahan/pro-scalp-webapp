@@ -877,6 +877,17 @@ export async function updateExtendedOutcome(
   const ext24TimeoutExitPrice = managed.timeoutExitPrice != null ? Number(managed.timeoutExitPrice) : null;
   const ext24RiskUsdSnapshot = managed.riskUsdSnapshot != null ? Number(managed.riskUsdSnapshot) : null;
 
+  // Debug logging for managed PnL
+  console.log('[extended-outcomes] Saving managed PnL:', {
+    signalId,
+    status: result.status,
+    completed: result.completed,
+    managedStatus: ext24ManagedStatus,
+    managedR: ext24ManagedR,
+    managedPnlUsd: ext24ManagedPnlUsd,
+    runnerExitReason: ext24RunnerExitReason,
+  });
+
   await d.prepare(`
     UPDATE extended_outcomes SET
       status = ?,
