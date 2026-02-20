@@ -41,6 +41,18 @@ import {
   updateOutcomesOnce,
   startOutcomeUpdater
 } from './signalStore.js';
+import {
+  listExtendedOutcomes,
+  getExtendedOutcomeStats,
+  backfillExtendedOutcomes,
+  reevaluatePendingExtendedOutcomes,
+  forceReevaluateRange,
+  getSignalDirection,
+  evaluateAndUpdateExtendedOutcome,
+  listExtendedOutcomesWithComparison,
+  getImprovementStats,
+  type ExtendedOutcomeInput,
+} from './extendedOutcomeStore.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -2594,6 +2606,181 @@ app.post('/api/outcomes/delete', async (req, res) => {
 
     const deleted = await deleteOutcomesBulk(cleaned);
     res.json({ ok: true, deleted });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Extended Outcomes (24h) API
+app.get('/api/extended-outcomes', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
+    const category = String((req.query as any)?.category || '').trim() || undefined;
+    const status = String((req.query as any)?.status || '').trim() || undefined;
+    const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const completedRaw = String((req.query as any)?.completed || '').toLowerCase();
+    const completed = ['1', 'true', 'yes'].includes(completedRaw) ? true
+      : ['0', 'false', 'no'].includes(completedRaw) ? false : undefined;
+    const limit = Number((req.query as any)?.limit);
+    const offset = Number((req.query as any)?.offset);
+    const sort = String((req.query as any)?.sort || '').trim() || undefined;
+
+    const out = await listExtendedOutcomes({
+      start: Number.isFinite(start) ? start : undefined,
+      end: Number.isFinite(end) ? end : undefined,
+      symbol,
+      category,
+      status: status as any,
+      direction: direction as any,
+      completed,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+      sort: sort as any,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.get('/api/extended-outcomes/stats', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
+    const category = String((req.query as any)?.category || '').trim() || undefined;
+    const direction = String((req.query as any)?.direction || '').trim() || undefined;
+
+    const out = await getExtendedOutcomeStats({
+      start: Number.isFinite(start) ? start : undefined,
+      end: Number.isFinite(end) ? end : undefined,
+      symbol,
+      category,
+      direction: direction as any,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.post('/api/extended-outcomes/backfill', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const days = Number((req.query as any)?.days);
+    const batchSize = Number((req.query as any)?.batchSize);
+    const sinceMs = Date.now() - (Number.isFinite(days) ? days : 7) * 24 * 60 * 60 * 1000;
+    const out = await backfillExtendedOutcomes(sinceMs, Number.isFinite(batchSize) ? batchSize : 50);
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.post('/api/extended-outcomes/reevaluate', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const limit = Number((req.query as any)?.limit);
+    const out = await reevaluatePendingExtendedOutcomes(Number.isFinite(limit) ? limit : 25);
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.post('/api/extended-outcomes/force-reevaluate', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return res.status(400).json({ ok: false, error: 'start and end required' });
+    }
+    const out = await forceReevaluateRange(start, end);
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Evaluate single signal's extended outcome
+app.post('/api/extended-outcomes/evaluate/:signalId', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const signalId = Number(req.params.signalId);
+    if (!Number.isFinite(signalId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid signalId' });
+    }
+
+    // Get signal details from DB
+    const signal = await getSignalById(signalId);
+    if (!signal) {
+      return res.status(404).json({ ok: false, error: 'Signal not found' });
+    }
+
+    const input: ExtendedOutcomeInput = {
+      signalId,
+      symbol: signal.symbol,
+      category: signal.category,
+      direction: getSignalDirection(signal.category),
+      signalTime: signal.time,
+      entryPrice: signal.price,
+      stopPrice: signal.stop,
+      tp1Price: signal.tp1,
+      tp2Price: signal.tp2,
+    };
+
+    const result = await evaluateAndUpdateExtendedOutcome(input);
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Get extended outcomes with 240m horizon comparison
+app.get('/api/extended-outcomes/comparison', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
+    const category = String((req.query as any)?.category || '').trim() || undefined;
+    const status = String((req.query as any)?.status || '').trim() || undefined;
+    const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const improvementsOnlyRaw = String((req.query as any)?.improvementsOnly || '').toLowerCase();
+    const improvementsOnly = ['1', 'true', 'yes'].includes(improvementsOnlyRaw);
+    const limit = Number((req.query as any)?.limit);
+    const offset = Number((req.query as any)?.offset);
+
+    const out = await listExtendedOutcomesWithComparison({
+      start: Number.isFinite(start) ? start : undefined,
+      end: Number.isFinite(end) ? end : undefined,
+      symbol,
+      category,
+      status: status as any,
+      direction: direction as any,
+      showImprovementsOnly: improvementsOnly,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Get improvement statistics (240m vs 24h)
+app.get('/api/extended-outcomes/improvements', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+
+    const out = await getImprovementStats({
+      start: Number.isFinite(start) ? start : undefined,
+      end: Number.isFinite(end) ? end : undefined,
+    });
+    res.json({ ok: true, ...out });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }

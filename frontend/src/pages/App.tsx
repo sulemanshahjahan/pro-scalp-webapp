@@ -7,6 +7,7 @@ import { enablePush, disablePush } from '../services/push'
 import StatsPage from '../pages/StatsPage'
 import TunePage from '../pages/TunePage'
 import TuningBundlesPage from '../pages/TuningBundlesPage'
+import ExtendedOutcomePage from '../pages/ExtendedOutcomePage'
 import { enableSoundSync, isSoundEnabled } from '../services/sound'
 import { playAlert } from '../services/sound'
 
@@ -18,11 +19,12 @@ const toApiPreset = (p: StorePreset): ApiPreset =>
   : p === 'Balanced'   ? 'BALANCED'
   : 'AGGRESSIVE';
 
-type Route = 'home' | 'stats' | 'tune' | 'bundles';
+type Route = 'home' | 'stats' | 'tune' | 'bundles' | 'extended';
 function getInitialRoute(): Route {
   if (window.location.pathname === '/stats') return 'stats';
   if (window.location.pathname === '/tune') return 'tune';
   if (window.location.pathname === '/bundles') return 'bundles';
+  if (window.location.pathname === '/extended') return 'extended';
   return 'home';
 }
 function navigate(to: Route) {
@@ -32,7 +34,9 @@ function navigate(to: Route) {
       ? '/tune'
       : to === 'bundles'
         ? '/bundles'
-        : '/';
+        : to === 'extended'
+          ? '/extended'
+          : '/';
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
@@ -52,6 +56,12 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('extended')}
+                className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
+              >
+                24h Outcomes
+              </button>
               <button
                 onClick={() => navigate('bundles')}
                 className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
@@ -82,6 +92,49 @@ export default function App() {
     );
   }
 
+  if (route === 'extended') {
+    return (
+      <div className="min-h-dvh px-3 pb-24 max-w-[90%] mx-auto">
+        <header className="sticky top-0 bg-bg/70 backdrop-blur z-10 py-3 border-b border-white/5">
+          <div className="flex items-center justify-between">
+            <div className="text-xl font-semibold">Pro Scalp</div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('bundles')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Bundles
+              </button>
+              <button
+                onClick={() => navigate('tune')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Tune
+              </button>
+              <button
+                onClick={() => navigate('stats')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Stats
+              </button>
+              <button
+                onClick={() => navigate('home')}
+                className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
+              >
+                Home
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 text-xs text-white/60">
+            24h Outcomes = TP1/TP2/Stop hits within 24 hours of signal.
+          </div>
+        </header>
+
+        <ExtendedOutcomePage />
+      </div>
+    );
+  }
+
   if (route === 'tune') {
     return (
       <div className="min-h-dvh px-3 pb-24 max-w-[90%] mx-auto">
@@ -89,6 +142,12 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('extended')}
+                className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
+              >
+                24h Outcomes
+              </button>
               <button
                 onClick={() => navigate('bundles')}
                 className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
@@ -126,6 +185,12 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('extended')}
+                className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
+              >
+                24h Outcomes
+              </button>
               <button
                 onClick={() => navigate('stats')}
                 className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
@@ -452,6 +517,12 @@ export default function App() {
               className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
             >
               Stats
+            </button>
+            <button
+              onClick={() => navigate('extended')}
+              className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
+            >
+              24h
             </button>
           </div>
         </div>

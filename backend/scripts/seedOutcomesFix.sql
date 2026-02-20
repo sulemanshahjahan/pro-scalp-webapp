@@ -1,0 +1,63 @@
+-- Seed missing outcomes for signal 1882 with ALL required fields
+INSERT INTO signal_outcomes (
+  signal_id, horizon_min, entry_time, entry_candle_open_time, entry_rule,
+  start_time, end_time, interval_min, n_candles, n_candles_expected, coverage_pct,
+  entry_price, open_price, close_price, max_high, min_low,
+  ret_pct, r_mult, r_close, r_mfe, r_mae, r_realized,
+  hit_sl, hit_tp1, hit_tp2, tp1_hit_time, sl_hit_time, tp2_hit_time,
+  time_to_first_hit_ms, bars_to_exit, mfe_pct, mae_pct,
+  result, exit_reason, outcome_driver, trade_state, exit_price, exit_time,
+  window_status, outcome_state, invalid_levels, expired_after_15m,
+  attempted_at, computed_at, resolved_at
+) VALUES
+(1882, 15, 1771413000000, 1771412700000, 'signal_close', 
+ 1771413000000, 1771413900000, 5, 0, 3, 0,
+ 191.5, 191.5, 191.5, 191.5, 191.5,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0,
+ 'NONE', NULL, NULL, 'PENDING', 191.5, 1771413000000,
+ 'PARTIAL', 'PENDING', 0, 0,
+ 0, 0, 0),
+
+(1882, 30, 1771413000000, 1771412700000, 'signal_close',
+ 1771413000000, 1771414800000, 5, 0, 6, 0,
+ 191.5, 191.5, 191.5, 191.5, 191.5,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0,
+ 'NONE', NULL, NULL, 'PENDING', 191.5, 1771413000000,
+ 'PARTIAL', 'PENDING', 0, 0,
+ 0, 0, 0),
+
+(1882, 60, 1771413000000, 1771412700000, 'signal_close',
+ 1771413000000, 1771416600000, 5, 0, 12, 0,
+ 191.5, 191.5, 191.5, 191.5, 191.5,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0,
+ 'NONE', NULL, NULL, 'PENDING', 191.5, 1771413000000,
+ 'PARTIAL', 'PENDING', 0, 0,
+ 0, 0, 0),
+
+(1882, 120, 1771413000000, 1771412700000, 'signal_close',
+ 1771413000000, 1771420200000, 5, 0, 24, 0,
+ 191.5, 191.5, 191.5, 191.5, 191.5,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0,
+ 'NONE', NULL, NULL, 'PENDING', 191.5, 1771413000000,
+ 'PARTIAL', 'PENDING', 0, 0,
+ 0, 0, 0),
+
+(1882, 240, 1771413000000, 1771412700000, 'signal_close',
+ 1771413000000, 1771427400000, 5, 0, 48, 0,
+ 191.5, 191.5, 191.5, 191.5, 191.5,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0, 0, 0,
+ 0, 0, 0, 0,
+ 'NONE', NULL, NULL, 'PENDING', 191.5, 1771413000000,
+ 'PARTIAL', 'PENDING', 0, 0,
+ 0, 0, 0)
+
+ON CONFLICT (signal_id, horizon_min) DO NOTHING;
