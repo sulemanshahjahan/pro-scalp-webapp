@@ -527,14 +527,29 @@ export function evaluateManagedPnl(
     }
   }
 
-  // Check if completed via extended outcome status
-  if (completed) {
-    // Determine final state from extended outcome
-    if (status === 'WIN_TP2' && tp2At) {
-      managedStatus = 'CLOSED_TP2';
-      runnerExitReason = 'TP2';
-      runnerExitAt = tp2At;
-      realizedR = 1.5;
+  // Check if completed via extended outcome status (PRIORITY PATH)
+  // This is the MAIN path for finalized outcomes - derive managed state from official status
+  if (completed || status === 'LOSS_STOP' || status === 'WIN_TP2' || status === 'WIN_TP1' || status === 'FLAT_TIMEOUT_24H') {
+    
+    // === LOSS_STOP ===
+    // Stop was hit - determine if before or after TP1
+    if (status === 'LOSS_STOP' && stopAt) {
+      // If TP1 was hit BEFORE stop, it's a BE exit (+0.5R)
+      // If no TP1 hit, it's a full stop loss (-1.0R)
+      if (firstTp1At && firstTp1At < stopAt) {
+        // TP1 hit, then stop hit (at BE)
+        managedStatus = 'CLOSED_BE_AFTER_TP1';
+        runnerExitReason = 'BREAK_EVEN';
+        runnerExitAt = stopAt;
+        runnerBeAt = stopAt;
+        realizedR = 0.5; // +0.5R from TP1 partial only
+      } else {
+        // Stop before TP1 - full loss
+        managedStatus = 'CLOSED_STOP';
+        runnerExitReason = 'STOP_BEFORE_TP1';
+        runnerExitAt = stopAt;
+        realizedR = -1.0;
+      }
       
       return {
         managedStatus,
@@ -543,7 +558,7 @@ export function evaluateManagedPnl(
         realizedR,
         unrealizedRunnerR: null,
         liveManagedR: realizedR,
-        tp1PartialAt,
+        tp1PartialAt: firstTp1At,
         runnerBeAt,
         runnerExitAt,
         runnerExitReason,
@@ -553,9 +568,35 @@ export function evaluateManagedPnl(
       };
     }
     
-    if ((status === 'WIN_TP1' || status === 'ACHIEVED_TP1') && !tp2At) {
-      // TP1 hit but TP2 not hit - check if BE was hit
-      // We need to scan candles between TP1 and expiry for BE hit
+    // === WIN_TP2 ===
+    // TP2 was hit - full success (+1.5R)
+    if (status === 'WIN_TP2' || tp2At) {
+      managedStatus = 'CLOSED_TP2';
+      runnerExitReason = 'TP2';
+      runnerExitAt = tp2At || expiresAt;
+      realizedR = 1.5;
+      
+      return {
+        managedStatus,
+        managedR: realizedR,
+        managedPnlUsd: realizedR * RISK_PER_TRADE_USD,
+        realizedR,
+        unrealizedRunnerR: null,
+        liveManagedR: realizedR,
+        tp1PartialAt: firstTp1At || tp1PartialAt,
+        runnerBeAt: null,
+        runnerExitAt,
+        runnerExitReason,
+        timeoutExitPrice: null,
+        riskUsdSnapshot: RISK_PER_TRADE_USD,
+        debug,
+      };
+    }
+    
+    // === WIN_TP1 or ACHIEVED_TP1 (no TP2) ===
+    // TP1 hit but TP2 not hit - need to determine if BE was hit or timeout
+    if ((status === 'WIN_TP1' || status === 'ACHIEVED_TP1') && firstTp1At && !tp2At) {
+      // Check if BE was hit after TP1 by scanning candles
       const beHitAfterTp1 = findBreakEvenHit(
         sortedCandles,
         tp1HitIndex + 1,
@@ -569,9 +610,10 @@ export function evaluateManagedPnl(
         managedStatus = 'CLOSED_BE_AFTER_TP1';
         runnerExitReason = 'BREAK_EVEN';
         runnerExitAt = beHitAfterTp1;
-        // realizedR stays +0.5R
+        realizedR = 0.5; // +0.5R from TP1 partial only
       } else {
         // Timeout with runner still active - close at market
+        // Use last candle close or entry as fallback
         const exitPrice = lastCandle ? lastCandle.close : entryPrice;
         timeoutExitPrice = exitPrice;
         
@@ -591,8 +633,39 @@ export function evaluateManagedPnl(
         realizedR,
         unrealizedRunnerR: null,
         liveManagedR: realizedR,
-        tp1PartialAt,
+        tp1PartialAt: firstTp1At,
         runnerBeAt,
+        runnerExitAt,
+        runnerExitReason,
+        timeoutExitPrice,
+        riskUsdSnapshot: RISK_PER_TRADE_USD,
+        debug,
+      };
+    }
+    
+    // === FLAT_TIMEOUT_24H ===
+    // No TP1, no stop - timeout with full position
+    if (status === 'FLAT_TIMEOUT_24H' && !firstTp1At && !tp2At) {
+      const exitPrice = lastCandle ? lastCandle.close : entryPrice;
+      timeoutExitPrice = exitPrice;
+      
+      // Calculate R for full position
+      const fullR = priceToR(direction, entryPrice, stopPrice!, exitPrice);
+      realizedR = fullR;
+      
+      managedStatus = 'CLOSED_TIMEOUT';
+      runnerExitReason = 'TIMEOUT_MARKET';
+      runnerExitAt = expiresAt;
+      
+      return {
+        managedStatus,
+        managedR: realizedR,
+        managedPnlUsd: realizedR * RISK_PER_TRADE_USD,
+        realizedR,
+        unrealizedRunnerR: null,
+        liveManagedR: realizedR,
+        tp1PartialAt: null,
+        runnerBeAt: null,
         runnerExitAt,
         runnerExitReason,
         timeoutExitPrice,
@@ -604,7 +677,7 @@ export function evaluateManagedPnl(
 
   // Still active with runner
   // Calculate unrealized runner value based on last price
-  if (lastCandle) {
+  if (lastCandle && firstTp1At) {
     const currentRunnerR = priceToR(direction, entryPrice, stopPrice!, lastCandle.close) * 0.5;
     unrealizedRunnerR = currentRunnerR;
     
@@ -615,7 +688,7 @@ export function evaluateManagedPnl(
       realizedR: 0.5,
       unrealizedRunnerR,
       liveManagedR: 0.5 + currentRunnerR,
-      tp1PartialAt,
+      tp1PartialAt: firstTp1At,
       runnerBeAt: null,
       runnerExitAt: null,
       runnerExitReason: null,
@@ -627,13 +700,13 @@ export function evaluateManagedPnl(
 
   // Fallback to pending
   return {
-    managedStatus: 'PENDING',
+    managedStatus: firstTp1At ? 'PARTIAL_TP1_OPEN' : 'PENDING',
     managedR: null,
     managedPnlUsd: null,
-    realizedR: 0,
+    realizedR: firstTp1At ? 0.5 : 0,
     unrealizedRunnerR: null,
-    liveManagedR: 0,
-    tp1PartialAt,
+    liveManagedR: firstTp1At ? 0.5 : 0,
+    tp1PartialAt: firstTp1At,
     runnerBeAt,
     runnerExitAt,
     runnerExitReason,
