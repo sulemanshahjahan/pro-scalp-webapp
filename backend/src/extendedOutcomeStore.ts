@@ -1156,26 +1156,59 @@ export async function reevaluatePendingExtendedOutcomes(
   const pending = await d.prepare(`
     SELECT 
       eo.id,
-      eo.signal_id as signalId,
+      eo.signal_id,
       eo.symbol,
       eo.category,
       eo.direction,
-      eo.signal_time as signalTime,
-      eo.entry_price as entryPrice,
-      eo.stop_price as stopPrice,
-      eo.tp1_price as tp1Price,
-      eo.tp2_price as tp2Price
+      eo.signal_time,
+      eo.entry_price,
+      eo.stop_price,
+      eo.tp1_price,
+      eo.tp2_price
     FROM extended_outcomes eo
     WHERE eo.completed_at IS NULL
     ORDER BY eo.last_evaluated_at ASC
     LIMIT ?
-  `).all(limit) as ExtendedOutcome[];
+  `).all(limit) as any[];
+
+  // Map snake_case to camelCase
+  const mappedPending: ExtendedOutcome[] = pending.map(row => ({
+    id: Number(row.id),
+    signalId: Number(row.signal_id),
+    symbol: String(row.symbol),
+    category: String(row.category),
+    direction: String(row.direction) as SignalDirection,
+    signalTime: Number(row.signal_time),
+    startedAt: Number(row.started_at),
+    expiresAt: Number(row.expires_at),
+    completedAt: row.completed_at != null ? Number(row.completed_at) : null,
+    entryPrice: Number(row.entry_price),
+    stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
+    tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
+    tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
+    status: String(row.status) as ExtendedOutcomeStatus,
+    firstTp1At: row.first_tp1_at != null ? Number(row.first_tp1_at) : null,
+    tp2At: row.tp2_at != null ? Number(row.tp2_at) : null,
+    stopAt: row.stop_at != null ? Number(row.stop_at) : null,
+    timeToFirstHitSeconds: row.time_to_first_hit_seconds != null ? Number(row.time_to_first_hit_seconds) : null,
+    timeToTp1Seconds: row.time_to_tp1_seconds != null ? Number(row.time_to_tp1_seconds) : null,
+    timeToTp2Seconds: row.time_to_tp2_seconds != null ? Number(row.time_to_tp2_seconds) : null,
+    timeToStopSeconds: row.time_to_stop_seconds != null ? Number(row.time_to_stop_seconds) : null,
+    maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
+    maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
+    coveragePct: Number(row.coverage_pct),
+    nCandlesEvaluated: Number(row.n_candles_evaluated),
+    nCandlesExpected: Number(row.n_candles_expected),
+    lastEvaluatedAt: Number(row.last_evaluated_at),
+    resolveVersion: String(row.resolve_version || ''),
+    debugJson: row.debug_json != null ? String(row.debug_json) : null,
+  }));
 
   let evaluated = 0;
   let completed = 0;
   let errors = 0;
 
-  for (const outcome of pending) {
+  for (const outcome of mappedPending) {
     try {
       // Debug: log the outcome structure
       console.log('[extended-outcomes] Re-evaluating outcome:', { 
