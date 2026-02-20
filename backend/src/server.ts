@@ -49,6 +49,7 @@ import {
   forceReevaluateRange,
   getSignalDirection,
   evaluateAndUpdateExtendedOutcome,
+  getOrCreateExtendedOutcome,
   listExtendedOutcomesWithComparison,
   getImprovementStats,
   type ExtendedOutcomeInput,
@@ -2685,6 +2686,81 @@ app.post('/api/extended-outcomes/reevaluate', async (req, res) => {
     const limit = Number((req.query as any)?.limit);
     const out = await reevaluatePendingExtendedOutcomes(Number.isFinite(limit) ? limit : 25);
     res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Full backfill of ALL historical signals (admin only)
+app.post('/api/extended-outcomes/backfill-all', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const db = getDb();
+    
+    // Count total
+    const countRow = await db.prepare(`
+      SELECT COUNT(*) as n
+      FROM signals s
+      LEFT JOIN extended_outcomes eo ON eo.signal_id = s.id
+      WHERE eo.id IS NULL
+    `).get() as { n: number };
+    
+    const total = countRow?.n || 0;
+    
+    if (total === 0) {
+      return res.json({ ok: true, message: 'All signals already have extended outcomes', processed: 0, total: 0 });
+    }
+    
+    // Process in background - don't wait
+    res.json({ 
+      ok: true, 
+      message: `Backfill started for ${total} signals`, 
+      total,
+      note: 'Processing in background. Check logs for progress.'
+    });
+    
+    // Continue processing after response
+    let processed = 0;
+    let errors = 0;
+    const batchSize = 50;
+    
+    while (processed < total) {
+      const signals = await db.prepare(`
+        SELECT s.id, s.symbol, s.category, s.time, s.price, s.stop, s.tp1, s.tp2
+        FROM signals s
+        LEFT JOIN extended_outcomes eo ON eo.signal_id = s.id
+        WHERE eo.id IS NULL
+        ORDER BY s.time DESC
+        LIMIT ?
+      `).all(batchSize);
+      
+      if (!signals || signals.length === 0) break;
+      
+      for (const signal of signals) {
+        try {
+          await getOrCreateExtendedOutcome({
+            signalId: signal.id,
+            symbol: signal.symbol,
+            category: signal.category,
+            direction: getSignalDirection(signal.category),
+            signalTime: signal.time,
+            entryPrice: signal.price,
+            stopPrice: signal.stop,
+            tp1Price: signal.tp1,
+            tp2Price: signal.tp2,
+          });
+          processed++;
+        } catch (e) {
+          console.error(`[backfill-all] Error for signal ${signal.id}:`, e);
+          errors++;
+        }
+      }
+      
+      console.log(`[backfill-all] Progress: ${processed}/${total} (${((processed/total)*100).toFixed(1)}%)`);
+      await new Promise(r => setTimeout(r, 50));
+    }
+    
+    console.log(`[backfill-all] Complete! Processed: ${processed}, Errors: ${errors}`);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
