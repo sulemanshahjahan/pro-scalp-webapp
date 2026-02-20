@@ -957,8 +957,9 @@ export async function evaluateAndUpdateExtendedOutcome(
     throw new Error(`Failed to get or create extended outcome for signal ${signal.signalId}`);
   }
 
-  // Skip if already completed
-  if (outcome.completedAt !== null && outcome.completedAt > 0) {
+  // Skip if already completed AND has managed values populated
+  const hasManagedValues = outcome.ext24ManagedR !== null && outcome.ext24ManagedR !== undefined;
+  if (outcome.completedAt !== null && outcome.completedAt > 0 && hasManagedValues) {
     // Reconstruct managed PnL result from stored fields
     const managedPnl: ManagedPnlResult = {
       managedStatus: (outcome.ext24ManagedStatus as any) || 'CLOSED_TIMEOUT',
@@ -1610,6 +1611,20 @@ export async function forceReevaluateRange(
       coverage_pct = 0,
       n_candles_evaluated = 0,
       debug_json = NULL,
+      -- Clear managed PnL fields for re-evaluation
+      ext24_managed_status = NULL,
+      ext24_managed_r = NULL,
+      ext24_managed_pnl_usd = NULL,
+      ext24_realized_r = NULL,
+      ext24_unrealized_runner_r = NULL,
+      ext24_live_managed_r = NULL,
+      ext24_tp1_partial_at = NULL,
+      ext24_runner_be_at = NULL,
+      ext24_runner_exit_at = NULL,
+      ext24_runner_exit_reason = NULL,
+      ext24_timeout_exit_price = NULL,
+      ext24_risk_usd_snapshot = NULL,
+      managed_debug_json = NULL,
       updated_at = ?
     WHERE signal_time >= ? AND signal_time <= ?
   `).run(Date.now(), startMs, endMs);
