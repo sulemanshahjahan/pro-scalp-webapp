@@ -153,6 +153,49 @@ const RESOLVE_VERSION = 'v1.1.0'; // Added Option B managed PnL
 let schemaReady = false;
 
 /**
+ * Add managed PnL columns to existing table (migration)
+ */
+async function migrateManagedPnlColumns(): Promise<void> {
+  const d = getDb();
+  const isSQLite = d.driver === 'sqlite';
+  
+  const columnsToAdd = [
+    { name: 'ext24_managed_status', type: isSQLite ? 'TEXT' : 'TEXT' },
+    { name: 'ext24_managed_r', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_managed_pnl_usd', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_realized_r', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_unrealized_runner_r', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_live_managed_r', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_tp1_partial_at', type: isSQLite ? 'INTEGER' : 'BIGINT' },
+    { name: 'ext24_runner_be_at', type: isSQLite ? 'INTEGER' : 'BIGINT' },
+    { name: 'ext24_runner_exit_at', type: isSQLite ? 'INTEGER' : 'BIGINT' },
+    { name: 'ext24_runner_exit_reason', type: isSQLite ? 'TEXT' : 'TEXT' },
+    { name: 'ext24_timeout_exit_price', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'ext24_risk_usd_snapshot', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'managed_debug_json', type: isSQLite ? 'TEXT' : 'TEXT' },
+  ];
+  
+  for (const col of columnsToAdd) {
+    try {
+      if (isSQLite) {
+        // SQLite: ALTER TABLE ADD COLUMN is limited but works for our case
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN ${col.name} ${col.type}`);
+      } else {
+        // PostgreSQL
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`);
+      }
+    } catch (e: any) {
+      // Column likely already exists, skip
+      if (!String(e?.message).includes('duplicate column') && 
+          !String(e?.message).includes('already exists')) {
+        console.warn(`[extended-outcomes] Migration warning for column ${col.name}:`, e?.message);
+      }
+    }
+  }
+  console.log('[extended-outcomes] Managed PnL columns migration completed');
+}
+
+/**
  * Ensure extended outcomes table exists
  * Supports both SQLite and PostgreSQL
  */
@@ -303,6 +346,9 @@ async function ensureSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_completed_at ON extended_outcomes(completed_at);
       `);
     }
+
+    // Run migration for managed PnL columns (for existing tables)
+    await migrateManagedPnlColumns();
 
     schemaReady = true;
     console.log('[extended-outcomes] Schema ensured successfully');
