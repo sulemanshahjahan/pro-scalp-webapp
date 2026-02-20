@@ -47,6 +47,7 @@ import {
   backfillExtendedOutcomes,
   reevaluatePendingExtendedOutcomes,
   forceReevaluateRange,
+  backfillManagedPnlForCompleted,
   getSignalDirection,
   evaluateAndUpdateExtendedOutcome,
   getOrCreateExtendedOutcome,
@@ -2804,6 +2805,18 @@ app.post('/api/extended-outcomes/force-reevaluate', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'start and end required' });
     }
     const out = await forceReevaluateRange(start, end);
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Backfill managed PnL values for completed outcomes missing them
+app.post('/api/extended-outcomes/backfill-managed', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const limit = Number((req.query as any)?.limit);
+    const out = await backfillManagedPnlForCompleted(Number.isFinite(limit) ? limit : 50);
     res.json({ ok: true, ...out });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });

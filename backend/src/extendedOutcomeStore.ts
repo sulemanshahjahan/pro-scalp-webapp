@@ -1644,6 +1644,154 @@ export async function forceReevaluateRange(
 }
 
 /**
+ * Backfill managed PnL values for completed outcomes that are missing them
+ * This is needed for outcomes that existed before the managed PnL feature was added
+ */
+export async function backfillManagedPnlForCompleted(
+  limit = 50
+): Promise<{ processed: number; updated: number; errors: number }> {
+  await ensureSchema();
+  const d = getDb();
+
+  // Find completed outcomes with NULL managed_r
+  const completedMissingManaged = await d.prepare(`
+    SELECT 
+      eo.id,
+      eo.signal_id,
+      eo.symbol,
+      eo.category,
+      eo.direction,
+      eo.signal_time,
+      eo.entry_price,
+      eo.stop_price,
+      eo.tp1_price,
+      eo.tp2_price,
+      eo.status,
+      eo.first_tp1_at,
+      eo.tp2_at,
+      eo.stop_at,
+      eo.completed_at,
+      eo.expires_at
+    FROM extended_outcomes eo
+    WHERE eo.completed_at IS NOT NULL
+      AND eo.ext24_managed_r IS NULL
+    ORDER BY eo.completed_at DESC
+    LIMIT ?
+  `).all(limit) as any[];
+
+  let processed = 0;
+  let updated = 0;
+  let errors = 0;
+
+  for (const row of completedMissingManaged) {
+    processed++;
+    try {
+      const signalId = Number(row.signal_id);
+      
+      const signal: ExtendedOutcomeInput = {
+        signalId: signalId,
+        symbol: String(row.symbol),
+        category: String(row.category),
+        direction: String(row.direction) as SignalDirection,
+        signalTime: Number(row.signal_time),
+        entryPrice: Number(row.entry_price),
+        stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
+        tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
+        tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
+      };
+
+      // Fetch fresh candles for this completed outcome
+      const expiresAt = Number(row.expires_at);
+      const evaluationCandles = await klinesRange(
+        signal.symbol,
+        `${EVALUATION_INTERVAL_MIN}m`,
+        signal.signalTime,
+        expiresAt,
+        1000
+      );
+
+      // Evaluate with the actual outcome data
+      const result = await evaluateExtended24hOutcome(signal, evaluationCandles);
+      
+      // Force the status to match the stored status (in case candle data is incomplete)
+      // This ensures we get the right managed PnL based on the official outcome
+      const storedStatus = String(row.status) as ExtendedOutcomeStatus;
+      const storedFirstTp1At = row.first_tp1_at != null ? Number(row.first_tp1_at) : null;
+      const storedTp2At = row.tp2_at != null ? Number(row.tp2_at) : null;
+      const storedStopAt = row.stop_at != null ? Number(row.stop_at) : null;
+      
+      // Create managed PnL input with stored outcome data
+      const managedPnlInput: ManagedPnlInput = {
+        signalTime: signal.signalTime,
+        entryPrice: signal.entryPrice,
+        stopPrice: signal.stopPrice,
+        tp1Price: signal.tp1Price,
+        tp2Price: signal.tp2Price,
+        direction: signal.direction,
+        firstTp1At: storedFirstTp1At,
+        tp2At: storedTp2At,
+        stopAt: storedStopAt,
+        status: storedStatus,
+        completed: true,
+        expiresAt: expiresAt,
+      };
+      
+      const managedPnl = evaluateManagedPnl(managedPnlInput, evaluationCandles);
+      
+      // Update only the managed PnL fields
+      const now = Date.now();
+      await d.prepare(`
+        UPDATE extended_outcomes SET
+          ext24_managed_status = ?,
+          ext24_managed_r = ?,
+          ext24_managed_pnl_usd = ?,
+          ext24_realized_r = ?,
+          ext24_unrealized_runner_r = ?,
+          ext24_live_managed_r = ?,
+          ext24_tp1_partial_at = ?,
+          ext24_runner_be_at = ?,
+          ext24_runner_exit_at = ?,
+          ext24_runner_exit_reason = ?,
+          ext24_timeout_exit_price = ?,
+          ext24_risk_usd_snapshot = ?,
+          managed_debug_json = ?,
+          updated_at = ?
+        WHERE signal_id = ?
+      `).run(
+        managedPnl.managedStatus,
+        managedPnl.managedR != null ? Number(managedPnl.managedR) : null,
+        managedPnl.managedPnlUsd != null ? Number(managedPnl.managedPnlUsd) : null,
+        managedPnl.realizedR != null ? Number(managedPnl.realizedR) : null,
+        managedPnl.unrealizedRunnerR != null ? Number(managedPnl.unrealizedRunnerR) : null,
+        managedPnl.liveManagedR != null ? Number(managedPnl.liveManagedR) : null,
+        managedPnl.tp1PartialAt != null ? Math.floor(Number(managedPnl.tp1PartialAt)) : null,
+        managedPnl.runnerBeAt != null ? Math.floor(Number(managedPnl.runnerBeAt)) : null,
+        managedPnl.runnerExitAt != null ? Math.floor(Number(managedPnl.runnerExitAt)) : null,
+        managedPnl.runnerExitReason,
+        managedPnl.timeoutExitPrice != null ? Number(managedPnl.timeoutExitPrice) : null,
+        managedPnl.riskUsdSnapshot != null ? Number(managedPnl.riskUsdSnapshot) : null,
+        JSON.stringify(managedPnl.debug),
+        Math.floor(now),
+        signalId
+      );
+      
+      console.log(`[extended-outcomes] Backfilled managed PnL for signal ${signalId}:`, {
+        status: storedStatus,
+        managedR: managedPnl.managedR,
+        managedStatus: managedPnl.managedStatus,
+      });
+      
+      updated++;
+    } catch (e) {
+      console.error(`[extended-outcomes] Backfill error for signal ${row.signal_id}:`, e);
+      errors++;
+    }
+  }
+
+  return { processed, updated, errors };
+}
+
+/**
  * Get extended outcomes with 240m horizon comparison
  * Shows when a signal that was "no hit" at 240m actually hit later in 24h
  */
