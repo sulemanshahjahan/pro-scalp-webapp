@@ -136,66 +136,132 @@ let schemaReady = false;
 
 /**
  * Ensure extended outcomes table exists
+ * Supports both SQLite and PostgreSQL
  */
 async function ensureSchema(): Promise<void> {
   const d = getDb();
   if (schemaReady) return;
 
-  await d.exec(`
-    CREATE TABLE IF NOT EXISTS extended_outcomes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      signal_id INTEGER NOT NULL UNIQUE,
-      symbol TEXT NOT NULL,
-      category TEXT NOT NULL,
-      direction TEXT NOT NULL DEFAULT 'LONG',
-      
-      signal_time INTEGER NOT NULL,
-      started_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      completed_at INTEGER,
-      
-      entry_price REAL NOT NULL,
-      stop_price REAL,
-      tp1_price REAL,
-      tp2_price REAL,
-      
-      status TEXT NOT NULL DEFAULT 'PENDING',
-      
-      first_tp1_at INTEGER,
-      tp2_at INTEGER,
-      stop_at INTEGER,
-      
-      time_to_first_hit_seconds INTEGER,
-      time_to_tp1_seconds INTEGER,
-      time_to_tp2_seconds INTEGER,
-      time_to_stop_seconds INTEGER,
-      
-      max_favorable_excursion_pct REAL,
-      max_adverse_excursion_pct REAL,
-      coverage_pct REAL NOT NULL DEFAULT 0,
-      
-      n_candles_evaluated INTEGER NOT NULL DEFAULT 0,
-      n_candles_expected INTEGER NOT NULL DEFAULT 0,
-      last_evaluated_at INTEGER NOT NULL DEFAULT 0,
-      resolve_version TEXT,
-      
-      debug_json TEXT,
-      
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
-      
-      FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
-    );
+  const isSQLite = d.driver === 'sqlite';
 
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_id ON extended_outcomes(signal_id);
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_status ON extended_outcomes(status);
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_symbol ON extended_outcomes(symbol);
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_category ON extended_outcomes(category);
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_time ON extended_outcomes(signal_time);
-    CREATE INDEX IF NOT EXISTS idx_extended_outcomes_completed_at ON extended_outcomes(completed_at);
-  `);
+  try {
+    if (isSQLite) {
+      await d.exec(`
+        CREATE TABLE IF NOT EXISTS extended_outcomes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          signal_id INTEGER NOT NULL UNIQUE,
+          symbol TEXT NOT NULL,
+          category TEXT NOT NULL,
+          direction TEXT NOT NULL DEFAULT 'LONG',
+          
+          signal_time INTEGER NOT NULL,
+          started_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          completed_at INTEGER,
+          
+          entry_price REAL NOT NULL,
+          stop_price REAL,
+          tp1_price REAL,
+          tp2_price REAL,
+          
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          
+          first_tp1_at INTEGER,
+          tp2_at INTEGER,
+          stop_at INTEGER,
+          
+          time_to_first_hit_seconds INTEGER,
+          time_to_tp1_seconds INTEGER,
+          time_to_tp2_seconds INTEGER,
+          time_to_stop_seconds INTEGER,
+          
+          max_favorable_excursion_pct REAL,
+          max_adverse_excursion_pct REAL,
+          coverage_pct REAL NOT NULL DEFAULT 0,
+          
+          n_candles_evaluated INTEGER NOT NULL DEFAULT 0,
+          n_candles_expected INTEGER NOT NULL DEFAULT 0,
+          last_evaluated_at INTEGER NOT NULL DEFAULT 0,
+          resolve_version TEXT,
+          
+          debug_json TEXT,
+          
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+          updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+          
+          FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
+        );
 
-  schemaReady = true;
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_id ON extended_outcomes(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_status ON extended_outcomes(status);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_symbol ON extended_outcomes(symbol);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_category ON extended_outcomes(category);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_time ON extended_outcomes(signal_time);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_completed_at ON extended_outcomes(completed_at);
+      `);
+    } else {
+      // PostgreSQL
+      await d.exec(`
+        CREATE TABLE IF NOT EXISTS extended_outcomes (
+          id SERIAL PRIMARY KEY,
+          signal_id BIGINT NOT NULL UNIQUE,
+          symbol TEXT NOT NULL,
+          category TEXT NOT NULL,
+          direction TEXT NOT NULL DEFAULT 'LONG',
+          
+          signal_time BIGINT NOT NULL,
+          started_at BIGINT NOT NULL,
+          expires_at BIGINT NOT NULL,
+          completed_at BIGINT,
+          
+          entry_price DOUBLE PRECISION NOT NULL,
+          stop_price DOUBLE PRECISION,
+          tp1_price DOUBLE PRECISION,
+          tp2_price DOUBLE PRECISION,
+          
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          
+          first_tp1_at BIGINT,
+          tp2_at BIGINT,
+          stop_at BIGINT,
+          
+          time_to_first_hit_seconds INTEGER,
+          time_to_tp1_seconds INTEGER,
+          time_to_tp2_seconds INTEGER,
+          time_to_stop_seconds INTEGER,
+          
+          max_favorable_excursion_pct DOUBLE PRECISION,
+          max_adverse_excursion_pct DOUBLE PRECISION,
+          coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+          
+          n_candles_evaluated INTEGER NOT NULL DEFAULT 0,
+          n_candles_expected INTEGER NOT NULL DEFAULT 0,
+          last_evaluated_at BIGINT NOT NULL DEFAULT 0,
+          resolve_version TEXT,
+          
+          debug_json TEXT,
+          
+          created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+          updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+          
+          FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_id ON extended_outcomes(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_status ON extended_outcomes(status);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_symbol ON extended_outcomes(symbol);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_category ON extended_outcomes(category);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_time ON extended_outcomes(signal_time);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_completed_at ON extended_outcomes(completed_at);
+      `);
+    }
+
+    schemaReady = true;
+    console.log('[extended-outcomes] Schema ensured successfully');
+  } catch (e) {
+    console.error('[extended-outcomes] Schema creation failed:', e);
+    throw e;
+  }
 }
 
 /**

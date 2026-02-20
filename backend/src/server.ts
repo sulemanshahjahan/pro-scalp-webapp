@@ -2641,8 +2641,9 @@ app.get('/api/extended-outcomes', async (req, res) => {
       sort: sort as any,
     });
     res.json({ ok: true, ...out });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+  } catch (e: any) {
+    console.error('[api/extended-outcomes] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), details: e?.message });
   }
 });
 
@@ -2662,8 +2663,9 @@ app.get('/api/extended-outcomes/stats', async (req, res) => {
       direction: direction as any,
     });
     res.json({ ok: true, ...out });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+  } catch (e: any) {
+    console.error('[api/extended-outcomes/stats] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), details: e?.message });
   }
 });
 
@@ -2673,10 +2675,13 @@ app.post('/api/extended-outcomes/backfill', async (req, res) => {
     const days = Number((req.query as any)?.days);
     const batchSize = Number((req.query as any)?.batchSize);
     const sinceMs = Date.now() - (Number.isFinite(days) ? days : 7) * 24 * 60 * 60 * 1000;
+    console.log(`[api/backfill] Starting backfill for last ${days || 7} days, batchSize: ${batchSize || 50}`);
     const out = await backfillExtendedOutcomes(sinceMs, Number.isFinite(batchSize) ? batchSize : 50);
+    console.log(`[api/backfill] Complete:`, out);
     res.json({ ok: true, ...out });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+  } catch (e: any) {
+    console.error('[api/extended-outcomes/backfill] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), details: e?.message });
   }
 });
 
