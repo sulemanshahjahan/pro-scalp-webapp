@@ -883,45 +883,78 @@ export async function listExtendedOutcomes(params: {
     completed_desc: 'ORDER BY eo.completed_at DESC NULLS LAST',
   }[sort];
 
-  // Fetch rows with column aliases to match camelCase interface
-  const rows = await d.prepare(`
+  // Fetch rows - PostgreSQL returns lowercase column names
+  const rowsRaw = await d.prepare(`
     SELECT 
       eo.id,
-      eo.signal_id as signalId,
+      eo.signal_id,
       eo.symbol,
       eo.category,
       eo.direction,
-      eo.signal_time as signalTime,
-      eo.started_at as startedAt,
-      eo.expires_at as expiresAt,
-      eo.completed_at as completedAt,
-      eo.entry_price as entryPrice,
-      eo.stop_price as stopPrice,
-      eo.tp1_price as tp1Price,
-      eo.tp2_price as tp2Price,
+      eo.signal_time,
+      eo.started_at,
+      eo.expires_at,
+      eo.completed_at,
+      eo.entry_price,
+      eo.stop_price,
+      eo.tp1_price,
+      eo.tp2_price,
       eo.status,
-      eo.first_tp1_at as firstTp1At,
-      eo.tp2_at as tp2At,
-      eo.stop_at as stopAt,
-      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
-      eo.time_to_tp1_seconds as timeToTp1Seconds,
-      eo.time_to_tp2_seconds as timeToTp2Seconds,
-      eo.time_to_stop_seconds as timeToStopSeconds,
-      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
-      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
-      eo.coverage_pct as coveragePct,
-      eo.n_candles_evaluated as nCandlesEvaluated,
-      eo.n_candles_expected as nCandlesExpected,
-      eo.last_evaluated_at as lastEvaluatedAt,
-      eo.resolve_version as resolveVersion,
-      eo.debug_json as debugJson,
-      eo.created_at as createdAt,
-      eo.updated_at as updatedAt
+      eo.first_tp1_at,
+      eo.tp2_at,
+      eo.stop_at,
+      eo.time_to_first_hit_seconds,
+      eo.time_to_tp1_seconds,
+      eo.time_to_tp2_seconds,
+      eo.time_to_stop_seconds,
+      eo.max_favorable_excursion_pct,
+      eo.max_adverse_excursion_pct,
+      eo.coverage_pct,
+      eo.n_candles_evaluated,
+      eo.n_candles_expected,
+      eo.last_evaluated_at,
+      eo.resolve_version,
+      eo.debug_json,
+      eo.created_at,
+      eo.updated_at
     FROM extended_outcomes eo
     ${whereClause}
     ${sortClause}
     LIMIT ? OFFSET ?
-  `).all(...values, limit, offset) as ExtendedOutcome[];
+  `).all(...values, limit, offset) as any[];
+
+  // Map snake_case to camelCase
+  const rows: ExtendedOutcome[] = rowsRaw.map(row => ({
+    id: Number(row.id),
+    signalId: Number(row.signal_id),
+    symbol: String(row.symbol),
+    category: String(row.category),
+    direction: String(row.direction) as SignalDirection,
+    signalTime: Number(row.signal_time),
+    startedAt: Number(row.started_at),
+    expiresAt: Number(row.expires_at),
+    completedAt: row.completed_at != null ? Number(row.completed_at) : null,
+    entryPrice: Number(row.entry_price),
+    stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
+    tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
+    tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
+    status: String(row.status) as ExtendedOutcomeStatus,
+    firstTp1At: row.first_tp1_at != null ? Number(row.first_tp1_at) : null,
+    tp2At: row.tp2_at != null ? Number(row.tp2_at) : null,
+    stopAt: row.stop_at != null ? Number(row.stop_at) : null,
+    timeToFirstHitSeconds: row.time_to_first_hit_seconds != null ? Number(row.time_to_first_hit_seconds) : null,
+    timeToTp1Seconds: row.time_to_tp1_seconds != null ? Number(row.time_to_tp1_seconds) : null,
+    timeToTp2Seconds: row.time_to_tp2_seconds != null ? Number(row.time_to_tp2_seconds) : null,
+    timeToStopSeconds: row.time_to_stop_seconds != null ? Number(row.time_to_stop_seconds) : null,
+    maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
+    maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
+    coveragePct: Number(row.coverage_pct),
+    nCandlesEvaluated: Number(row.n_candles_evaluated),
+    nCandlesExpected: Number(row.n_candles_expected),
+    lastEvaluatedAt: Number(row.last_evaluated_at),
+    resolveVersion: String(row.resolve_version || ''),
+    debugJson: row.debug_json != null ? String(row.debug_json) : null,
+  }));
 
   return { rows, total: countRow.total };
 }
@@ -1045,45 +1078,78 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
   await ensureSchema();
   const d = getDb();
 
-  const rows = await d.prepare(`
+  const rowsRaw = await d.prepare(`
     SELECT 
       eo.id,
-      eo.signal_id as signalId,
+      eo.signal_id,
       eo.symbol,
       eo.category,
       eo.direction,
-      eo.signal_time as signalTime,
-      eo.started_at as startedAt,
-      eo.expires_at as expiresAt,
-      eo.completed_at as completedAt,
-      eo.entry_price as entryPrice,
-      eo.stop_price as stopPrice,
-      eo.tp1_price as tp1Price,
-      eo.tp2_price as tp2Price,
+      eo.signal_time,
+      eo.started_at,
+      eo.expires_at,
+      eo.completed_at,
+      eo.entry_price,
+      eo.stop_price,
+      eo.tp1_price,
+      eo.tp2_price,
       eo.status,
-      eo.first_tp1_at as firstTp1At,
-      eo.tp2_at as tp2At,
-      eo.stop_at as stopAt,
-      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
-      eo.time_to_tp1_seconds as timeToTp1Seconds,
-      eo.time_to_tp2_seconds as timeToTp2Seconds,
-      eo.time_to_stop_seconds as timeToStopSeconds,
-      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
-      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
-      eo.coverage_pct as coveragePct,
-      eo.n_candles_evaluated as nCandlesEvaluated,
-      eo.n_candles_expected as nCandlesExpected,
-      eo.last_evaluated_at as lastEvaluatedAt,
-      eo.resolve_version as resolveVersion,
-      eo.debug_json as debugJson,
-      eo.created_at as createdAt,
-      eo.updated_at as updatedAt
+      eo.first_tp1_at,
+      eo.tp2_at,
+      eo.stop_at,
+      eo.time_to_first_hit_seconds,
+      eo.time_to_tp1_seconds,
+      eo.time_to_tp2_seconds,
+      eo.time_to_stop_seconds,
+      eo.max_favorable_excursion_pct,
+      eo.max_adverse_excursion_pct,
+      eo.coverage_pct,
+      eo.n_candles_evaluated,
+      eo.n_candles_expected,
+      eo.last_evaluated_at,
+      eo.resolve_version,
+      eo.debug_json,
+      eo.created_at,
+      eo.updated_at
     FROM extended_outcomes eo
     WHERE eo.completed_at IS NULL
       AND eo.expires_at <= ?
     ORDER BY eo.signal_time ASC
     LIMIT ?
-  `).all(Date.now() + EXTENDED_WINDOW_MS, limit) as ExtendedOutcome[];
+  `).all(Date.now() + EXTENDED_WINDOW_MS, limit) as any[];
+
+  // Map snake_case to camelCase
+  const rows: ExtendedOutcome[] = rowsRaw.map(row => ({
+    id: Number(row.id),
+    signalId: Number(row.signal_id),
+    symbol: String(row.symbol),
+    category: String(row.category),
+    direction: String(row.direction) as SignalDirection,
+    signalTime: Number(row.signal_time),
+    startedAt: Number(row.started_at),
+    expiresAt: Number(row.expires_at),
+    completedAt: row.completed_at != null ? Number(row.completed_at) : null,
+    entryPrice: Number(row.entry_price),
+    stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
+    tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
+    tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
+    status: String(row.status) as ExtendedOutcomeStatus,
+    firstTp1At: row.first_tp1_at != null ? Number(row.first_tp1_at) : null,
+    tp2At: row.tp2_at != null ? Number(row.tp2_at) : null,
+    stopAt: row.stop_at != null ? Number(row.stop_at) : null,
+    timeToFirstHitSeconds: row.time_to_first_hit_seconds != null ? Number(row.time_to_first_hit_seconds) : null,
+    timeToTp1Seconds: row.time_to_tp1_seconds != null ? Number(row.time_to_tp1_seconds) : null,
+    timeToTp2Seconds: row.time_to_tp2_seconds != null ? Number(row.time_to_tp2_seconds) : null,
+    timeToStopSeconds: row.time_to_stop_seconds != null ? Number(row.time_to_stop_seconds) : null,
+    maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
+    maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
+    coveragePct: Number(row.coverage_pct),
+    nCandlesEvaluated: Number(row.n_candles_evaluated),
+    nCandlesExpected: Number(row.n_candles_expected),
+    lastEvaluatedAt: Number(row.last_evaluated_at),
+    resolveVersion: String(row.resolve_version || ''),
+    debugJson: row.debug_json != null ? String(row.debug_json) : null,
+  }));
 
   return rows;
 }
@@ -1351,39 +1417,39 @@ export async function listExtendedOutcomesWithComparison(params: {
   `).get(...values) as { total: number };
 
   // Fetch rows with 240m outcome joined
-  const rows = await d.prepare(`
+  const rowsRaw = await d.prepare(`
     SELECT 
       eo.id,
-      eo.signal_id as signalId,
+      eo.signal_id,
       eo.symbol,
       eo.category,
       eo.direction,
-      eo.signal_time as signalTime,
-      eo.started_at as startedAt,
-      eo.expires_at as expiresAt,
-      eo.completed_at as completedAt,
-      eo.entry_price as entryPrice,
-      eo.stop_price as stopPrice,
-      eo.tp1_price as tp1Price,
-      eo.tp2_price as tp2Price,
+      eo.signal_time,
+      eo.started_at,
+      eo.expires_at,
+      eo.completed_at,
+      eo.entry_price,
+      eo.stop_price,
+      eo.tp1_price,
+      eo.tp2_price,
       eo.status,
-      eo.first_tp1_at as firstTp1At,
-      eo.tp2_at as tp2At,
-      eo.stop_at as stopAt,
-      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
-      eo.time_to_tp1_seconds as timeToTp1Seconds,
-      eo.time_to_tp2_seconds as timeToTp2Seconds,
-      eo.time_to_stop_seconds as timeToStopSeconds,
-      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
-      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
-      eo.coverage_pct as coveragePct,
-      eo.n_candles_evaluated as nCandlesEvaluated,
-      eo.n_candles_expected as nCandlesExpected,
-      eo.last_evaluated_at as lastEvaluatedAt,
-      eo.resolve_version as resolveVersion,
-      eo.debug_json as debugJson,
-      eo.created_at as createdAt,
-      eo.updated_at as updatedAt,
+      eo.first_tp1_at,
+      eo.tp2_at,
+      eo.stop_at,
+      eo.time_to_first_hit_seconds,
+      eo.time_to_tp1_seconds,
+      eo.time_to_tp2_seconds,
+      eo.time_to_stop_seconds,
+      eo.max_favorable_excursion_pct,
+      eo.max_adverse_excursion_pct,
+      eo.coverage_pct,
+      eo.n_candles_evaluated,
+      eo.n_candles_expected,
+      eo.last_evaluated_at,
+      eo.resolve_version,
+      eo.debug_json,
+      eo.created_at,
+      eo.updated_at,
       o240.result as horizon_240m_result,
       o240.exit_reason as horizon_240m_exit_reason,
       CASE 
@@ -1400,12 +1466,41 @@ export async function listExtendedOutcomesWithComparison(params: {
     ${showImprovementsOnly ? 'HAVING improved = 1' : ''}
     ORDER BY eo.signal_time DESC
     LIMIT ? OFFSET ?
-  `).all(...values, limit, offset) as Array<ExtendedOutcome & { horizon_240m_result: string | null; horizon_240m_exit_reason: string | null; improved: number }>;
+  `).all(...values, limit, offset) as any[];
 
-  const mappedRows = rows.map(r => ({
-    ...r,
-    horizon240mResult: r.horizon_240m_result,
-    improved: Boolean(r.improved),
+  // Map snake_case to camelCase
+  const mappedRows = rowsRaw.map(row => ({
+    id: Number(row.id),
+    signalId: Number(row.signal_id),
+    symbol: String(row.symbol),
+    category: String(row.category),
+    direction: String(row.direction) as SignalDirection,
+    signalTime: Number(row.signal_time),
+    startedAt: Number(row.started_at),
+    expiresAt: Number(row.expires_at),
+    completedAt: row.completed_at != null ? Number(row.completed_at) : null,
+    entryPrice: Number(row.entry_price),
+    stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
+    tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
+    tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
+    status: String(row.status) as ExtendedOutcomeStatus,
+    firstTp1At: row.first_tp1_at != null ? Number(row.first_tp1_at) : null,
+    tp2At: row.tp2_at != null ? Number(row.tp2_at) : null,
+    stopAt: row.stop_at != null ? Number(row.stop_at) : null,
+    timeToFirstHitSeconds: row.time_to_first_hit_seconds != null ? Number(row.time_to_first_hit_seconds) : null,
+    timeToTp1Seconds: row.time_to_tp1_seconds != null ? Number(row.time_to_tp1_seconds) : null,
+    timeToTp2Seconds: row.time_to_tp2_seconds != null ? Number(row.time_to_tp2_seconds) : null,
+    timeToStopSeconds: row.time_to_stop_seconds != null ? Number(row.time_to_stop_seconds) : null,
+    maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
+    maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
+    coveragePct: Number(row.coverage_pct),
+    nCandlesEvaluated: Number(row.n_candles_evaluated),
+    nCandlesExpected: Number(row.n_candles_expected),
+    lastEvaluatedAt: Number(row.last_evaluated_at),
+    resolveVersion: String(row.resolve_version || ''),
+    debugJson: row.debug_json != null ? String(row.debug_json) : null,
+    horizon240mResult: row.horizon_240m_result != null ? String(row.horizon_240m_result) : null,
+    improved: Boolean(row.improved),
   }));
 
   return { rows: mappedRows, total: countRow.total };
