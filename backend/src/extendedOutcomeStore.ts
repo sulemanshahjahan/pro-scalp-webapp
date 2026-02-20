@@ -16,6 +16,7 @@
 import type { Signal, OHLCV } from './types.js';
 import { klinesFrom, klinesRange } from './binance.js';
 import { getDb } from './db/db.js';
+import { evaluateManagedPnl, ManagedPnlResult, ManagedPnlInput, getRiskPerTradeUsd } from './managedPnlEvaluator.js';
 
 // Constants
 const EXTENDED_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -73,6 +74,20 @@ export interface ExtendedOutcome {
   maxAdverseExcursionPct: number | null;
   coveragePct: number;
   
+  // Managed PnL (Option B) fields
+  ext24ManagedStatus: string | null;
+  ext24ManagedR: number | null;
+  ext24ManagedPnlUsd: number | null;
+  ext24RealizedR: number | null;
+  ext24UnrealizedRunnerR: number | null;
+  ext24LiveManagedR: number | null;
+  ext24Tp1PartialAt: number | null;
+  ext24RunnerBeAt: number | null;
+  ext24RunnerExitAt: number | null;
+  ext24RunnerExitReason: string | null;
+  ext24TimeoutExitPrice: number | null;
+  ext24RiskUsdSnapshot: number | null;
+  
   // Metadata
   nCandlesEvaluated: number;
   nCandlesExpected: number;
@@ -81,6 +96,7 @@ export interface ExtendedOutcome {
   
   // Debug info (stored as JSON)
   debugJson: string | null;
+  managedDebugJson: string | null;
 }
 
 // Input for creating/updating extended outcome
@@ -113,6 +129,8 @@ interface EvaluationResult {
   nCandlesEvaluated: number;
   nCandlesExpected: number;
   debug: EvaluationDebug;
+  // Managed PnL (Option B) result
+  managedPnl: ManagedPnlResult;
 }
 
 interface EvaluationDebug {
@@ -130,7 +148,7 @@ interface EvaluationDebug {
   }>;
 }
 
-const RESOLVE_VERSION = 'v1.0.0';
+const RESOLVE_VERSION = 'v1.1.0'; // Added Option B managed PnL
 
 let schemaReady = false;
 
@@ -179,12 +197,27 @@ async function ensureSchema(): Promise<void> {
           max_adverse_excursion_pct REAL,
           coverage_pct REAL NOT NULL DEFAULT 0,
           
+          -- Managed PnL (Option B) fields
+          ext24_managed_status TEXT,
+          ext24_managed_r REAL,
+          ext24_managed_pnl_usd REAL,
+          ext24_realized_r REAL,
+          ext24_unrealized_runner_r REAL,
+          ext24_live_managed_r REAL,
+          ext24_tp1_partial_at INTEGER,
+          ext24_runner_be_at INTEGER,
+          ext24_runner_exit_at INTEGER,
+          ext24_runner_exit_reason TEXT,
+          ext24_timeout_exit_price REAL,
+          ext24_risk_usd_snapshot REAL,
+          
           n_candles_evaluated INTEGER NOT NULL DEFAULT 0,
           n_candles_expected INTEGER NOT NULL DEFAULT 0,
           last_evaluated_at INTEGER NOT NULL DEFAULT 0,
           resolve_version TEXT,
           
           debug_json TEXT,
+          managed_debug_json TEXT,
           
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
@@ -234,12 +267,27 @@ async function ensureSchema(): Promise<void> {
           max_adverse_excursion_pct DOUBLE PRECISION,
           coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
           
+          -- Managed PnL (Option B) fields
+          ext24_managed_status TEXT,
+          ext24_managed_r DOUBLE PRECISION,
+          ext24_managed_pnl_usd DOUBLE PRECISION,
+          ext24_realized_r DOUBLE PRECISION,
+          ext24_unrealized_runner_r DOUBLE PRECISION,
+          ext24_live_managed_r DOUBLE PRECISION,
+          ext24_tp1_partial_at BIGINT,
+          ext24_runner_be_at BIGINT,
+          ext24_runner_exit_at BIGINT,
+          ext24_runner_exit_reason TEXT,
+          ext24_timeout_exit_price DOUBLE PRECISION,
+          ext24_risk_usd_snapshot DOUBLE PRECISION,
+          
           n_candles_evaluated INTEGER NOT NULL DEFAULT 0,
           n_candles_expected INTEGER NOT NULL DEFAULT 0,
           last_evaluated_at BIGINT NOT NULL DEFAULT 0,
           resolve_version TEXT,
           
           debug_json TEXT,
+          managed_debug_json TEXT,
           
           created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
           updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
@@ -541,6 +589,23 @@ export async function evaluateExtended24hOutcome(
   // Calculate excursions
   const { mfePct, maePct } = calculateExcursions(direction, entryPrice, evaluationCandles);
 
+  // Evaluate managed PnL (Option B)
+  const managedPnlInput: ManagedPnlInput = {
+    signalTime,
+    entryPrice,
+    stopPrice,
+    tp1Price,
+    tp2Price,
+    direction,
+    firstTp1At,
+    tp2At,
+    stopAt,
+    status,
+    completed,
+    expiresAt,
+  };
+  const managedPnl = evaluateManagedPnl(managedPnlInput, evaluationCandles);
+
   return {
     status,
     completed,
@@ -557,6 +622,7 @@ export async function evaluateExtended24hOutcome(
     nCandlesEvaluated: actualCandles,
     nCandlesExpected: expectedCandles,
     debug,
+    managedPnl,
   };
 }
 
@@ -608,11 +674,25 @@ export async function getOrCreateExtendedOutcome(
       maxFavorableExcursionPct: (existing as any).max_favorable_excursion_pct != null ? Number((existing as any).max_favorable_excursion_pct) : null,
       maxAdverseExcursionPct: (existing as any).max_adverse_excursion_pct != null ? Number((existing as any).max_adverse_excursion_pct) : null,
       coveragePct: Number((existing as any).coverage_pct),
+      // Managed PnL fields
+      ext24ManagedStatus: (existing as any).ext24_managed_status != null ? String((existing as any).ext24_managed_status) : null,
+      ext24ManagedR: (existing as any).ext24_managed_r != null ? Number((existing as any).ext24_managed_r) : null,
+      ext24ManagedPnlUsd: (existing as any).ext24_managed_pnl_usd != null ? Number((existing as any).ext24_managed_pnl_usd) : null,
+      ext24RealizedR: (existing as any).ext24_realized_r != null ? Number((existing as any).ext24_realized_r) : null,
+      ext24UnrealizedRunnerR: (existing as any).ext24_unrealized_runner_r != null ? Number((existing as any).ext24_unrealized_runner_r) : null,
+      ext24LiveManagedR: (existing as any).ext24_live_managed_r != null ? Number((existing as any).ext24_live_managed_r) : null,
+      ext24Tp1PartialAt: (existing as any).ext24_tp1_partial_at != null ? Number((existing as any).ext24_tp1_partial_at) : null,
+      ext24RunnerBeAt: (existing as any).ext24_runner_be_at != null ? Number((existing as any).ext24_runner_be_at) : null,
+      ext24RunnerExitAt: (existing as any).ext24_runner_exit_at != null ? Number((existing as any).ext24_runner_exit_at) : null,
+      ext24RunnerExitReason: (existing as any).ext24_runner_exit_reason != null ? String((existing as any).ext24_runner_exit_reason) : null,
+      ext24TimeoutExitPrice: (existing as any).ext24_timeout_exit_price != null ? Number((existing as any).ext24_timeout_exit_price) : null,
+      ext24RiskUsdSnapshot: (existing as any).ext24_risk_usd_snapshot != null ? Number((existing as any).ext24_risk_usd_snapshot) : null,
       nCandlesEvaluated: Number((existing as any).n_candles_evaluated),
       nCandlesExpected: Number((existing as any).n_candles_expected),
       lastEvaluatedAt: Number((existing as any).last_evaluated_at),
       resolveVersion: String((existing as any).resolve_version || ''),
       debugJson: (existing as any).debug_json != null ? String((existing as any).debug_json) : null,
+      managedDebugJson: (existing as any).managed_debug_json != null ? String((existing as any).managed_debug_json) : null,
     };
     return { outcome: mapped, created: false };
   }
@@ -683,11 +763,25 @@ export async function getOrCreateExtendedOutcome(
     maxFavorableExcursionPct: newOutcomeRaw.max_favorable_excursion_pct != null ? Number(newOutcomeRaw.max_favorable_excursion_pct) : null,
     maxAdverseExcursionPct: newOutcomeRaw.max_adverse_excursion_pct != null ? Number(newOutcomeRaw.max_adverse_excursion_pct) : null,
     coveragePct: Number(newOutcomeRaw.coverage_pct),
+    // Managed PnL fields (null for new records)
+    ext24ManagedStatus: null,
+    ext24ManagedR: null,
+    ext24ManagedPnlUsd: null,
+    ext24RealizedR: null,
+    ext24UnrealizedRunnerR: null,
+    ext24LiveManagedR: null,
+    ext24Tp1PartialAt: null,
+    ext24RunnerBeAt: null,
+    ext24RunnerExitAt: null,
+    ext24RunnerExitReason: null,
+    ext24TimeoutExitPrice: null,
+    ext24RiskUsdSnapshot: null,
     nCandlesEvaluated: Number(newOutcomeRaw.n_candles_evaluated),
     nCandlesExpected: Number(newOutcomeRaw.n_candles_expected),
     lastEvaluatedAt: Number(newOutcomeRaw.last_evaluated_at),
     resolveVersion: String(newOutcomeRaw.resolve_version || ''),
     debugJson: newOutcomeRaw.debug_json != null ? String(newOutcomeRaw.debug_json) : null,
+    managedDebugJson: null,
   };
 
   return { outcome: newOutcome, created: true };
@@ -721,6 +815,21 @@ export async function updateExtendedOutcome(
   const nCandles = Math.floor(Number(result.nCandlesEvaluated));
   const lastEvalAt = Math.floor(now);
   const updatedAt = Math.floor(now);
+  
+  // Managed PnL values
+  const managed = result.managedPnl;
+  const ext24ManagedStatus = managed.managedStatus ?? null;
+  const ext24ManagedR = managed.managedR != null ? Number(managed.managedR) : null;
+  const ext24ManagedPnlUsd = managed.managedPnlUsd != null ? Number(managed.managedPnlUsd) : null;
+  const ext24RealizedR = managed.realizedR != null ? Number(managed.realizedR) : null;
+  const ext24UnrealizedRunnerR = managed.unrealizedRunnerR != null ? Number(managed.unrealizedRunnerR) : null;
+  const ext24LiveManagedR = managed.liveManagedR != null ? Number(managed.liveManagedR) : null;
+  const ext24Tp1PartialAt = managed.tp1PartialAt != null ? Math.floor(Number(managed.tp1PartialAt)) : null;
+  const ext24RunnerBeAt = managed.runnerBeAt != null ? Math.floor(Number(managed.runnerBeAt)) : null;
+  const ext24RunnerExitAt = managed.runnerExitAt != null ? Math.floor(Number(managed.runnerExitAt)) : null;
+  const ext24RunnerExitReason = managed.runnerExitReason ?? null;
+  const ext24TimeoutExitPrice = managed.timeoutExitPrice != null ? Number(managed.timeoutExitPrice) : null;
+  const ext24RiskUsdSnapshot = managed.riskUsdSnapshot != null ? Number(managed.riskUsdSnapshot) : null;
 
   await d.prepare(`
     UPDATE extended_outcomes SET
@@ -739,7 +848,20 @@ export async function updateExtendedOutcome(
       n_candles_evaluated = ?,
       last_evaluated_at = ?,
       debug_json = ?,
-      updated_at = ?
+      updated_at = ?,
+      ext24_managed_status = ?,
+      ext24_managed_r = ?,
+      ext24_managed_pnl_usd = ?,
+      ext24_realized_r = ?,
+      ext24_unrealized_runner_r = ?,
+      ext24_live_managed_r = ?,
+      ext24_tp1_partial_at = ?,
+      ext24_runner_be_at = ?,
+      ext24_runner_exit_at = ?,
+      ext24_runner_exit_reason = ?,
+      ext24_timeout_exit_price = ?,
+      ext24_risk_usd_snapshot = ?,
+      managed_debug_json = ?
     WHERE signal_id = ?
   `).run(
     result.status,
@@ -758,6 +880,19 @@ export async function updateExtendedOutcome(
     lastEvalAt,
     JSON.stringify(result.debug),
     updatedAt,
+    ext24ManagedStatus,
+    ext24ManagedR,
+    ext24ManagedPnlUsd,
+    ext24RealizedR,
+    ext24UnrealizedRunnerR,
+    ext24LiveManagedR,
+    ext24Tp1PartialAt,
+    ext24RunnerBeAt,
+    ext24RunnerExitAt,
+    ext24RunnerExitReason,
+    ext24TimeoutExitPrice,
+    ext24RiskUsdSnapshot,
+    JSON.stringify(managed.debug),
     signalIdNum
   );
 }
@@ -778,6 +913,23 @@ export async function evaluateAndUpdateExtendedOutcome(
 
   // Skip if already completed
   if (outcome.completedAt !== null && outcome.completedAt > 0) {
+    // Reconstruct managed PnL result from stored fields
+    const managedPnl: ManagedPnlResult = {
+      managedStatus: (outcome.ext24ManagedStatus as any) || 'CLOSED_TIMEOUT',
+      managedR: outcome.ext24ManagedR,
+      managedPnlUsd: outcome.ext24ManagedPnlUsd,
+      realizedR: outcome.ext24RealizedR ?? 0,
+      unrealizedRunnerR: outcome.ext24UnrealizedRunnerR,
+      liveManagedR: outcome.ext24LiveManagedR,
+      tp1PartialAt: outcome.ext24Tp1PartialAt,
+      runnerBeAt: outcome.ext24RunnerBeAt,
+      runnerExitAt: outcome.ext24RunnerExitAt,
+      runnerExitReason: (outcome.ext24RunnerExitReason as any) || null,
+      timeoutExitPrice: outcome.ext24TimeoutExitPrice,
+      riskUsdSnapshot: outcome.ext24RiskUsdSnapshot ?? getRiskPerTradeUsd(),
+      debug: { fullPositionStopHit: false, fullPositionStopTime: null, runnerActive: false, runnerStopPrice: null, lastEvaluatedPrice: null, sameCandleConflicts: [] },
+    };
+    
     return {
       status: outcome.status,
       completed: true,
@@ -794,6 +946,7 @@ export async function evaluateAndUpdateExtendedOutcome(
       nCandlesEvaluated: outcome.nCandlesEvaluated,
       nCandlesExpected: outcome.nCandlesExpected,
       debug: { candlesProcessed: 0, stopHitCandleIndex: null, tp1HitCandleIndex: null, tp2HitCandleIndex: null, sameCandleConflicts: [] },
+      managedPnl,
     };
   }
 
@@ -916,7 +1069,20 @@ export async function listExtendedOutcomes(params: {
       eo.resolve_version,
       eo.debug_json,
       eo.created_at,
-      eo.updated_at
+      eo.updated_at,
+      eo.ext24_managed_status,
+      eo.ext24_managed_r,
+      eo.ext24_managed_pnl_usd,
+      eo.ext24_realized_r,
+      eo.ext24_unrealized_runner_r,
+      eo.ext24_live_managed_r,
+      eo.ext24_tp1_partial_at,
+      eo.ext24_runner_be_at,
+      eo.ext24_runner_exit_at,
+      eo.ext24_runner_exit_reason,
+      eo.ext24_timeout_exit_price,
+      eo.ext24_risk_usd_snapshot,
+      eo.managed_debug_json
     FROM extended_outcomes eo
     ${whereClause}
     ${sortClause}
@@ -949,11 +1115,25 @@ export async function listExtendedOutcomes(params: {
     maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
     maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
     coveragePct: Number(row.coverage_pct),
+    // Managed PnL fields
+    ext24ManagedStatus: row.ext24_managed_status != null ? String(row.ext24_managed_status) : null,
+    ext24ManagedR: row.ext24_managed_r != null ? Number(row.ext24_managed_r) : null,
+    ext24ManagedPnlUsd: row.ext24_managed_pnl_usd != null ? Number(row.ext24_managed_pnl_usd) : null,
+    ext24RealizedR: row.ext24_realized_r != null ? Number(row.ext24_realized_r) : null,
+    ext24UnrealizedRunnerR: row.ext24_unrealized_runner_r != null ? Number(row.ext24_unrealized_runner_r) : null,
+    ext24LiveManagedR: row.ext24_live_managed_r != null ? Number(row.ext24_live_managed_r) : null,
+    ext24Tp1PartialAt: row.ext24_tp1_partial_at != null ? Number(row.ext24_tp1_partial_at) : null,
+    ext24RunnerBeAt: row.ext24_runner_be_at != null ? Number(row.ext24_runner_be_at) : null,
+    ext24RunnerExitAt: row.ext24_runner_exit_at != null ? Number(row.ext24_runner_exit_at) : null,
+    ext24RunnerExitReason: row.ext24_runner_exit_reason != null ? String(row.ext24_runner_exit_reason) : null,
+    ext24TimeoutExitPrice: row.ext24_timeout_exit_price != null ? Number(row.ext24_timeout_exit_price) : null,
+    ext24RiskUsdSnapshot: row.ext24_risk_usd_snapshot != null ? Number(row.ext24_risk_usd_snapshot) : null,
     nCandlesEvaluated: Number(row.n_candles_evaluated),
     nCandlesExpected: Number(row.n_candles_expected),
     lastEvaluatedAt: Number(row.last_evaluated_at),
     resolveVersion: String(row.resolve_version || ''),
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
+    managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
   }));
 
   return { rows, total: countRow.total };
@@ -1110,7 +1290,20 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
       eo.resolve_version,
       eo.debug_json,
       eo.created_at,
-      eo.updated_at
+      eo.updated_at,
+      eo.ext24_managed_status,
+      eo.ext24_managed_r,
+      eo.ext24_managed_pnl_usd,
+      eo.ext24_realized_r,
+      eo.ext24_unrealized_runner_r,
+      eo.ext24_live_managed_r,
+      eo.ext24_tp1_partial_at,
+      eo.ext24_runner_be_at,
+      eo.ext24_runner_exit_at,
+      eo.ext24_runner_exit_reason,
+      eo.ext24_timeout_exit_price,
+      eo.ext24_risk_usd_snapshot,
+      eo.managed_debug_json
     FROM extended_outcomes eo
     WHERE eo.completed_at IS NULL
       AND eo.expires_at <= ?
@@ -1144,11 +1337,25 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
     maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
     maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
     coveragePct: Number(row.coverage_pct),
+    // Managed PnL fields
+    ext24ManagedStatus: row.ext24_managed_status != null ? String(row.ext24_managed_status) : null,
+    ext24ManagedR: row.ext24_managed_r != null ? Number(row.ext24_managed_r) : null,
+    ext24ManagedPnlUsd: row.ext24_managed_pnl_usd != null ? Number(row.ext24_managed_pnl_usd) : null,
+    ext24RealizedR: row.ext24_realized_r != null ? Number(row.ext24_realized_r) : null,
+    ext24UnrealizedRunnerR: row.ext24_unrealized_runner_r != null ? Number(row.ext24_unrealized_runner_r) : null,
+    ext24LiveManagedR: row.ext24_live_managed_r != null ? Number(row.ext24_live_managed_r) : null,
+    ext24Tp1PartialAt: row.ext24_tp1_partial_at != null ? Number(row.ext24_tp1_partial_at) : null,
+    ext24RunnerBeAt: row.ext24_runner_be_at != null ? Number(row.ext24_runner_be_at) : null,
+    ext24RunnerExitAt: row.ext24_runner_exit_at != null ? Number(row.ext24_runner_exit_at) : null,
+    ext24RunnerExitReason: row.ext24_runner_exit_reason != null ? String(row.ext24_runner_exit_reason) : null,
+    ext24TimeoutExitPrice: row.ext24_timeout_exit_price != null ? Number(row.ext24_timeout_exit_price) : null,
+    ext24RiskUsdSnapshot: row.ext24_risk_usd_snapshot != null ? Number(row.ext24_risk_usd_snapshot) : null,
     nCandlesEvaluated: Number(row.n_candles_evaluated),
     nCandlesExpected: Number(row.n_candles_expected),
     lastEvaluatedAt: Number(row.last_evaluated_at),
     resolveVersion: String(row.resolve_version || ''),
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
+    managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
   }));
 
   return rows;
@@ -1237,7 +1444,7 @@ export async function reevaluatePendingExtendedOutcomes(
     LIMIT ?
   `).all(limit) as any[];
 
-  // Map snake_case to camelCase
+  // Map snake_case to camelCase (minimal mapping for re-evaluation)
   const mappedPending: ExtendedOutcome[] = pending.map(row => ({
     id: Number(row.id),
     signalId: Number(row.signal_id),
@@ -1245,29 +1452,43 @@ export async function reevaluatePendingExtendedOutcomes(
     category: String(row.category),
     direction: String(row.direction) as SignalDirection,
     signalTime: Number(row.signal_time),
-    startedAt: Number(row.started_at),
-    expiresAt: Number(row.expires_at),
-    completedAt: row.completed_at != null ? Number(row.completed_at) : null,
+    startedAt: Number(row.signal_time), // Use signal_time as started_at
+    expiresAt: Number(row.signal_time) + EXTENDED_WINDOW_MS,
+    completedAt: null,
     entryPrice: Number(row.entry_price),
     stopPrice: row.stop_price != null ? Number(row.stop_price) : null,
     tp1Price: row.tp1_price != null ? Number(row.tp1_price) : null,
     tp2Price: row.tp2_price != null ? Number(row.tp2_price) : null,
-    status: String(row.status) as ExtendedOutcomeStatus,
-    firstTp1At: row.first_tp1_at != null ? Number(row.first_tp1_at) : null,
-    tp2At: row.tp2_at != null ? Number(row.tp2_at) : null,
-    stopAt: row.stop_at != null ? Number(row.stop_at) : null,
-    timeToFirstHitSeconds: row.time_to_first_hit_seconds != null ? Number(row.time_to_first_hit_seconds) : null,
-    timeToTp1Seconds: row.time_to_tp1_seconds != null ? Number(row.time_to_tp1_seconds) : null,
-    timeToTp2Seconds: row.time_to_tp2_seconds != null ? Number(row.time_to_tp2_seconds) : null,
-    timeToStopSeconds: row.time_to_stop_seconds != null ? Number(row.time_to_stop_seconds) : null,
-    maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
-    maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
-    coveragePct: Number(row.coverage_pct),
-    nCandlesEvaluated: Number(row.n_candles_evaluated),
-    nCandlesExpected: Number(row.n_candles_expected),
-    lastEvaluatedAt: Number(row.last_evaluated_at),
-    resolveVersion: String(row.resolve_version || ''),
-    debugJson: row.debug_json != null ? String(row.debug_json) : null,
+    status: 'PENDING' as ExtendedOutcomeStatus,
+    firstTp1At: null,
+    tp2At: null,
+    stopAt: null,
+    timeToFirstHitSeconds: null,
+    timeToTp1Seconds: null,
+    timeToTp2Seconds: null,
+    timeToStopSeconds: null,
+    maxFavorableExcursionPct: null,
+    maxAdverseExcursionPct: null,
+    coveragePct: 0,
+    // Managed PnL fields (null for pending)
+    ext24ManagedStatus: null,
+    ext24ManagedR: null,
+    ext24ManagedPnlUsd: null,
+    ext24RealizedR: null,
+    ext24UnrealizedRunnerR: null,
+    ext24LiveManagedR: null,
+    ext24Tp1PartialAt: null,
+    ext24RunnerBeAt: null,
+    ext24RunnerExitAt: null,
+    ext24RunnerExitReason: null,
+    ext24TimeoutExitPrice: null,
+    ext24RiskUsdSnapshot: null,
+    nCandlesEvaluated: 0,
+    nCandlesExpected: 0,
+    lastEvaluatedAt: 0,
+    resolveVersion: RESOLVE_VERSION,
+    debugJson: null,
+    managedDebugJson: null,
   }));
 
   let evaluated = 0;
@@ -1450,6 +1671,19 @@ export async function listExtendedOutcomesWithComparison(params: {
       eo.debug_json,
       eo.created_at,
       eo.updated_at,
+      eo.ext24_managed_status,
+      eo.ext24_managed_r,
+      eo.ext24_managed_pnl_usd,
+      eo.ext24_realized_r,
+      eo.ext24_unrealized_runner_r,
+      eo.ext24_live_managed_r,
+      eo.ext24_tp1_partial_at,
+      eo.ext24_runner_be_at,
+      eo.ext24_runner_exit_at,
+      eo.ext24_runner_exit_reason,
+      eo.ext24_timeout_exit_price,
+      eo.ext24_risk_usd_snapshot,
+      eo.managed_debug_json,
       o240.result as horizon_240m_result,
       o240.exit_reason as horizon_240m_exit_reason,
       CASE 
@@ -1494,11 +1728,25 @@ export async function listExtendedOutcomesWithComparison(params: {
     maxFavorableExcursionPct: row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : null,
     maxAdverseExcursionPct: row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : null,
     coveragePct: Number(row.coverage_pct),
+    // Managed PnL fields
+    ext24ManagedStatus: row.ext24_managed_status != null ? String(row.ext24_managed_status) : null,
+    ext24ManagedR: row.ext24_managed_r != null ? Number(row.ext24_managed_r) : null,
+    ext24ManagedPnlUsd: row.ext24_managed_pnl_usd != null ? Number(row.ext24_managed_pnl_usd) : null,
+    ext24RealizedR: row.ext24_realized_r != null ? Number(row.ext24_realized_r) : null,
+    ext24UnrealizedRunnerR: row.ext24_unrealized_runner_r != null ? Number(row.ext24_unrealized_runner_r) : null,
+    ext24LiveManagedR: row.ext24_live_managed_r != null ? Number(row.ext24_live_managed_r) : null,
+    ext24Tp1PartialAt: row.ext24_tp1_partial_at != null ? Number(row.ext24_tp1_partial_at) : null,
+    ext24RunnerBeAt: row.ext24_runner_be_at != null ? Number(row.ext24_runner_be_at) : null,
+    ext24RunnerExitAt: row.ext24_runner_exit_at != null ? Number(row.ext24_runner_exit_at) : null,
+    ext24RunnerExitReason: row.ext24_runner_exit_reason != null ? String(row.ext24_runner_exit_reason) : null,
+    ext24TimeoutExitPrice: row.ext24_timeout_exit_price != null ? Number(row.ext24_timeout_exit_price) : null,
+    ext24RiskUsdSnapshot: row.ext24_risk_usd_snapshot != null ? Number(row.ext24_risk_usd_snapshot) : null,
     nCandlesEvaluated: Number(row.n_candles_evaluated),
     nCandlesExpected: Number(row.n_candles_expected),
     lastEvaluatedAt: Number(row.last_evaluated_at),
     resolveVersion: String(row.resolve_version || ''),
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
+    managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
     horizon240mResult: row.horizon_240m_result != null ? String(row.horizon_240m_result) : null,
     improved: Boolean(row.improved),
   }));
@@ -1571,6 +1819,143 @@ export async function getImprovementStats(params: {
     laterHitTp2,
     laterHitStop: Number(stats.later_hit_stop) || 0,
     improvedWinRate,
+  };
+}
+
+/**
+ * Get managed PnL (Option B) statistics
+ */
+export async function getManagedPnlStats(params: {
+  start?: number;
+  end?: number;
+  symbol?: string;
+  category?: string;
+  direction?: SignalDirection;
+}): Promise<{
+  // Trade counts
+  totalClosed: number;
+  wins: number;
+  losses: number;
+  beSaves: number;
+  tp1OnlyExits: number;
+  tp2Hits: number;
+  timeoutExits: number;
+  
+  // R metrics
+  totalManagedR: number;
+  avgManagedR: number;
+  maxWinR: number;
+  maxLossR: number;
+  
+  // USD metrics
+  totalManagedPnlUsd: number;
+  avgManagedPnlUsd: number;
+  
+  // Rates
+  managedWinRate: number;
+  tp1TouchRate: number;
+  tp2ConversionRate: number;
+  
+  // Risk config
+  riskPerTradeUsd: number;
+}> {
+  await ensureSchema();
+  const d = getDb();
+  const { start, end, symbol, category, direction } = params;
+
+  // Build WHERE clause
+  const conditions: string[] = [];
+  const values: any[] = [];
+
+  if (start !== undefined) {
+    conditions.push('eo.signal_time >= ?');
+    values.push(start);
+  }
+  if (end !== undefined) {
+    conditions.push('eo.signal_time <= ?');
+    values.push(end);
+  }
+  if (symbol) {
+    conditions.push('eo.symbol = ?');
+    values.push(symbol.toUpperCase());
+  }
+  if (category) {
+    conditions.push('eo.category = ?');
+    values.push(category);
+  }
+  if (direction) {
+    conditions.push('eo.direction = ?');
+    values.push(direction);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const stats = await d.prepare(`
+    SELECT
+      COUNT(*) as total_signals,
+      SUM(CASE WHEN eo.ext24_managed_r IS NOT NULL THEN 1 ELSE 0 END) as total_closed,
+      SUM(CASE WHEN eo.ext24_managed_r > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN eo.ext24_managed_r <= 0 THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN eo.ext24_runner_exit_reason = 'BREAK_EVEN' THEN 1 ELSE 0 END) as be_saves,
+      SUM(CASE WHEN eo.ext24_runner_exit_reason = 'TIMEOUT_MARKET' AND eo.ext24_tp1_partial_at IS NOT NULL THEN 1 ELSE 0 END) as tp1_only_exits,
+      SUM(CASE WHEN eo.ext24_runner_exit_reason = 'TP2' THEN 1 ELSE 0 END) as tp2_hits,
+      SUM(CASE WHEN eo.ext24_runner_exit_reason = 'TIMEOUT_MARKET' THEN 1 ELSE 0 END) as timeout_exits,
+      SUM(CASE WHEN eo.first_tp1_at IS NOT NULL THEN 1 ELSE 0 END) as tp1_touches,
+      SUM(CASE WHEN eo.tp2_at IS NOT NULL THEN 1 ELSE 0 END) as tp2_touches,
+      SUM(eo.ext24_managed_r) as total_managed_r,
+      AVG(eo.ext24_managed_r) as avg_managed_r,
+      MAX(eo.ext24_managed_r) as max_win_r,
+      MIN(eo.ext24_managed_r) as max_loss_r
+    FROM extended_outcomes eo
+    ${whereClause}
+  `).get(...values) as {
+    total_signals: number;
+    total_closed: number;
+    wins: number;
+    losses: number;
+    be_saves: number;
+    tp1_only_exits: number;
+    tp2_hits: number;
+    timeout_exits: number;
+    tp1_touches: number;
+    tp2_touches: number;
+    total_managed_r: number | null;
+    avg_managed_r: number | null;
+    max_win_r: number | null;
+    max_loss_r: number | null;
+  };
+
+  const totalClosed = Number(stats.total_closed) || 0;
+  const wins = Number(stats.wins) || 0;
+  const tp1Touches = Number(stats.tp1_touches) || 0;
+  const tp2Touches = Number(stats.tp2_touches) || 0;
+  const totalManagedR = Number(stats.total_managed_r) || 0;
+  const avgManagedR = Number(stats.avg_managed_r) || 0;
+  const maxWinR = Number(stats.max_win_r) || 0;
+  const maxLossR = Number(stats.max_loss_r) || 0;
+  
+  const riskPerTradeUsd = getRiskPerTradeUsd();
+  const totalManagedPnlUsd = totalManagedR * riskPerTradeUsd;
+  const avgManagedPnlUsd = avgManagedR * riskPerTradeUsd;
+
+  return {
+    totalClosed,
+    wins,
+    losses: Number(stats.losses) || 0,
+    beSaves: Number(stats.be_saves) || 0,
+    tp1OnlyExits: Number(stats.tp1_only_exits) || 0,
+    tp2Hits: Number(stats.tp2_hits) || 0,
+    timeoutExits: Number(stats.timeout_exits) || 0,
+    totalManagedR,
+    avgManagedR,
+    maxWinR,
+    maxLossR,
+    totalManagedPnlUsd,
+    avgManagedPnlUsd,
+    managedWinRate: totalClosed > 0 ? wins / totalClosed : 0,
+    tp1TouchRate: Number(stats.total_signals) > 0 ? tp1Touches / Number(stats.total_signals) : 0,
+    tp2ConversionRate: tp1Touches > 0 ? tp2Touches / tp1Touches : 0,
+    riskPerTradeUsd,
   };
 }
 

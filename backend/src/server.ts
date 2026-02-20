@@ -52,6 +52,7 @@ import {
   getOrCreateExtendedOutcome,
   listExtendedOutcomesWithComparison,
   getImprovementStats,
+  getManagedPnlStats,
   type ExtendedOutcomeInput,
 } from './extendedOutcomeStore.js';
 import fs from 'fs';
@@ -2665,6 +2666,29 @@ app.get('/api/extended-outcomes/stats', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e: any) {
     console.error('[api/extended-outcomes/stats] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), details: e?.message });
+  }
+});
+
+// Managed PnL (Option B) stats endpoint
+app.get('/api/extended-outcomes/managed-stats', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
+    const category = String((req.query as any)?.category || '').trim() || undefined;
+    const direction = String((req.query as any)?.direction || '').trim() || undefined;
+
+    const out = await getManagedPnlStats({
+      start: Number.isFinite(start) ? start : undefined,
+      end: Number.isFinite(end) ? end : undefined,
+      symbol,
+      category,
+      direction: direction as any,
+    });
+    res.json({ ok: true, ...out });
+  } catch (e: any) {
+    console.error('[api/extended-outcomes/managed-stats] Error:', e);
     res.status(500).json({ ok: false, error: String(e), details: e?.message });
   }
 });

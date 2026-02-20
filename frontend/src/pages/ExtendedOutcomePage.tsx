@@ -105,6 +105,15 @@ interface ExtendedOutcome {
   coveragePct: number;
   nCandlesEvaluated: number;
   nCandlesExpected: number;
+  // Managed PnL fields
+  ext24ManagedStatus?: string | null;
+  ext24ManagedR?: number | null;
+  ext24ManagedPnlUsd?: number | null;
+  ext24RealizedR?: number | null;
+  ext24UnrealizedRunnerR?: number | null;
+  ext24LiveManagedR?: number | null;
+  ext24Tp1PartialAt?: number | null;
+  ext24RunnerExitReason?: string | null;
 }
 
 interface StatsData {
@@ -124,6 +133,26 @@ interface StatsData {
   avgMaePct: number | null;
 }
 
+interface ManagedPnlStats {
+  totalClosed: number;
+  wins: number;
+  losses: number;
+  beSaves: number;
+  tp1OnlyExits: number;
+  tp2Hits: number;
+  timeoutExits: number;
+  totalManagedR: number;
+  avgManagedR: number;
+  maxWinR: number;
+  maxLossR: number;
+  totalManagedPnlUsd: number;
+  avgManagedPnlUsd: number;
+  managedWinRate: number;
+  tp1TouchRate: number;
+  tp2ConversionRate: number;
+  riskPerTradeUsd: number;
+}
+
 export default function ExtendedOutcomePage() {
   // Filters
   const [datePreset, setDatePreset] = useState<'today' | '24h' | '7d' | '30d' | 'custom'>('7d');
@@ -138,6 +167,7 @@ export default function ExtendedOutcomePage() {
   // Data
   const [outcomes, setOutcomes] = useState<Array<ExtendedOutcome & { horizon240mResult?: string | null; improved?: boolean }>>([]);
   const [stats, setStats] = useState<StatsData | null>(null);
+  const [managedStats, setManagedStats] = useState<ManagedPnlStats | null>(null);
   const [improvementStats, setImprovementStats] = useState<{ noHitAt240m: number; laterHitTp1: number; laterHitTp2: number; laterHitStop: number; improvedWinRate: number } | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -149,6 +179,7 @@ export default function ExtendedOutcomePage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [showImprovementsOnly, setShowImprovementsOnly] = useState(false);
   const [showComparison, setShowComparison] = useState(true);
+  const [showManagedStats, setShowManagedStats] = useState(true);
 
   // Date range
   const range = useMemo(() => {
@@ -194,15 +225,19 @@ export default function ExtendedOutcomePage() {
     setStatsLoading(true);
     try {
       const qs = buildParams(false);
-      const [resp, improvResp] = await Promise.all([
+      const [resp, improvResp, managedResp] = await Promise.all([
         fetch(API(`/api/extended-outcomes/stats?${qs}`)).then(r => r.json()),
         fetch(API(`/api/extended-outcomes/improvements?${qs}`)).then(r => r.json()),
+        fetch(API(`/api/extended-outcomes/managed-stats?${qs}`)).then(r => r.json()),
       ]);
       if (resp?.ok) {
         setStats(resp);
       }
       if (improvResp?.ok) {
         setImprovementStats(improvResp);
+      }
+      if (managedResp?.ok) {
+        setManagedStats(managedResp);
       }
     } finally {
       setStatsLoading(false);
@@ -468,6 +503,100 @@ export default function ExtendedOutcomePage() {
         )}
       </section>
 
+      {/* Managed Performance (Option B) */}
+      <section className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs text-cyan-400/80 uppercase tracking-widest">Managed Performance (Option B: 50% TP1 + BE Runner)</div>
+          <label className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={showManagedStats} 
+              onChange={(e) => setShowManagedStats(e.target.checked)} 
+            />
+            Show Managed Stats
+          </label>
+        </div>
+        {showManagedStats && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">Risk / Trade</div>
+                <div className="text-lg font-semibold">${managedStats?.riskPerTradeUsd ?? 15}</div>
+                <div className="text-[10px] text-white/40">Configurable</div>
+              </div>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                <div className="text-xs text-emerald-300">Managed Net R</div>
+                <div className={`text-lg font-semibold ${(managedStats?.totalManagedR ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
+                  {managedStats ? `${managedStats.totalManagedR >= 0 ? '+' : ''}${fmt(managedStats.totalManagedR, 2)}R` : '--'}
+                </div>
+                <div className="text-[10px] text-emerald-300/60">Closed trades only</div>
+              </div>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                <div className="text-xs text-emerald-300">Managed Net $</div>
+                <div className={`text-lg font-semibold ${(managedStats?.totalManagedPnlUsd ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
+                  {managedStats ? `${managedStats.totalManagedPnlUsd >= 0 ? '+' : ''}$${fmt(managedStats.totalManagedPnlUsd, 0)}` : '--'}
+                </div>
+                <div className="text-[10px] text-emerald-300/60">Based on risk/trade</div>
+              </div>
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
+                <div className="text-xs text-cyan-300">Managed Win Rate</div>
+                <div className="text-lg font-semibold text-cyan-200">{managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</div>
+                <div className="text-[10px] text-cyan-300/60">managed_r &gt; 0 / closed</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">Avg R / Trade</div>
+                <div className={`text-lg font-semibold ${(managedStats?.avgManagedR ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
+                  {managedStats ? `${managedStats.avgManagedR >= 0 ? '+' : ''}${fmt(managedStats.avgManagedR, 2)}R` : '--'}
+                </div>
+                <div className="text-[10px] text-white/40">Mean per closed trade</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">TP2 Conversion</div>
+                <div className="text-lg font-semibold text-white/90">{managedStats ? fmtRate(managedStats.tp2ConversionRate, 1) : '--'}</div>
+                <div className="text-[10px] text-white/40">TP2 hits / TP1 touches</div>
+              </div>
+            </div>
+            
+            {/* Additional managed stats row */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
+                <div className="text-xs text-amber-300">BE Saves</div>
+                <div className="text-lg font-semibold text-amber-200">{managedStats?.beSaves ?? '--'}</div>
+                <div className="text-[10px] text-amber-300/60">TP1 → BE exits</div>
+              </div>
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3">
+                <div className="text-xs text-blue-300">Timeout Exits</div>
+                <div className="text-lg font-semibold text-blue-200">{managedStats?.timeoutExits ?? '--'}</div>
+                <div className="text-[10px] text-blue-300/60">24h market close</div>
+              </div>
+              <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
+                <div className="text-xs text-purple-300">TP1 Touch Rate</div>
+                <div className="text-lg font-semibold text-purple-200">{managedStats ? fmtRate(managedStats.tp1TouchRate, 1) : '--'}</div>
+                <div className="text-[10px] text-purple-300/60">Any TP1 hit</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">Max Win R</div>
+                <div className="text-lg font-semibold text-emerald-200">{managedStats ? `+${fmt(managedStats.maxWinR, 2)}R` : '--'}</div>
+                <div className="text-[10px] text-white/40">Best outcome</div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">Max Loss R</div>
+                <div className="text-lg font-semibold text-rose-200">{managedStats ? `${fmt(managedStats.maxLossR, 2)}R` : '--'}</div>
+                <div className="text-[10px] text-white/40">Worst outcome</div>
+              </div>
+            </div>
+            
+            {/* Win rate comparison note */}
+            <div className="mt-3 text-xs">
+              <div className="flex gap-4 text-white/60">
+                <span>A) Signal Win Rate: <strong className="text-white">{stats ? fmtRate(stats.winRate, 1) : '--'}</strong> (TP1 counts as win)</span>
+                <span>B) Managed Win Rate: <strong className="text-cyan-300">{managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</strong> (Option B, official)</span>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
       {/* Outcome Breakdown Chart */}
       <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
         <div className="text-xs text-white/60 uppercase tracking-widest mb-3">Outcome Breakdown</div>
@@ -521,6 +650,8 @@ export default function ExtendedOutcomePage() {
                 <th className="text-left px-3 py-2">Entry / Stop / TP1 / TP2</th>
                 {showComparison && <th className="text-left px-3 py-2">240m Result</th>}
                 <th className="text-left px-3 py-2">Status (24h)</th>
+                {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Managed R</th>}
+                {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Runner Exit</th>}
                 <th className="text-left px-3 py-2">TP1 At</th>
                 <th className="text-left px-3 py-2">TP2 At</th>
                 <th className="text-left px-3 py-2">Stop At</th>
@@ -560,6 +691,43 @@ export default function ExtendedOutcomePage() {
                       {STATUS_LABELS[o.status] || o.status}
                     </span>
                   </td>
+                  {showManagedStats && (
+                    <td className="px-3 py-2">
+                      {o.ext24ManagedR !== null && o.ext24ManagedR !== undefined ? (
+                        <span className={`font-medium ${o.ext24ManagedR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {o.ext24ManagedR >= 0 ? '+' : ''}{fmt(o.ext24ManagedR, 2)}R
+                          {o.ext24ManagedPnlUsd !== null && (
+                            <span className="text-white/50 ml-1">(${fmt(o.ext24ManagedPnlUsd, 0)})</span>
+                          )}
+                        </span>
+                      ) : o.ext24LiveManagedR !== null && o.ext24LiveManagedR !== undefined ? (
+                        <span className="text-amber-400">
+                          {o.ext24LiveManagedR >= 0 ? '+' : ''}{fmt(o.ext24LiveManagedR, 2)}R
+                          <span className="text-white/40 ml-1">(live)</span>
+                        </span>
+                      ) : (
+                        <span className="text-white/30">--</span>
+                      )}
+                    </td>
+                  )}
+                  {showManagedStats && (
+                    <td className="px-3 py-2">
+                      {o.ext24RunnerExitReason ? (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                          o.ext24RunnerExitReason === 'TP2' ? 'bg-emerald-500/20 text-emerald-200' :
+                          o.ext24RunnerExitReason === 'BREAK_EVEN' ? 'bg-amber-500/20 text-amber-200' :
+                          o.ext24RunnerExitReason === 'TIMEOUT_MARKET' ? 'bg-blue-500/20 text-blue-200' :
+                          'bg-rose-500/20 text-rose-200'
+                        }`}>
+                          {o.ext24RunnerExitReason.replace('_', ' ')}
+                        </span>
+                      ) : o.ext24ManagedStatus ? (
+                        <span className="text-[10px] text-white/50">{o.ext24ManagedStatus.replace('_', ' ')}</span>
+                      ) : (
+                        <span className="text-white/30">--</span>
+                      )}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-white/70">{o.firstTp1At ? dt(o.firstTp1At) : '--'}</td>
                   <td className="px-3 py-2 text-white/70">{o.tp2At ? dt(o.tp2At) : '--'}</td>
                   <td className="px-3 py-2 text-white/70">{o.stopAt ? dt(o.stopAt) : '--'}</td>
@@ -576,7 +744,7 @@ export default function ExtendedOutcomePage() {
               ))}
               {!loading && outcomes.length === 0 && (
                 <tr>
-                  <td colSpan={showComparison ? 13 : 12} className="px-3 py-4 text-white/50">
+                  <td colSpan={showComparison ? (showManagedStats ? 15 : 13) : (showManagedStats ? 14 : 12)} className="px-3 py-4 text-white/50">
                     {showImprovementsOnly 
                       ? 'No improved signals found. These are signals that were "no hit" at 240m but hit within 24h.' 
                       : 'No extended outcomes in range. Try backfilling signals or adjusting filters.'}
@@ -629,6 +797,35 @@ export default function ExtendedOutcomePage() {
           <strong>Note:</strong> Extended outcomes use a 24-hour evaluation window starting from signal time. 
           If both Stop and TP are hit in the same candle, Stop wins (conservative). 
           TP1 can upgrade to TP2 if hit before 24h expires.
+        </div>
+        
+        {/* Managed PnL Guide */}
+        <div className="mt-4 pt-4 border-t border-white/10">
+          <div className="text-xs text-cyan-400/80 uppercase tracking-widest mb-3">Managed PnL (Option B) Guide</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-white/60">
+            <div>
+              <strong className="text-white">Option B Trade Management:</strong>
+              <ul className="mt-1 space-y-1 list-disc list-inside">
+                <li>At TP1 hit: Take 50% partial profit (+0.5R)</li>
+                <li>Move stop on remaining 50% to break-even (entry)</li>
+                <li>Runner exits at: TP2 (+1.5R total), BE (+0.5R), or 24h timeout</li>
+              </ul>
+            </div>
+            <div>
+              <strong className="text-white">Managed R Values:</strong>
+              <ul className="mt-1 space-y-1 list-disc list-inside">
+                <li>STOP before TP1: -1.0R (full loss)</li>
+                <li>TP1 → TP2: +1.5R (50% @ TP1 + 50% @ TP2)</li>
+                <li>TP1 → BE: +0.5R (50% @ TP1, rest at BE)</li>
+                <li>Timeout (no TP1): Market exit price converted to R</li>
+              </ul>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-white/40">
+            <strong>Same-Candle Policy:</strong> Before TP1, STOP wins if both hit in same candle. 
+            After TP1, BE wins if both TP2 and BE hit in same candle (conservative).
+            Timeout exits use last available price in 24h window.
+          </div>
         </div>
       </section>
     </div>
