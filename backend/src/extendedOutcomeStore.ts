@@ -812,16 +812,41 @@ export async function listExtendedOutcomes(params: {
     completed_desc: 'ORDER BY eo.completed_at DESC NULLS LAST',
   }[sort];
 
-  // Fetch rows
+  // Fetch rows with column aliases to match camelCase interface
   const rows = await d.prepare(`
     SELECT 
-      eo.*,
-      s.price as signal_price,
-      s.stop as signal_stop,
-      s.tp1 as signal_tp1,
-      s.tp2 as signal_tp2
+      eo.id,
+      eo.signal_id as signalId,
+      eo.symbol,
+      eo.category,
+      eo.direction,
+      eo.signal_time as signalTime,
+      eo.started_at as startedAt,
+      eo.expires_at as expiresAt,
+      eo.completed_at as completedAt,
+      eo.entry_price as entryPrice,
+      eo.stop_price as stopPrice,
+      eo.tp1_price as tp1Price,
+      eo.tp2_price as tp2Price,
+      eo.status,
+      eo.first_tp1_at as firstTp1At,
+      eo.tp2_at as tp2At,
+      eo.stop_at as stopAt,
+      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
+      eo.time_to_tp1_seconds as timeToTp1Seconds,
+      eo.time_to_tp2_seconds as timeToTp2Seconds,
+      eo.time_to_stop_seconds as timeToStopSeconds,
+      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
+      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
+      eo.coverage_pct as coveragePct,
+      eo.n_candles_evaluated as nCandlesEvaluated,
+      eo.n_candles_expected as nCandlesExpected,
+      eo.last_evaluated_at as lastEvaluatedAt,
+      eo.resolve_version as resolveVersion,
+      eo.debug_json as debugJson,
+      eo.created_at as createdAt,
+      eo.updated_at as updatedAt
     FROM extended_outcomes eo
-    JOIN signals s ON s.id = eo.signal_id
     ${whereClause}
     ${sortClause}
     LIMIT ? OFFSET ?
@@ -950,9 +975,39 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
   const d = getDb();
 
   const rows = await d.prepare(`
-    SELECT eo.*, s.price as signal_price, s.stop as signal_stop, s.tp1 as signal_tp1, s.tp2 as signal_tp2
+    SELECT 
+      eo.id,
+      eo.signal_id as signalId,
+      eo.symbol,
+      eo.category,
+      eo.direction,
+      eo.signal_time as signalTime,
+      eo.started_at as startedAt,
+      eo.expires_at as expiresAt,
+      eo.completed_at as completedAt,
+      eo.entry_price as entryPrice,
+      eo.stop_price as stopPrice,
+      eo.tp1_price as tp1Price,
+      eo.tp2_price as tp2Price,
+      eo.status,
+      eo.first_tp1_at as firstTp1At,
+      eo.tp2_at as tp2At,
+      eo.stop_at as stopAt,
+      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
+      eo.time_to_tp1_seconds as timeToTp1Seconds,
+      eo.time_to_tp2_seconds as timeToTp2Seconds,
+      eo.time_to_stop_seconds as timeToStopSeconds,
+      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
+      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
+      eo.coverage_pct as coveragePct,
+      eo.n_candles_evaluated as nCandlesEvaluated,
+      eo.n_candles_expected as nCandlesExpected,
+      eo.last_evaluated_at as lastEvaluatedAt,
+      eo.resolve_version as resolveVersion,
+      eo.debug_json as debugJson,
+      eo.created_at as createdAt,
+      eo.updated_at as updatedAt
     FROM extended_outcomes eo
-    JOIN signals s ON s.id = eo.signal_id
     WHERE eo.completed_at IS NULL
       AND eo.expires_at <= ?
     ORDER BY eo.signal_time ASC
@@ -1028,9 +1083,18 @@ export async function reevaluatePendingExtendedOutcomes(
   const d = getDb();
 
   const pending = await d.prepare(`
-    SELECT eo.*, s.price as signal_price
+    SELECT 
+      eo.id,
+      eo.signal_id as signalId,
+      eo.symbol,
+      eo.category,
+      eo.direction,
+      eo.signal_time as signalTime,
+      eo.entry_price as entryPrice,
+      eo.stop_price as stopPrice,
+      eo.tp1_price as tp1Price,
+      eo.tp2_price as tp2Price
     FROM extended_outcomes eo
-    JOIN signals s ON s.id = eo.signal_id
     WHERE eo.completed_at IS NULL
     ORDER BY eo.last_evaluated_at ASC
     LIMIT ?
@@ -1169,7 +1233,37 @@ export async function listExtendedOutcomesWithComparison(params: {
   // Fetch rows with 240m outcome joined
   const rows = await d.prepare(`
     SELECT 
-      eo.*,
+      eo.id,
+      eo.signal_id as signalId,
+      eo.symbol,
+      eo.category,
+      eo.direction,
+      eo.signal_time as signalTime,
+      eo.started_at as startedAt,
+      eo.expires_at as expiresAt,
+      eo.completed_at as completedAt,
+      eo.entry_price as entryPrice,
+      eo.stop_price as stopPrice,
+      eo.tp1_price as tp1Price,
+      eo.tp2_price as tp2Price,
+      eo.status,
+      eo.first_tp1_at as firstTp1At,
+      eo.tp2_at as tp2At,
+      eo.stop_at as stopAt,
+      eo.time_to_first_hit_seconds as timeToFirstHitSeconds,
+      eo.time_to_tp1_seconds as timeToTp1Seconds,
+      eo.time_to_tp2_seconds as timeToTp2Seconds,
+      eo.time_to_stop_seconds as timeToStopSeconds,
+      eo.max_favorable_excursion_pct as maxFavorableExcursionPct,
+      eo.max_adverse_excursion_pct as maxAdverseExcursionPct,
+      eo.coverage_pct as coveragePct,
+      eo.n_candles_evaluated as nCandlesEvaluated,
+      eo.n_candles_expected as nCandlesExpected,
+      eo.last_evaluated_at as lastEvaluatedAt,
+      eo.resolve_version as resolveVersion,
+      eo.debug_json as debugJson,
+      eo.created_at as createdAt,
+      eo.updated_at as updatedAt,
       o240.result as horizon_240m_result,
       o240.exit_reason as horizon_240m_exit_reason,
       CASE 
