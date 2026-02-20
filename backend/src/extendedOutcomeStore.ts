@@ -569,21 +569,59 @@ export async function getOrCreateExtendedOutcome(
   await ensureSchema();
   const d = getDb();
 
+  // Validate signalId
+  const signalIdNum = Math.floor(Number(signal.signalId));
+  if (!Number.isFinite(signalIdNum) || signalIdNum <= 0) {
+    console.error('[extended-outcomes] Invalid signalId:', signal.signalId, 'Input:', signal);
+    throw new Error(`Invalid signalId: ${signal.signalId}`);
+  }
+
   // Check if exists
   const existing = await d.prepare(
     `SELECT * FROM extended_outcomes WHERE signal_id = ?`
-  ).get(signal.signalId) as ExtendedOutcome | undefined;
+  ).get(signalIdNum) as ExtendedOutcome | undefined;
 
   if (existing) {
-    return { outcome: existing, created: false };
+    // Map snake_case columns to camelCase
+    const mapped: ExtendedOutcome = {
+      id: Number((existing as any).id),
+      signalId: Number((existing as any).signal_id),
+      symbol: String((existing as any).symbol),
+      category: String((existing as any).category),
+      direction: String((existing as any).direction) as SignalDirection,
+      signalTime: Number((existing as any).signal_time),
+      startedAt: Number((existing as any).started_at),
+      expiresAt: Number((existing as any).expires_at),
+      completedAt: (existing as any).completed_at != null ? Number((existing as any).completed_at) : null,
+      entryPrice: Number((existing as any).entry_price),
+      stopPrice: (existing as any).stop_price != null ? Number((existing as any).stop_price) : null,
+      tp1Price: (existing as any).tp1_price != null ? Number((existing as any).tp1_price) : null,
+      tp2Price: (existing as any).tp2_price != null ? Number((existing as any).tp2_price) : null,
+      status: String((existing as any).status) as ExtendedOutcomeStatus,
+      firstTp1At: (existing as any).first_tp1_at != null ? Number((existing as any).first_tp1_at) : null,
+      tp2At: (existing as any).tp2_at != null ? Number((existing as any).tp2_at) : null,
+      stopAt: (existing as any).stop_at != null ? Number((existing as any).stop_at) : null,
+      timeToFirstHitSeconds: (existing as any).time_to_first_hit_seconds != null ? Number((existing as any).time_to_first_hit_seconds) : null,
+      timeToTp1Seconds: (existing as any).time_to_tp1_seconds != null ? Number((existing as any).time_to_tp1_seconds) : null,
+      timeToTp2Seconds: (existing as any).time_to_tp2_seconds != null ? Number((existing as any).time_to_tp2_seconds) : null,
+      timeToStopSeconds: (existing as any).time_to_stop_seconds != null ? Number((existing as any).time_to_stop_seconds) : null,
+      maxFavorableExcursionPct: (existing as any).max_favorable_excursion_pct != null ? Number((existing as any).max_favorable_excursion_pct) : null,
+      maxAdverseExcursionPct: (existing as any).max_adverse_excursion_pct != null ? Number((existing as any).max_adverse_excursion_pct) : null,
+      coveragePct: Number((existing as any).coverage_pct),
+      nCandlesEvaluated: Number((existing as any).n_candles_evaluated),
+      nCandlesExpected: Number((existing as any).n_candles_expected),
+      lastEvaluatedAt: Number((existing as any).last_evaluated_at),
+      resolveVersion: String((existing as any).resolve_version || ''),
+      debugJson: (existing as any).debug_json != null ? String((existing as any).debug_json) : null,
+    };
+    return { outcome: mapped, created: false };
   }
 
   // Create new record
   const direction = getSignalDirection(signal.category);
   const expiresAt = Math.floor(Number(signal.signalTime)) + EXTENDED_WINDOW_MS;
   
-  // Ensure all values are proper numbers for PostgreSQL
-  const signalIdNum = Math.floor(Number(signal.signalId));
+  // Ensure all values are proper numbers for PostgreSQL (signalIdNum already validated above)
   const signalTimeNum = Math.floor(Number(signal.signalTime));
   const entryPriceNum = Number(signal.entryPrice);
   const stopPriceNum = signal.stopPrice != null ? Number(signal.stopPrice) : null;
@@ -615,9 +653,42 @@ export async function getOrCreateExtendedOutcome(
     RESOLVE_VERSION
   );
 
-  const newOutcome = await d.prepare(
+  const newOutcomeRaw = await d.prepare(
     `SELECT * FROM extended_outcomes WHERE id = ?`
-  ).get((result as any).lastID) as ExtendedOutcome;
+  ).get((result as any).lastID) as any;
+
+  // Map snake_case columns to camelCase
+  const newOutcome: ExtendedOutcome = {
+    id: Number(newOutcomeRaw.id),
+    signalId: Number(newOutcomeRaw.signal_id),
+    symbol: String(newOutcomeRaw.symbol),
+    category: String(newOutcomeRaw.category),
+    direction: String(newOutcomeRaw.direction) as SignalDirection,
+    signalTime: Number(newOutcomeRaw.signal_time),
+    startedAt: Number(newOutcomeRaw.started_at),
+    expiresAt: Number(newOutcomeRaw.expires_at),
+    completedAt: newOutcomeRaw.completed_at != null ? Number(newOutcomeRaw.completed_at) : null,
+    entryPrice: Number(newOutcomeRaw.entry_price),
+    stopPrice: newOutcomeRaw.stop_price != null ? Number(newOutcomeRaw.stop_price) : null,
+    tp1Price: newOutcomeRaw.tp1_price != null ? Number(newOutcomeRaw.tp1_price) : null,
+    tp2Price: newOutcomeRaw.tp2_price != null ? Number(newOutcomeRaw.tp2_price) : null,
+    status: String(newOutcomeRaw.status) as ExtendedOutcomeStatus,
+    firstTp1At: newOutcomeRaw.first_tp1_at != null ? Number(newOutcomeRaw.first_tp1_at) : null,
+    tp2At: newOutcomeRaw.tp2_at != null ? Number(newOutcomeRaw.tp2_at) : null,
+    stopAt: newOutcomeRaw.stop_at != null ? Number(newOutcomeRaw.stop_at) : null,
+    timeToFirstHitSeconds: newOutcomeRaw.time_to_first_hit_seconds != null ? Number(newOutcomeRaw.time_to_first_hit_seconds) : null,
+    timeToTp1Seconds: newOutcomeRaw.time_to_tp1_seconds != null ? Number(newOutcomeRaw.time_to_tp1_seconds) : null,
+    timeToTp2Seconds: newOutcomeRaw.time_to_tp2_seconds != null ? Number(newOutcomeRaw.time_to_tp2_seconds) : null,
+    timeToStopSeconds: newOutcomeRaw.time_to_stop_seconds != null ? Number(newOutcomeRaw.time_to_stop_seconds) : null,
+    maxFavorableExcursionPct: newOutcomeRaw.max_favorable_excursion_pct != null ? Number(newOutcomeRaw.max_favorable_excursion_pct) : null,
+    maxAdverseExcursionPct: newOutcomeRaw.max_adverse_excursion_pct != null ? Number(newOutcomeRaw.max_adverse_excursion_pct) : null,
+    coveragePct: Number(newOutcomeRaw.coverage_pct),
+    nCandlesEvaluated: Number(newOutcomeRaw.n_candles_evaluated),
+    nCandlesExpected: Number(newOutcomeRaw.n_candles_expected),
+    lastEvaluatedAt: Number(newOutcomeRaw.last_evaluated_at),
+    resolveVersion: String(newOutcomeRaw.resolve_version || ''),
+    debugJson: newOutcomeRaw.debug_json != null ? String(newOutcomeRaw.debug_json) : null,
+  };
 
   return { outcome: newOutcome, created: true };
 }
@@ -1106,9 +1177,25 @@ export async function reevaluatePendingExtendedOutcomes(
 
   for (const outcome of pending) {
     try {
+      // Debug: log the outcome structure
+      console.log('[extended-outcomes] Re-evaluating outcome:', { 
+        id: outcome.id, 
+        signalId: outcome.signalId,
+        symbol: outcome.symbol,
+        hasSignalId: outcome.signalId != null,
+        signalIdType: typeof outcome.signalId
+      });
+      
       // Ensure all values are properly typed as numbers
+      const signalId = Number(outcome.signalId);
+      if (!Number.isFinite(signalId) || signalId <= 0) {
+        console.error('[extended-outcomes] Invalid signalId in outcome:', outcome);
+        errors++;
+        continue;
+      }
+      
       const signal: ExtendedOutcomeInput = {
-        signalId: Number(outcome.signalId),
+        signalId: signalId,
         symbol: String(outcome.symbol),
         category: String(outcome.category),
         direction: String(outcome.direction) as SignalDirection,
