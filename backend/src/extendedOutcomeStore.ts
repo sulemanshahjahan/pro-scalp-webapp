@@ -146,9 +146,22 @@ interface EvaluationDebug {
     tp2Hit: boolean;
     resolution: 'STOP_WINS' | 'TP2_WINS' | 'TP1_WINS';
   }>;
+  // Coverage calculation debug
+  coverageCalc: {
+    signalTime: number;
+    windowEnd: number;
+    windowDurationMs: number;
+    expectedCandles: number;
+    actualCandles: number;
+    coveragePct: number;
+    windowExpired: boolean;
+    completedEarly: boolean;
+    minCoverageRequired: number;
+    coverageCheckPassed: boolean;
+  };
 }
 
-const RESOLVE_VERSION = 'v1.1.0'; // Added Option B managed PnL
+const RESOLVE_VERSION = 'v1.2.0'; // Fixed coverage calculation for early exits + added coverage safety check
 
 let schemaReady = false;
 
@@ -485,10 +498,18 @@ export async function evaluateExtended24hOutcome(
     );
   }
 
-  // Expected candle count
-  const expectedCandles = Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS);
+  // Initial candle counts (will be recalculated if trade completes early)
+  const maxExpectedCandles = Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS);
   const actualCandles = evaluationCandles.length;
-  const coveragePct = expectedCandles > 0 ? (actualCandles / expectedCandles) * 100 : 0;
+  
+  // Coverage calculation helper - computes expected candles based on actual window
+  const computeCoverage = (windowStartMs: number, windowEndMs: number, actualCount: number): { expected: number; coverage: number } => {
+    const windowDuration = Math.max(0, windowEndMs - windowStartMs);
+    // Add interval to include the candle at windowEnd
+    const expected = Math.max(1, Math.floor((windowDuration + EVALUATION_INTERVAL_MS) / EVALUATION_INTERVAL_MS));
+    const coverage = expected > 0 ? (actualCount / expected) * 100 : 0;
+    return { expected, coverage };
+  };
 
   // Sort candles by time
   evaluationCandles.sort((a, b) => a.time - b.time);
@@ -509,6 +530,18 @@ export async function evaluateExtended24hOutcome(
     tp1HitCandleIndex: null,
     tp2HitCandleIndex: null,
     sameCandleConflicts: [],
+    coverageCalc: {
+      signalTime,
+      windowEnd: signalTime, // Will be updated later
+      windowDurationMs: 0,
+      expectedCandles: maxExpectedCandles,
+      actualCandles,
+      coveragePct: 0,
+      windowExpired: false,
+      completedEarly: false,
+      minCoverageRequired: 80,
+      coverageCheckPassed: false,
+    },
   };
 
   // Need at least stop and tp1 to evaluate
@@ -609,10 +642,56 @@ export async function evaluateExtended24hOutcome(
     }
   }
 
+  // Calculate coverage based on ACTUAL window duration (not always full 24h)
+  // For completed trades: window is from signal to exit time
+  // For pending trades: window is from signal to now (or expiry if expired)
+  let coverageWindowEnd: number;
+  if (completed) {
+    // Use the actual exit time for completed trades
+    const exitTime = stopAt || tp2At || firstTp1At || Math.min(now, expiresAt);
+    coverageWindowEnd = exitTime;
+  } else {
+    // For pending trades, use current time (capped at expiry)
+    coverageWindowEnd = Math.min(now, expiresAt);
+  }
+  
+  const { expected: expectedCandles, coverage: coveragePct } = computeCoverage(
+    signalTime,
+    coverageWindowEnd,
+    actualCandles
+  );
+
+  // SAFETY CHECK: Don't finalize if coverage is too low and window hasn't expired
+  // This prevents marking trades complete when we don't have enough data
+  const MIN_COVERAGE_FOR_EARLY_COMPLETION = Math.max(0, Math.min(100, 
+    Number(process.env.EXT24_MIN_COVERAGE_EARLY_COMPLETE) || 80
+  )); // 80% coverage required to finalize early (configurable via ENV)
+  if (completed && !windowExpired && coveragePct < MIN_COVERAGE_FOR_EARLY_COMPLETION) {
+    console.warn(`[extended-outcomes] Coverage too low (${coveragePct.toFixed(1)}%) to finalize early. ` +
+      `Signal ${signalId} ${signal.symbol} - Resetting to PENDING.`);
+    completed = false;
+    // Keep the status as ACHIEVED_TP1 if TP1 was hit, otherwise PENDING
+    if (status !== 'ACHIEVED_TP1') {
+      status = 'PENDING';
+    }
+  }
+
   // Update debug info
   debug.stopHitCandleIndex = stopHitIndex;
   debug.tp1HitCandleIndex = tp1HitIndex;
   debug.tp2HitCandleIndex = tp2HitIndex;
+  debug.coverageCalc = {
+    signalTime,
+    windowEnd: coverageWindowEnd,
+    windowDurationMs: coverageWindowEnd - signalTime,
+    expectedCandles,
+    actualCandles,
+    coveragePct,
+    windowExpired,
+    completedEarly: completed && stopAt !== null || tp2At !== null,
+    minCoverageRequired: MIN_COVERAGE_FOR_EARLY_COMPLETION,
+    coverageCheckPassed: !(completed && !windowExpired && coveragePct < MIN_COVERAGE_FOR_EARLY_COMPLETION),
+  };
 
   // Calculate timing metrics
   const timeToTp1Seconds = firstTp1At !== null && firstTp1At >= signalTime
@@ -1003,7 +1082,25 @@ export async function evaluateAndUpdateExtendedOutcome(
       coveragePct: outcome.coveragePct,
       nCandlesEvaluated: outcome.nCandlesEvaluated,
       nCandlesExpected: outcome.nCandlesExpected,
-      debug: { candlesProcessed: 0, stopHitCandleIndex: null, tp1HitCandleIndex: null, tp2HitCandleIndex: null, sameCandleConflicts: [] },
+      debug: { 
+        candlesProcessed: 0, 
+        stopHitCandleIndex: null, 
+        tp1HitCandleIndex: null, 
+        tp2HitCandleIndex: null, 
+        sameCandleConflicts: [],
+        coverageCalc: {
+          signalTime: outcome.signalTime,
+          windowEnd: outcome.signalTime,
+          windowDurationMs: 0,
+          expectedCandles: outcome.nCandlesExpected,
+          actualCandles: outcome.nCandlesEvaluated,
+          coveragePct: outcome.coveragePct,
+          windowExpired: true,
+          completedEarly: false,
+          minCoverageRequired: 80,
+          coverageCheckPassed: true,
+        }
+      },
       managedPnl,
     };
   }
