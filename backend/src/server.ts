@@ -1339,6 +1339,76 @@ app.post('/api/tune/sim', async (req, res) => {
       mismatchLimit,
     });
     const actualOutcome120m = computeActualOutcome120m(runSignalRows);
+    
+    // NEW: Enhanced parity validation with warnings
+    const parityValidation = validateParity({
+      simCounts: sim.counts,
+      actualCounts,
+      mismatches: Array.isArray(parityMismatches) ? parityMismatches : [],
+      tolerance: 0.15,
+    });
+    
+    // NEW: Sample size validation
+    const sampleSizeChecks: Record<string, ReturnType<typeof checkSampleSize>> = {};
+    for (const [cat, count] of Object.entries(sim.counts)) {
+      if (count > 0) {
+        sampleSizeChecks[cat] = checkSampleSize(cat, count as number);
+      }
+    }
+    
+    // NEW: 24h managed PnL simulation
+    let outcome24hSim: any = null;
+    if (runSignalRows.length > 0) {
+      const signals = runSignalRows
+        .filter(r => r.category === 'READY_TO_BUY' || r.category === 'READY_TO_SELL')
+        .map(r => ({
+          symbol: r.symbol,
+          category: r.category,
+          price: r.price,
+          stop: r.stop,
+          tp1: r.tp1,
+          tp2: r.tp2,
+          riskPct: r.riskPct || 0.01,
+          time: r.time,
+        } as any));
+      
+      const outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
+      for (const row of runSignalRows) {
+        if (row.outcomeResult) {
+          const key = `${row.symbol}|${row.time}`;
+          outcomes120m[key] = {
+            status: row.outcomeResult === 'WIN' ? 'WIN' : row.outcomeResult === 'LOSS' ? 'LOSS' : 'NO_HIT',
+            r: row.r ?? 0,
+          };
+        }
+      }
+      
+      if (signals.length > 0) {
+        const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+        const stats24h = buildStatisticalSummary(
+          results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+          'ready'
+        );
+        outcome24hSim = {
+          sampleSize: results24h.length,
+          stats: stats24h,
+          comparison: {
+            avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
+            avgR24h: stats24h.avgR,
+            difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
+          },
+          topDifferences: results24h
+            .filter(r => Math.abs(r.difference) > 0.3)
+            .slice(0, 5)
+            .map(r => ({
+              symbol: r.signal.symbol,
+              diff120m: r.outcome120m.r,
+              diff24h: r.outcome24h.finalR,
+              difference: r.difference,
+            })),
+        };
+      }
+    }
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
     const diffVsActual = actualCounts ? diffCounts(countsOut, actualCounts) : null;
@@ -1370,7 +1440,11 @@ app.post('/api/tune/sim', async (req, res) => {
       actualCounts,
       diffVsActual,
       parityMismatches,
+      // NEW: Enhanced validation
+      parityValidation,
+      sampleSizeChecks,
       actualOutcome120m,
+      outcome24hSim,
       riskNotes: [],
     });
   } catch (e) {
