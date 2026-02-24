@@ -1260,6 +1260,82 @@ export default function TunePage() {
                 <div>ready_short_all_required_true: {batchResult.base.intersections.ready_short_all_required_true ?? 0}</div>
               </div>
             ) : null}
+
+            {/* NEW: Parity Validation Warnings for Batch */}
+            {batchResult?.base?.parityValidation?.warnings?.length ? (
+              <div className="mt-3 rounded-xl border border-red-400/30 bg-red-400/10 p-3">
+                <div className="text-xs text-red-200 font-semibold">⚠️ Parity Validation Issues</div>
+                <div className="mt-2 text-sm text-red-100 space-y-1">
+                  {batchResult.base.parityValidation.warnings.map((w: string, i: number) => (
+                    <div key={i}>• {w}</div>
+                  ))}
+                </div>
+                <div className="mt-2 text-xs text-red-200/70">
+                  Divergence: {batchResult.base.parityValidation.divergence?.toFixed(1)}% | 
+                  Valid: {batchResult.base.parityValidation.isValid ? 'Yes' : 'No'}
+                </div>
+              </div>
+            ) : null}
+
+            {/* NEW: Sample Size Warnings for Batch */}
+            {batchResult?.base?.sampleSizeChecks && Object.keys(batchResult.base.sampleSizeChecks).length > 0 ? (
+              <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
+                <div className="text-xs text-amber-200 font-semibold">📊 Sample Size Analysis</div>
+                <div className="mt-2 text-sm text-amber-100 space-y-2">
+                  {Object.entries(batchResult.base.sampleSizeChecks).map(([cat, check]: [string, any]) => (
+                    <div key={cat} className={check.adequate ? 'text-emerald-200' : 'text-amber-200'}>
+                      <span className="font-medium">{cat}:</span>{' '}
+                      {check.adequate 
+                        ? `✅ ${check.message || 'Adequate sample size'}` 
+                        : `⚠️ ${check.message || 'Insufficient data'}`}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* NEW: 24h Outcome Simulation for Batch */}
+            {batchResult?.base?.outcome24hSim ? (
+              <div className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-3">
+                <div className="text-xs text-emerald-200 font-semibold">📈 24h Managed PnL Simulation (Option B)</div>
+                <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-xs text-white/60">Sample Size</div>
+                    <div className="text-lg font-semibold">{batchResult.base.outcome24hSim.sampleSize}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-xs text-white/60">Avg R (24h)</div>
+                    <div className={`text-lg font-semibold ${(batchResult.base.outcome24hSim.stats?.avgR || 0) >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                      {fmt(batchResult.base.outcome24hSim.stats?.avgR, 3)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-xs text-white/60">Win Rate</div>
+                    <div className="text-lg font-semibold">
+                      {(batchResult.base.outcome24hSim.stats?.winRate * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-xs text-white/60">Sharpe</div>
+                    <div className="text-lg font-semibold">
+                      {fmt(batchResult.base.outcome24hSim.stats?.sharpeRatio, 2)}
+                    </div>
+                  </div>
+                </div>
+                {batchResult.base.outcome24hSim.comparison ? (
+                  <div className="mt-3 text-sm text-emerald-100">
+                    <div>120m avg R: {fmt(batchResult.base.outcome24hSim.comparison.avgR120m, 3)}</div>
+                    <div>24h avg R: {fmt(batchResult.base.outcome24hSim.comparison.avgR24h, 3)}</div>
+                    <div className={batchResult.base.outcome24hSim.comparison.difference >= 0 ? 'text-emerald-300' : 'text-amber-300'}>
+                      Difference: {batchResult.base.outcome24hSim.comparison.difference >= 0 ? '+' : ''}{fmt(batchResult.base.outcome24hSim.comparison.difference, 3)}
+                    </div>
+                  </div>
+                ) : null}
+                {batchResult.base.outcome24hSim.stats?.warning ? (
+                  <div className="mt-2 text-xs text-amber-200">⚠️ {batchResult.base.outcome24hSim.stats.warning}</div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
