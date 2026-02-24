@@ -441,16 +441,23 @@ const readyVwapMax = Number.isFinite(cfg.READY_VWAP_MAX_PCT)
     closePos >= cfg.READY_CLOSE_POS_MIN &&
     upperWickPct <= cfg.READY_UPPER_WICK_MAX;
 
-  const priceAboveVwapStrict = vwapDistPct > 0;
-  const priceAboveVwapEarly = vwapDistPct >= 0;
-  const readyPriceAboveVwapRelaxedEligible = !priceAboveVwapStrict && nearVwapReady;
-  const readyPriceAboveVwapRelaxedTrue =
-    readyPriceAboveVwapRelaxedEligible &&
-    vwapDistPct >= -cfg.READY_VWAP_EPS_PCT;
-  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOrTapRaw;
+  // FIX: For longs, we want price AT or SLIGHTLY BELOW VWAP (buying the discount)
+  // vwapDistPct < 0 means price is BELOW VWAP (good for longs)
+  const priceAtOrBelowVwapStrict = vwapDistPct <= 0;
+  const priceAboveVwapStrict = vwapDistPct > 0;  // Keep for backward compat
+  const priceAboveVwapEarly = vwapDistPct >= 0;  // Keep for backward compat
+  const readyPriceAtOrBelowVwapRelaxedEligible = !priceAtOrBelowVwapStrict && nearVwapReady;
+  const readyPriceAtOrBelowVwapRelaxedTrue =
+    readyPriceAtOrBelowVwapRelaxedEligible &&
+    vwapDistPct <= cfg.READY_VWAP_EPS_PCT;  // Allow slight premium
+  const readyPriceAtOrBelowVwap = priceAtOrBelowVwapStrict || readyPriceAtOrBelowVwapRelaxedTrue || reclaimOrTapRaw;
+  // Keep original naming for compatibility
+  const readyPriceAboveVwap = readyPriceAtOrBelowVwap;
+  const readyPriceAboveVwapRelaxedEligible = readyPriceAtOrBelowVwapRelaxedEligible;
+  const readyPriceAboveVwapRelaxedTrue = readyPriceAtOrBelowVwapRelaxedTrue;
   const bestPriceAboveVwap =
-    vwapDistPct > 0 ||
-    (nearVwapBuy && vwapDistPct >= -cfg.BEST_VWAP_EPS_PCT);
+    vwapDistPct <= 0 ||
+    (nearVwapBuy && vwapDistPct <= cfg.BEST_VWAP_EPS_PCT);
 
   const volBestMin = Math.max(cfg.thresholds.volSpikeX, 1.4);
   const bestVolOk = volSpike >= Math.max(1.2, volBestMin);

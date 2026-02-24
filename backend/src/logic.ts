@@ -815,17 +815,22 @@ function analyzeSymbolInternal(
   };
 
   const READY_VWAP_EPS_PCT = parseFloat(process.env.READY_VWAP_EPS_PCT || '0.02');
-  const priceAboveVwapStrict = price > vwap_i;
-  const readyPriceAboveVwapRelaxedEligible =
-    !priceAboveVwapStrict &&
+  // FIX: For longs, we want price AT or SLIGHTLY BELOW VWAP (buying the discount)
+  // NOT above VWAP (buying the premium)
+  const priceAtOrBelowVwapStrict = price <= vwap_i;
+  const readyPriceAtOrBelowVwapRelaxedEligible =
+    !priceAtOrBelowVwapStrict &&
     nearVwapReady;
-  const readyPriceAboveVwapRelaxedTrue =
-    readyPriceAboveVwapRelaxedEligible &&
-    price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
-  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOk;
+  const readyPriceAtOrBelowVwapRelaxedTrue =
+    readyPriceAtOrBelowVwapRelaxedEligible &&
+    price <= vwap_i * (1 + READY_VWAP_EPS_PCT / 100);
+  // Allow slight premium (up to EPS%) OR reclaim pattern
+  const readyPriceAtOrBelowVwap = priceAtOrBelowVwapStrict || readyPriceAtOrBelowVwapRelaxedTrue || reclaimOk;
+  // Keep original naming for compatibility
+  const readyPriceAboveVwap = readyPriceAtOrBelowVwap;
   const bestPriceAboveVwap =
-    price > vwap_i ||
-    (nearVwapBuy && price >= vwap_i * (1 - BEST_VWAP_EPS_PCT / 100));
+    price <= vwap_i ||
+    (nearVwapBuy && price <= vwap_i * (1 + BEST_VWAP_EPS_PCT / 100));
 
   const volBestMin  = Math.max(thresholds.volSpikeX, 1.4);
 
@@ -1446,8 +1451,8 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     ready: {
       sessionOk: sessionOK,
       priceAboveVwap: readyPriceAboveVwap,
-      priceAboveVwapRelaxedEligible: readyPriceAboveVwapRelaxedEligible,
-      priceAboveVwapRelaxedTrue: readyPriceAboveVwapRelaxedTrue,
+      priceAboveVwapRelaxedEligible: readyPriceAtOrBelowVwapRelaxedEligible,
+      priceAboveVwapRelaxedTrue: readyPriceAtOrBelowVwapRelaxedTrue,
       priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
