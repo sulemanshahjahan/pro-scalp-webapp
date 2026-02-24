@@ -1373,8 +1373,14 @@ app.post('/api/tune/sim', async (req, res) => {
     
     // NEW: 24h managed PnL simulation
     let outcome24hSim: any = null;
+    
+    // Build signals from DB records OR from simulated candidate features
+    let signals: any[] = [];
+    let outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
+    
     if (runSignalRows.length > 0) {
-      const signals = runSignalRows
+      // Use signals from database (with existing outcomes)
+      signals = runSignalRows
         .filter(r => r.category === 'READY_TO_BUY' || r.category === 'READY_TO_SELL')
         .map(r => ({
           symbol: r.symbol,
@@ -1385,9 +1391,8 @@ app.post('/api/tune/sim', async (req, res) => {
           tp2: r.tp2,
           riskPct: r.riskPct || 0.01,
           time: r.time,
-        } as any));
+        }));
       
-      const outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
       for (const row of runSignalRows) {
         if (row.outcomeResult) {
           const key = `${row.symbol}|${row.time}`;
@@ -1397,32 +1402,65 @@ app.post('/api/tune/sim', async (req, res) => {
           };
         }
       }
-      
-      if (signals.length > 0) {
-        const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
-        const stats24h = buildStatisticalSummary(
-          results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
-          'ready'
-        );
-        outcome24hSim = {
-          sampleSize: results24h.length,
-          stats: stats24h,
-          comparison: {
-            avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
-            avgR24h: stats24h.avgR,
-            difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
-          },
-          topDifferences: results24h
-            .filter(r => Math.abs(r.difference) > 0.3)
-            .slice(0, 5)
-            .map(r => ({
-              symbol: r.signal.symbol,
-              diff120m: r.outcome120m.r,
-              diff24h: r.outcome24h.finalR,
-              difference: r.difference,
-            })),
-        };
+    } else {
+      // Build simulated signals from candidate features (for recent scans without DB records)
+      for (const row of rows) {
+        const m = row.metrics || {};
+        const c = row.computed || {};
+        
+        // Only include rows that the simulator classified as READY
+        const isReadyLong = c.finalCategory === 'READY_TO_BUY' || c.readyCore;
+        const isReadyShort = c.shortCategory === 'READY_TO_SELL' || c.shortCore;
+        
+        if ((isReadyLong || isReadyShort) && m.price && m.stopPrice) {
+          const isShort = isReadyShort;
+          const price = m.price;
+          const stop = m.stopPrice;
+          const risk = Math.abs(price - stop);
+          const rr = m.rr || 1.5;
+          
+          // Calculate TP1 and TP2 from RR
+          const tp1 = isShort ? price - risk : price + risk;
+          const tp2 = isShort ? price - (risk * Math.min(rr, 2)) : price + (risk * Math.min(rr, 2));
+          
+          signals.push({
+            symbol: row.symbol,
+            category: isShort ? 'READY_TO_SELL' : 'READY_TO_BUY',
+            price,
+            stop,
+            tp1,
+            tp2,
+            riskPct: m.riskPct || 0.01,
+            time: row.startedAt,
+          });
+        }
       }
+    }
+    
+    if (signals.length > 0) {
+      const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
+      const stats24h = buildStatisticalSummary(
+        results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+        'ready'
+      );
+      outcome24hSim = {
+        sampleSize: results24h.length,
+        stats: stats24h,
+        comparison: {
+          avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
+          avgR24h: stats24h.avgR,
+          difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
+        },
+        topDifferences: results24h
+          .filter(r => Math.abs(r.difference) > 0.3)
+          .slice(0, 5)
+          .map(r => ({
+            symbol: r.signal.symbol,
+            diff120m: r.outcome120m.r,
+            diff24h: r.outcome24h.finalR,
+            difference: r.difference,
+          })),
+      };
     }
 
     const startedAt = scanRun?.startedAt ?? rows[0]?.startedAt ?? null;
@@ -1613,8 +1651,14 @@ app.post('/api/tune/simBatch', async (req, res) => {
     
     // NEW: 24h managed PnL simulation for base config
     let outcome24hSim: any = null;
+    
+    // Build signals from DB records OR from simulated candidate features
+    let signals: any[] = [];
+    let outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
+    
     if (runSignalRows.length > 0) {
-      const signals = runSignalRows
+      // Use signals from database (with existing outcomes)
+      signals = runSignalRows
         .filter(r => r.category === 'READY_TO_BUY' || r.category === 'READY_TO_SELL')
         .map(r => ({
           symbol: r.symbol,
@@ -1625,9 +1669,8 @@ app.post('/api/tune/simBatch', async (req, res) => {
           tp2: r.tp2,
           riskPct: r.riskPct || 0.01,
           time: r.time,
-        } as any));
+        }));
       
-      const outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
       for (const row of runSignalRows) {
         if (row.outcomeResult) {
           const key = `${row.symbol}|${row.time}`;
@@ -1637,32 +1680,65 @@ app.post('/api/tune/simBatch', async (req, res) => {
           };
         }
       }
-      
-      if (signals.length > 0) {
-        const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
-        const stats24h = buildStatisticalSummary(
-          results24h.map((r: any) => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
-          'ready'
-        );
-        outcome24hSim = {
-          sampleSize: results24h.length,
-          stats: stats24h,
-          comparison: {
-            avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
-            avgR24h: stats24h.avgR,
-            difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
-          },
-          topDifferences: results24h
-            .filter((r: any) => Math.abs(r.difference) > 0.3)
-            .slice(0, 5)
-            .map((r: any) => ({
-              symbol: r.signal.symbol,
-              diff120m: r.outcome120m.r,
-              diff24h: r.outcome24h.finalR,
-              difference: r.difference,
-            })),
-        };
+    } else {
+      // Build simulated signals from candidate features (for recent scans without DB records)
+      for (const row of rows) {
+        const m = row.metrics || {};
+        const c = row.computed || {};
+        
+        // Only include rows that the simulator classified as READY
+        const isReadyLong = c.finalCategory === 'READY_TO_BUY' || c.readyCore;
+        const isReadyShort = c.shortCategory === 'READY_TO_SELL' || c.shortCore;
+        
+        if ((isReadyLong || isReadyShort) && m.price && m.stopPrice) {
+          const isShort = isReadyShort;
+          const price = m.price;
+          const stop = m.stopPrice;
+          const risk = Math.abs(price - stop);
+          const rr = m.rr || 1.5;
+          
+          // Calculate TP1 and TP2 from RR
+          const tp1 = isShort ? price - risk : price + risk;
+          const tp2 = isShort ? price - (risk * Math.min(rr, 2)) : price + (risk * Math.min(rr, 2));
+          
+          signals.push({
+            symbol: row.symbol,
+            category: isShort ? 'READY_TO_SELL' : 'READY_TO_BUY',
+            price,
+            stop,
+            tp1,
+            tp2,
+            riskPct: m.riskPct || 0.01,
+            time: row.startedAt,
+          });
+        }
       }
+    }
+    
+    if (signals.length > 0) {
+      const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
+      const stats24h = buildStatisticalSummary(
+        results24h.map((r: any) => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+        'ready'
+      );
+      outcome24hSim = {
+        sampleSize: results24h.length,
+        stats: stats24h,
+        comparison: {
+          avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
+          avgR24h: stats24h.avgR,
+          difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
+        },
+        topDifferences: results24h
+          .filter((r: any) => Math.abs(r.difference) > 0.3)
+          .slice(0, 5)
+          .map((r: any) => ({
+            symbol: r.signal.symbol,
+            diff120m: r.outcome120m.r,
+            diff24h: r.outcome24h.finalR,
+            difference: r.difference,
+          })),
+      };
     }
 
     const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
