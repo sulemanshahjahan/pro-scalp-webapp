@@ -1399,7 +1399,7 @@ app.post('/api/tune/sim', async (req, res) => {
       }
       
       if (signals.length > 0) {
-        const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+        const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
         const stats24h = buildStatisticalSummary(
           results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
           'ready'
@@ -1639,9 +1639,9 @@ app.post('/api/tune/simBatch', async (req, res) => {
       }
       
       if (signals.length > 0) {
-        const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+        const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
         const stats24h = buildStatisticalSummary(
-          results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+          results24h.map((r: any) => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
           'ready'
         );
         outcome24hSim = {
@@ -1653,9 +1653,9 @@ app.post('/api/tune/simBatch', async (req, res) => {
             difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
           },
           topDifferences: results24h
-            .filter(r => Math.abs(r.difference) > 0.3)
+            .filter((r: any) => Math.abs(r.difference) > 0.3)
             .slice(0, 5)
-            .map(r => ({
+            .map((r: any) => ({
               symbol: r.signal.symbol,
               diff120m: r.outcome120m.r,
               diff24h: r.outcome24h.finalR,
@@ -1891,7 +1891,7 @@ app.post('/api/tune/sim24h', async (req, res) => {
     }
     
     // Run 24h simulation
-    const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+    const results24h = await batchSimulate24hOutcomes(signals, outcomes120m);
     
     // Build statistics
     const stats120m = buildStatisticalSummary(

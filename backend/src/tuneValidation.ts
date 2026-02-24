@@ -267,16 +267,20 @@ export function validateParity(params: {
   };
 }
 
+import { klinesRange } from './binance.js';
+import type { OHLCV } from './types.js';
+
 /**
- * Simulate 24h managed PnL outcome from 120m outcome
+ * Simulate 24h managed PnL outcome using ACTUAL Binance price data
  * Uses Option B: 50% TP1, runner to TP2 or BE
+ * 
+ * Fetches real 24h candles from Binance and walks through them to determine
+ * exactly which level (TP1, TP2, SL) gets hit first within 24 hours.
  */
-export function simulate24hManagedOutcome(
+export async function simulate24hManagedOutcome(
   signal: Signal,
-  outcome120m: { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number },
-  // Optional: actual 24h candles if available for precise simulation
-  candles24h?: Array<{ high: number; low: number; close: number }>
-): ExtendedSimResult['outcome24h'] {
+  outcome120m?: { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }
+): Promise<ExtendedSimResult['outcome24h']> {
   const entry = signal.price;
   const stop = signal.stop;
   const tp1 = signal.tp1;
@@ -296,119 +300,264 @@ export function simulate24hManagedOutcome(
   
   const isShort = signal.category?.includes('SHORT') || signal.category === 'READY_TO_SELL';
   const risk = Math.abs(entry - stop);
-  const direction = isShort ? -1 : 1;
   
-  // Determine TP1 and TP2 hit based on 120m outcome and randomization for realism
-  // In a full implementation, this would use actual 24h candles
+  // Calculate R multiple for each level
+  const tp1R = tp1 ? Math.abs(tp1 - entry) / risk : 1;
+  const tp2R = tp2 ? Math.abs(tp2 - entry) / risk : tp1R * 2;
   
-  let hitTp1 = false;
-  let hitTp2 = false;
-  let hitStop = false;
-  
-  if (outcome120m.status === 'WIN') {
-    // If won in 120m, likely hit TP1, maybe TP2
-    hitTp1 = true;
-    hitTp2 = Math.random() < 0.4;  // 40% chance to reach TP2
-  } else if (outcome120m.status === 'LOSS') {
-    hitStop = true;
-  } else {
-    // NO_HIT - check if it would hit TP1 in 24h
-    // Conservative estimate: 30% chance
-    hitTp1 = Math.random() < 0.3;
-  }
-  
-  // Calculate managed PnL (Option B)
-  let realizedR = 0;
-  let unrealizedR = 0;
-  let exitPrice = entry;
-  let exitReason = '';
-  
-  if (hitStop) {
-    // Hit stop - full loss
-    realizedR = -1;
-    exitPrice = stop ?? entry;
-    exitReason = 'stop_loss';
-  } else if (hitTp2) {
-    // Hit TP2 - 50% at TP1 (0.5R), 50% at TP2 (1.5R)
-    realizedR = 0.5 + 1.5;  // 2R total
-    exitPrice = tp2 ?? tp1 ?? entry;
-    exitReason = 'tp2_full';
-  } else if (hitTp1) {
-    // Hit TP1 only - 50% at TP1 (0.5R), runner stopped out at BE
-    const runnerOutcome = Math.random();
-    if (runnerOutcome < 0.5) {
-      // Runner hit BE
-      realizedR = 0.5;  // TP1 only
-      unrealizedR = 0;
-      exitReason = 'tp1_be';
-    } else if (runnerOutcome < 0.7) {
-      // Runner hit stop (full position)
-      realizedR = 0.5 - 0.5;  // TP1 - runner loss = 0
-      exitReason = 'tp1_then_stop';
-    } else {
-      // Runner still running at 24h
-      realizedR = 0.5;
-      unrealizedR = 0.3;  // Estimated unrealized
-      exitReason = 'tp1_open_runner';
+  try {
+    // Fetch 24h of 5m candles from Binance (288 candles = 24h)
+    const startTime = signal.time;
+    const endTime = startTime + (24 * 60 * 60 * 1000); // 24h later
+    
+    const candles = await klinesRange(signal.symbol, '5m', startTime, endTime, 1000);
+    
+    if (!candles.length) {
+      // Fallback: use 120m outcome if available
+      return simulateFrom120mOutcome(signal, outcome120m);
     }
-  } else {
-    // No hit - timeout
+    
+    // Walk through candles to find which level hits first
+    let hitTp1 = false;
+    let hitTp2 = false;
+    let hitStop = false;
+    let tp1HitTime: number | null = null;
+    let stopHitTime: number | null = null;
+    let tp2HitTime: number | null = null;
+    
+    for (const candle of candles) {
+      const { high, low } = candle;
+      
+      if (isShort) {
+        // Short: TP is below entry, SL is above entry
+        if (!hitTp1 && tp1 && low <= tp1) {
+          hitTp1 = true;
+          tp1HitTime = candle.time;
+        }
+        if (!hitTp2 && tp2 && low <= tp2) {
+          hitTp2 = true;
+          tp2HitTime = candle.time;
+        }
+        if (!hitStop && high >= stop) {
+          hitStop = true;
+          stopHitTime = candle.time;
+        }
+      } else {
+        // Long: TP is above entry, SL is below entry
+        if (!hitTp1 && tp1 && high >= tp1) {
+          hitTp1 = true;
+          tp1HitTime = candle.time;
+        }
+        if (!hitTp2 && tp2 && high >= tp2) {
+          hitTp2 = true;
+          tp2HitTime = candle.time;
+        }
+        if (!hitStop && low <= stop) {
+          hitStop = true;
+          stopHitTime = candle.time;
+        }
+      }
+      
+      // Stop if all levels hit or we've processed 24h
+      if ((hitTp2 || !tp2) && hitTp1 && hitStop) break;
+    }
+    
+    // Determine order of hits for Option B management
+    // Option B: 50% position closes at TP1, runner continues to TP2 or BE
+    let realizedR = 0;
+    let unrealizedR = 0;
+    let exitPrice = entry;
+    let exitReason = '';
+    
+    if (hitStop && (!tp1HitTime || stopHitTime! <= tp1HitTime)) {
+      // Stop hit before or at same time as TP1 - full loss
+      realizedR = -1;
+      exitPrice = stop;
+      exitReason = 'stop_loss_first';
+    } else if (hitTp2 && tp2HitTime && (!tp1HitTime || tp2HitTime <= tp1HitTime)) {
+      // TP2 hit first or at same time - full position at TP2
+      // But Option B would have taken TP1 first if it was available
+      // This is an edge case - assume we got TP1 before TP2
+      realizedR = 0.5 + 1.5; // 2R total
+      exitPrice = tp2 ?? tp1 ?? entry;
+      exitReason = 'tp2_direct';
+    } else if (hitTp1) {
+      // TP1 hit first - Option B applies
+      // 50% at TP1 = 0.5R realized immediately
+      realizedR = 0.5 * tp1R;
+      
+      // Check what happens to the runner
+      if (hitTp2 && tp2HitTime && tp1HitTime && tp2HitTime > tp1HitTime) {
+        // Runner hit TP2 after TP1
+        realizedR += 0.5 * tp2R; // Rest at TP2
+        exitPrice = tp2 ?? tp1 ?? entry;
+        exitReason = 'tp1_then_tp2';
+      } else if (hitStop && stopHitTime && tp1HitTime && stopHitTime > tp1HitTime) {
+        // Runner hit stop after TP1 - move to BE
+        realizedR += 0; // Runner stopped at BE
+        exitPrice = entry; // Breakeven for runner
+        exitReason = 'tp1_then_be';
+      } else {
+        // Runner still open at end of 24h
+        // Mark to market at last candle close
+        const lastCandle = candles[candles.length - 1];
+        const runnerPnl = isShort 
+          ? (entry - lastCandle.close) / risk
+          : (lastCandle.close - entry) / risk;
+        unrealizedR = 0.5 * Math.max(-1, Math.min(tp2R, runnerPnl)); // Capped
+        exitPrice = lastCandle.close;
+        exitReason = 'tp1_open_runner_24h';
+      }
+    } else if (hitStop) {
+      // Only stop hit (no TP1) - full loss
+      realizedR = -1;
+      exitPrice = stop;
+      exitReason = 'stop_only';
+    } else {
+      // No levels hit in 24h - mark to market
+      const lastCandle = candles[candles.length - 1];
+      const mtmR = isShort 
+        ? (entry - lastCandle.close) / risk
+        : (lastCandle.close - entry) / risk;
+      unrealizedR = Math.max(-1, Math.min(tp2R, mtmR)); // Capped at stop/tp2
+      exitPrice = lastCandle.close;
+      exitReason = 'timeout_mtm';
+    }
+    
+    const finalR = realizedR + unrealizedR;
+    
+    // Determine status
+    let status: ExtendedSimResult['outcome24h']['status'] = 'FLAT_TIMEOUT';
+    if (hitStop && realizedR <= -0.5) {
+      status = 'LOSS_STOP';
+    } else if (hitTp2 && realizedR >= 1.0) {
+      status = 'WIN_TP2';
+    } else if (hitTp1 && realizedR > 0) {
+      status = 'WIN_TP1';
+    }
+    
+    return {
+      status,
+      finalR,
+      exitPrice,
+      realizedR,
+      unrealizedR,
+      pnlUsd: finalR * (signal.riskPct || 0.01) * 1000,
+      exitReason,
+    } as any;
+    
+  } catch (error) {
+    // Fallback to 120m outcome if Binance fetch fails
+    console.warn(`Failed to fetch 24h candles for ${signal.symbol}:`, error);
+    return simulateFrom120mOutcome(signal, outcome120m);
+  }
+}
+
+/**
+ * Fallback simulation using 120m outcome when Binance data unavailable
+ */
+function simulateFrom120mOutcome(
+  signal: Signal,
+  outcome120m?: { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }
+): ExtendedSimResult['outcome24h'] {
+  const entry = signal.price;
+  const stop = signal.stop;
+  const tp1 = signal.tp1;
+  const tp2 = signal.tp2;
+  
+  if (!entry || !stop || !tp1) {
+    return {
+      status: 'FLAT_TIMEOUT',
+      finalR: 0,
+      exitPrice: entry,
+      realizedR: 0,
+      unrealizedR: 0,
+      pnlUsd: 0,
+      exitReason: 'invalid_levels',
+    } as any;
+  }
+  
+  // Conservative estimate based on 120m outcome
+  let realizedR = 0;
+  let exitReason = 'unknown';
+  
+  if (!outcome120m || outcome120m.status === 'NO_HIT') {
     realizedR = 0;
-    exitReason = 'timeout';
+    exitReason = 'timeout_fallback';
+  } else if (outcome120m.status === 'WIN') {
+    // Assume TP1 hit
+    realizedR = 0.5;
+    exitReason = 'tp1_fallback';
+  } else {
+    // Loss
+    realizedR = -1;
+    exitReason = 'stop_fallback';
   }
   
-  const finalR = realizedR + unrealizedR;
-  
-  // Determine status
-  let status: ExtendedSimResult['outcome24h']['status'] = 'FLAT_TIMEOUT';
-  if (hitStop && realizedR <= -0.5) {
-    status = 'LOSS_STOP';
-  } else if (hitTp2) {
-    status = 'WIN_TP2';
-  } else if (hitTp1 && realizedR > 0) {
-    status = 'WIN_TP1';
-  }
+  const status = realizedR > 0 ? 'WIN_TP1' : realizedR < 0 ? 'LOSS_STOP' : 'FLAT_TIMEOUT';
   
   return {
     status,
-    finalR,
-    exitPrice,
+    finalR: realizedR,
+    exitPrice: realizedR > 0 ? tp1 : realizedR < 0 ? stop : entry,
     realizedR,
-    unrealizedR,
-    pnlUsd: finalR * (signal.riskPct || 0.01) * 1000,  // Estimated USD
+    unrealizedR: 0,
+    pnlUsd: realizedR * (signal.riskPct || 0.01) * 1000,
     exitReason,
   } as any;
 }
 
 /**
  * Batch process 24h outcomes for multiple signals
+ * Fetches real Binance data for accurate simulation
  */
-export function batchSimulate24hOutcomes(
+export async function batchSimulate24hOutcomes(
   signals: Signal[],
-  outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }>
-): ExtendedSimResult[] {
-  return signals.map(signal => {
-    const key = `${signal.symbol}|${signal.time}`;
-    const outcome120m = outcomes120m[key] || { status: 'NO_HIT', r: 0 };
+  outcomes120m?: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }>
+): Promise<ExtendedSimResult[]> {
+  const results: ExtendedSimResult[] = [];
+  
+  // Process in batches to avoid rate limits (max 10 concurrent)
+  const BATCH_SIZE = 5;
+  const DELAY_MS = 200; // 200ms between batches
+  
+  for (let i = 0; i < signals.length; i += BATCH_SIZE) {
+    const batch = signals.slice(i, i + BATCH_SIZE);
     
-    const outcome24h = simulate24hManagedOutcome(signal, outcome120m);
-    const difference = outcome24h.finalR - outcome120m.r;
+    const batchPromises = batch.map(async (signal) => {
+      const key = `${signal.symbol}|${signal.time}`;
+      const outcome120m = outcomes120m?.[key];
+      
+      const outcome24h = await simulate24hManagedOutcome(signal, outcome120m);
+      const r120m = outcome120m?.r ?? 0;
+      const difference = outcome24h.finalR - r120m;
+      
+      let recommendation: ExtendedSimResult['recommendation'] = 'inconclusive';
+      if (Math.abs(difference) < 0.2) {
+        recommendation = 'trust_120m';
+      } else if (outcome24h.finalR > r120m) {
+        recommendation = 'trust_24h';
+      }
+      
+      return {
+        signal,
+        outcome120m: outcome120m || { status: 'NO_HIT', r: 0 },
+        outcome24h,
+        difference,
+        recommendation,
+      };
+    });
     
-    let recommendation: ExtendedSimResult['recommendation'] = 'inconclusive';
-    if (Math.abs(difference) < 0.2) {
-      recommendation = 'trust_120m';
-    } else if (outcome24h.finalR > outcome120m.r) {
-      recommendation = 'trust_24h';
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    
+    // Rate limiting delay between batches
+    if (i + BATCH_SIZE < signals.length) {
+      await new Promise(resolve => setTimeout(resolve, DELAY_MS));
     }
-    
-    return {
-      signal,
-      outcome120m,
-      outcome24h,
-      difference,
-      recommendation,
-    };
-  });
+  }
+  
+  return results;
 }
 
 /**
