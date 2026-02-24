@@ -8,6 +8,15 @@ import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, s
 import { getLatestScanRuns, listScanRuns, getScanRunByRunId } from './scanStore.js';
 import { listCandidateFeatures, listCandidateFeaturesMulti } from './candidateFeaturesStore.js';
 import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSim.js';
+import {
+  buildStatisticalSummary,
+  validateParity,
+  simulate24hManagedOutcome,
+  batchSimulate24hOutcomes,
+  checkSampleSize,
+  type ParityMismatch,
+  SAMPLE_SIZE_RULES,
+} from './tuneValidation.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { isEmailEnabled } from './mailer.js';
@@ -176,11 +185,18 @@ type RunSignalLite = {
   runId: string;
   symbol: string;
   category: string;
+  time: number;
+  price: number;
+  stop: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  riskPct: number | null;
   gateSnapshot: any | null;
   outcomeResult: string | null;
   outcomeHitTp1: boolean | null;
   outcomeHitSl: boolean | null;
   outcomeWindowStatus: string | null;
+  r: number | null;
 };
 
 const ZERO_COUNTS: SignalCounts = { watch: 0, early: 0, ready: 0, best: 0, watchShort: 0, earlyShort: 0, readyShort: 0, bestShort: 0 };
@@ -506,11 +522,18 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
     runId: String(r.runId ?? ''),
     symbol: String(r.symbol ?? ''),
     category: String(r.category ?? ''),
+    time: Number(r.time ?? 0),
+    price: Number(r.price ?? 0),
+    stop: r.stop == null ? null : Number(r.stop),
+    tp1: r.tp1 == null ? null : Number(r.tp1),
+    tp2: r.tp2 == null ? null : Number(r.tp2),
+    riskPct: r.riskPct == null ? null : Number(r.riskPct),
     gateSnapshot: safeJsonParse<any>(r.gateSnapshotJson),
     outcomeResult: r.outcomeResult == null ? null : String(r.outcomeResult),
     outcomeHitTp1: toBool(r.outcomeHitTp1),
     outcomeHitSl: toBool(r.outcomeHitSl),
     outcomeWindowStatus: r.outcomeWindowStatus == null ? null : String(r.outcomeWindowStatus),
+    r: r.r == null ? null : Number(r.r),
   }));
 
   const bindEvents: Record<string, any> = { horizonMin };
@@ -1480,7 +1503,78 @@ app.post('/api/tune/simBatch', async (req, res) => {
       signalByKey,
       mismatchLimit,
     });
+    
+    // NEW: Enhanced parity validation with warnings
+    const parityValidation = validateParity({
+      simCounts: baseSim.counts,
+      actualCounts,
+      mismatches: Array.isArray(baseParityMismatches) ? baseParityMismatches : [],
+      tolerance: 0.15,  // 15% divergence threshold
+    });
+    
+    // NEW: Sample size validation
+    const sampleSizeChecks: Record<string, ReturnType<typeof checkSampleSize>> = {};
+    for (const [cat, count] of Object.entries(baseSim.counts)) {
+      if (count > 0) {
+        sampleSizeChecks[cat] = checkSampleSize(cat, count as number);
+      }
+    }
+    
     const actualOutcome120m = computeActualOutcome120m(runSignalRows);
+    
+    // NEW: 24h managed PnL simulation for base config
+    let outcome24hSim: any = null;
+    if (runSignalRows.length > 0) {
+      const signals = runSignalRows
+        .filter(r => r.category === 'READY_TO_BUY' || r.category === 'READY_TO_SELL')
+        .map(r => ({
+          symbol: r.symbol,
+          category: r.category,
+          price: r.price,
+          stop: r.stop,
+          tp1: r.tp1,
+          tp2: r.tp2,
+          riskPct: r.riskPct || 0.01,
+          time: r.time,
+        } as any));
+      
+      const outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
+      for (const row of runSignalRows) {
+        if (row.outcomeResult) {
+          const key = `${row.symbol}|${row.time}`;
+          outcomes120m[key] = {
+            status: row.outcomeResult === 'WIN' ? 'WIN' : row.outcomeResult === 'LOSS' ? 'LOSS' : 'NO_HIT',
+            r: row.r ?? 0,
+          };
+        }
+      }
+      
+      if (signals.length > 0) {
+        const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+        const stats24h = buildStatisticalSummary(
+          results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+          'ready'
+        );
+        outcome24hSim = {
+          sampleSize: results24h.length,
+          stats: stats24h,
+          comparison: {
+            avgR120m: actualOutcome120m.totals?.win_rate_120m || 0,
+            avgR24h: stats24h.avgR,
+            difference: stats24h.avgR - (actualOutcome120m.totals?.win_rate_120m || 0),
+          },
+          topDifferences: results24h
+            .filter(r => Math.abs(r.difference) > 0.3)
+            .slice(0, 5)
+            .map(r => ({
+              symbol: r.signal.symbol,
+              diff120m: r.outcome120m.r,
+              diff24h: r.outcome24h.finalR,
+              difference: r.difference,
+            })),
+        };
+      }
+    }
 
     const buildDiff = (baseSet: Set<string>, curSet: Set<string>) => {
       const added: string[] = [];
@@ -1591,7 +1685,11 @@ app.post('/api/tune/simBatch', async (req, res) => {
         firstFailed: baseSim.firstFailed,
         gateTrue: baseSim.gateTrue,
         parityMismatches: baseParityMismatches,
+        // NEW: Enhanced validation
+        parityValidation,
+        sampleSizeChecks,
         actualOutcome120m,
+        outcome24hSim,
         ...(baseSim.examples ? { examples: baseSim.examples } : {}),
       },
       variants: variantResults,
@@ -1656,6 +1754,119 @@ app.get('/api/tune/hist', async (req, res) => {
       emaAbs: computePercentiles(emaAbs),
       bodyPct: computePercentiles(bodyPctVals),
       atrPct: computePercentiles(atrPctVals),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// NEW: 24h Managed PnL Simulation endpoint (admin-only)
+app.post('/api/tune/sim24h', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const body = req.body || {};
+    const runId = String(body.runId || '').trim();
+    const category = String(body.category || 'READY_TO_BUY');
+    
+    if (!runId) return res.status(400).json({ ok: false, error: 'runId required' });
+    
+    // Load signals with outcomes
+    const runSignalRows = await loadSignalsForRuns([runId], 120);
+    const signals = runSignalRows
+      .filter(r => r.category === category)
+      .map(r => ({
+        symbol: r.symbol,
+        category: r.category,
+        price: r.price,
+        stop: r.stop,
+        tp1: r.tp1,
+        tp2: r.tp2,
+        riskPct: r.riskPct || 0.01,
+        time: r.time,
+      } as any));
+    
+    if (signals.length === 0) {
+      return res.status(404).json({ ok: false, error: `No ${category} signals found for run ${runId}` });
+    }
+    
+    // Build 120m outcomes lookup
+    const outcomes120m: Record<string, { status: 'WIN' | 'LOSS' | 'NO_HIT'; r: number }> = {};
+    for (const row of runSignalRows) {
+      if (row.category === category && row.outcomeResult) {
+        const key = `${row.symbol}|${row.time}`;
+        outcomes120m[key] = {
+          status: row.outcomeResult === 'WIN' ? 'WIN' : row.outcomeResult === 'LOSS' ? 'LOSS' : 'NO_HIT',
+          r: row.r ?? 0,
+        };
+      }
+    }
+    
+    // Run 24h simulation
+    const results24h = batchSimulate24hOutcomes(signals, outcomes120m);
+    
+    // Build statistics
+    const stats120m = buildStatisticalSummary(
+      results24h.map(r => r.outcome120m),
+      category
+    );
+    const stats24h = buildStatisticalSummary(
+      results24h.map(r => ({ status: r.outcome24h.status, r: r.outcome24h.finalR })),
+      category
+    );
+    
+    // Check sample size
+    const sampleSizeCheck = checkSampleSize(category, results24h.length);
+    
+    res.json({
+      ok: true,
+      meta: {
+        runId,
+        category,
+        sampleSize: results24h.length,
+      },
+      sampleSizeCheck,
+      comparison: {
+        '120m': stats120m,
+        '24h': stats24h,
+        difference: {
+          avgR: stats24h.avgR - stats120m.avgR,
+          winRate: stats24h.winRate - stats120m.winRate,
+        },
+        recommendation: stats24h.avgR > stats120m.avgR 
+          ? '24h simulation shows better results. Consider using 24h outcomes for tuning.'
+          : stats24h.avgR < stats120m.avgR
+            ? '120m outcomes are more optimistic. Use 24h for conservative estimates.'
+            : 'Similar performance. Either horizon is valid.',
+      },
+      details: results24h.slice(0, 20),  // First 20 for inspection
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// NEW: Sample size validation endpoint (admin-only)
+app.get('/api/tune/sample-size', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const category = String((req.query as any)?.category || '');
+    const count = Number((req.query as any)?.count);
+    
+    if (!category || !Number.isFinite(count)) {
+      return res.status(400).json({ ok: false, error: 'category and count required' });
+    }
+    
+    const check = checkSampleSize(category, count);
+    const minSize = SAMPLE_SIZE_RULES[category as keyof typeof SAMPLE_SIZE_RULES] || 20;
+    
+    res.json({
+      ok: true,
+      category,
+      current: count,
+      minimum: minSize,
+      adequate: check.adequate,
+      message: check.message,
+      rules: SAMPLE_SIZE_RULES,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });

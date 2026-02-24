@@ -7,6 +7,8 @@ export type CandidateFeatureRow = {
   startedAt: number;
   metrics: Record<string, any>;
   computed: Record<string, any>;
+  schemaVersion?: number;
+  buildGitSha?: string | null;
 };
 
 let schemaReady = false;
@@ -17,6 +19,9 @@ function parseJsonField<T>(raw: any): T | null {
   if (typeof raw !== 'string' || !raw) return null;
   try { return JSON.parse(raw) as T; } catch { return null; }
 }
+
+// Current schema version - bump when logic changes invalidate old snapshots
+export const CANDIDATE_SCHEMA_VERSION = 1;
 
 async function ensureCandidateSchema() {
   if (schemaReady) return;
@@ -31,12 +36,17 @@ async function ensureCandidateSchema() {
         created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
         metrics TEXT NOT NULL,
         computed TEXT NOT NULL DEFAULT '{}',
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        build_git_sha TEXT,
         PRIMARY KEY (run_id, symbol)
       );
       CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_created_at ON candidate_features(created_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
     `);
+    // Migration: add schema_version column if missing
+    try { await d.exec(`ALTER TABLE candidate_features ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`); } catch {}
+    try { await d.exec(`ALTER TABLE candidate_features ADD COLUMN build_git_sha TEXT`); } catch {}
   } else {
     await d.exec(`
       CREATE TABLE IF NOT EXISTS candidate_features (
@@ -47,31 +57,46 @@ async function ensureCandidateSchema() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         metrics JSONB NOT NULL,
         computed JSONB NOT NULL DEFAULT '{}'::jsonb,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        build_git_sha TEXT,
         PRIMARY KEY (run_id, symbol)
       );
       CREATE INDEX IF NOT EXISTS idx_candidate_features_started_at ON candidate_features(started_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_created_at ON candidate_features(created_at);
       CREATE INDEX IF NOT EXISTS idx_candidate_features_preset ON candidate_features(preset);
     `);
+    // Migration: add columns if missing
+    try { await d.exec(`ALTER TABLE candidate_features ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1`); } catch {}
+    try { await d.exec(`ALTER TABLE candidate_features ADD COLUMN IF NOT EXISTS build_git_sha TEXT`); } catch {}
   }
   schemaReady = true;
 }
+
+const BUILD_GIT_SHA =
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.GIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  null;
 
 export async function upsertCandidateFeatures(row: CandidateFeatureRow) {
   await ensureCandidateSchema();
   const d = getDb();
   const metricsJson = JSON.stringify(row.metrics ?? {});
   const computedJson = JSON.stringify(row.computed ?? {});
+  const schemaVersion = row.schemaVersion ?? CANDIDATE_SCHEMA_VERSION;
+  const buildGitSha = row.buildGitSha ?? BUILD_GIT_SHA;
 
   if (d.driver === 'sqlite') {
     return d.prepare(`
-      INSERT INTO candidate_features (run_id, symbol, preset, started_at, metrics, computed)
-      VALUES (@runId, @symbol, @preset, @startedAt, @metrics, @computed)
+      INSERT INTO candidate_features (run_id, symbol, preset, started_at, metrics, computed, schema_version, build_git_sha)
+      VALUES (@runId, @symbol, @preset, @startedAt, @metrics, @computed, @schemaVersion, @buildGitSha)
       ON CONFLICT (run_id, symbol) DO UPDATE
       SET metrics = excluded.metrics,
           computed = excluded.computed,
           started_at = excluded.started_at,
-          preset = excluded.preset
+          preset = excluded.preset,
+          schema_version = excluded.schema_version,
+          build_git_sha = excluded.build_git_sha
     `).run({
       runId: row.runId,
       symbol: row.symbol,
@@ -79,17 +104,21 @@ export async function upsertCandidateFeatures(row: CandidateFeatureRow) {
       startedAt: row.startedAt,
       metrics: metricsJson,
       computed: computedJson,
+      schemaVersion,
+      buildGitSha,
     });
   }
 
   return d.prepare(`
-    INSERT INTO candidate_features (run_id, symbol, preset, started_at, metrics, computed)
-    VALUES (@runId, @symbol, @preset, @startedAt, @metrics::jsonb, @computed::jsonb)
+    INSERT INTO candidate_features (run_id, symbol, preset, started_at, metrics, computed, schema_version, build_git_sha)
+    VALUES (@runId, @symbol, @preset, @startedAt, @metrics::jsonb, @computed::jsonb, @schemaVersion, @buildGitSha)
     ON CONFLICT (run_id, symbol) DO UPDATE
     SET metrics = excluded.metrics,
         computed = excluded.computed,
         started_at = excluded.started_at,
-        preset = excluded.preset
+        preset = excluded.preset,
+        schema_version = excluded.schema_version,
+        build_git_sha = excluded.build_git_sha
   `).run({
     runId: row.runId,
     symbol: row.symbol,
@@ -97,6 +126,8 @@ export async function upsertCandidateFeatures(row: CandidateFeatureRow) {
     startedAt: row.startedAt,
     metrics: metricsJson,
     computed: computedJson,
+    schemaVersion,
+    buildGitSha,
   });
 }
 
@@ -134,7 +165,9 @@ export async function listCandidateFeatures(params: {
       preset,
       started_at as "startedAt",
       metrics,
-      computed
+      computed,
+      schema_version as "schemaVersion",
+      build_git_sha as "buildGitSha"
     FROM candidate_features
     WHERE ${where.join(' AND ')}
     ORDER BY symbol ASC

@@ -233,6 +233,8 @@ CREATE TABLE IF NOT EXISTS candidate_features (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   metrics JSONB NOT NULL,
   computed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  build_git_sha TEXT,
   PRIMARY KEY (run_id, symbol)
 );
 

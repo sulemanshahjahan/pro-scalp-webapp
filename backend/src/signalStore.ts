@@ -40,15 +40,38 @@ const STRATEGY_VERSION = process.env.STRATEGY_VERSION || 'v1.0.0';
 const ENABLE_TIME_SHIFT = (process.env.MIGRATE_SHIFT_TIME_CLOSE ?? 'false').toLowerCase() === 'true';
 
 const SHORTS_ENABLED = (process.env.ENABLE_SHORT_SIGNALS ?? 'true').toLowerCase() === 'true';
-const SIGNAL_LOG_CATS_RAW = (process.env.SIGNAL_LOG_CATS || 'BEST_ENTRY,READY_TO_BUY,BEST_SHORT_ENTRY,READY_TO_SELL')
+
+// Validate and normalize SIGNAL_LOG_CATS
+const DEFAULT_LOG_CATS = [
+  'BEST_ENTRY', 
+  'READY_TO_BUY', 
+  'BEST_SHORT_ENTRY', 
+  'READY_TO_SELL',
+  'EARLY_READY',
+  'EARLY_READY_SHORT'
+];
+
+const SIGNAL_LOG_CATS_RAW = (process.env.SIGNAL_LOG_CATS || DEFAULT_LOG_CATS.join(','))
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+
+// Ensure shorts are included when enabled
+const REQUIRED_SHORT_CATS = ['BEST_SHORT_ENTRY', 'READY_TO_SELL', 'EARLY_READY_SHORT'];
 const SIGNAL_LOG_CATS = Array.from(new Set(
   SHORTS_ENABLED
-    ? [...SIGNAL_LOG_CATS_RAW, 'BEST_SHORT_ENTRY', 'READY_TO_SELL']
+    ? [...SIGNAL_LOG_CATS_RAW, ...REQUIRED_SHORT_CATS]
     : SIGNAL_LOG_CATS_RAW
 ));
+
+// Log configuration on startup for debugging
+if (SHORTS_ENABLED) {
+  const missingShorts = REQUIRED_SHORT_CATS.filter(cat => !SIGNAL_LOG_CATS.includes(cat));
+  if (missingShorts.length > 0) {
+    console.warn('[signalStore] Short signals enabled but some categories missing from SIGNAL_LOG_CATS:', missingShorts);
+    console.warn('[signalStore] Adding missing categories automatically.');
+  }
+}
 
 const BUILD_GIT_SHA =
   process.env.RAILWAY_GIT_COMMIT_SHA ||

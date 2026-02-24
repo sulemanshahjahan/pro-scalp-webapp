@@ -256,8 +256,11 @@ export default function TunePage() {
 
   function applyExampleOverrides() {
     setOverridesText(JSON.stringify({
+      // Long signal thresholds
       RSI_EARLY_MIN: 30,
       RSI_EARLY_MAX: 90,
+      RSI_READY_MIN: 55,
+      RSI_READY_MAX: 75,
       VWAP_WATCH_MIN_PCT: 1.0,
       READY_VWAP_MAX_PCT: 0.6,
       READY_VWAP_EPS_PCT: 0.6,
@@ -268,6 +271,17 @@ export default function TunePage() {
       READY_BODY_PCT: 0.08,
       READY_CLOSE_POS_MIN: 0.55,
       READY_UPPER_WICK_MAX: 0.5,
+      // Feature toggles
+      READY_TREND_REQUIRED: true,
+      READY_CONFIRM15_REQUIRED: true,
+      READY_RECLAIM_REQUIRED: false,
+      // Short signal config (NEW)
+      ENABLE_SHORT_SIGNALS: true,
+      SHORT_TREND_REQUIRED: false,
+      SHORT_CONFIRM15_REQUIRED: false,
+      SHORT_RSI_MIN: 30,
+      SHORT_RSI_MAX: 55,
+      SHORT_MIN_RR: 1.35,
     }, null, 2));
   }
 
@@ -950,6 +964,82 @@ export default function TunePage() {
               </div>
             </div>
           </div>
+
+          {/* NEW: Parity Validation Warnings */}
+          {simResult?.parityValidation?.warnings?.length ? (
+            <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3">
+              <div className="text-xs text-red-200 font-semibold">⚠️ Parity Validation Issues</div>
+              <div className="mt-2 text-sm text-red-100 space-y-1">
+                {simResult.parityValidation.warnings.map((w: string, i: number) => (
+                  <div key={i}>• {w}</div>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-red-200/70">
+                Divergence: {simResult.parityValidation.divergence?.toFixed(1)}% | 
+                Valid: {simResult.parityValidation.isValid ? 'Yes' : 'No'}
+              </div>
+            </div>
+          ) : null}
+
+          {/* NEW: Sample Size Warnings */}
+          {simResult?.sampleSizeChecks && Object.keys(simResult.sampleSizeChecks).length > 0 ? (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
+              <div className="text-xs text-amber-200 font-semibold">📊 Sample Size Analysis</div>
+              <div className="mt-2 text-sm text-amber-100 space-y-2">
+                {Object.entries(simResult.sampleSizeChecks).map(([cat, check]: [string, any]) => (
+                  <div key={cat} className={check.adequate ? 'text-emerald-200' : 'text-amber-200'}>
+                    <span className="font-medium">{cat}:</span>{' '}
+                    {check.adequate 
+                      ? `✅ ${check.message || 'Adequate sample size'}` 
+                      : `⚠️ ${check.message || 'Insufficient data'}`}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* NEW: 24h Outcome Simulation */}
+          {simResult?.outcome24hSim ? (
+            <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-3">
+              <div className="text-xs text-emerald-200 font-semibold">📈 24h Managed PnL Simulation (Option B)</div>
+              <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                <div className="rounded-lg bg-white/5 p-2">
+                  <div className="text-xs text-white/60">Sample Size</div>
+                  <div className="text-lg font-semibold">{simResult.outcome24hSim.sampleSize}</div>
+                </div>
+                <div className="rounded-lg bg-white/5 p-2">
+                  <div className="text-xs text-white/60">Avg R (24h)</div>
+                  <div className={`text-lg font-semibold ${(simResult.outcome24hSim.stats?.avgR || 0) >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {fmt(simResult.outcome24hSim.stats?.avgR, 3)}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/5 p-2">
+                  <div className="text-xs text-white/60">Win Rate</div>
+                  <div className="text-lg font-semibold">
+                    {(simResult.outcome24hSim.stats?.winRate * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white/5 p-2">
+                  <div className="text-xs text-white/60">Sharpe</div>
+                  <div className="text-lg font-semibold">
+                    {fmt(simResult.outcome24hSim.stats?.sharpeRatio, 2)}
+                  </div>
+                </div>
+              </div>
+              {simResult.outcome24hSim.comparison ? (
+                <div className="mt-3 text-sm text-emerald-100">
+                  <div>120m avg R: {fmt(simResult.outcome24hSim.comparison.avgR120m, 3)}</div>
+                  <div>24h avg R: {fmt(simResult.outcome24hSim.comparison.avgR24h, 3)}</div>
+                  <div className={simResult.outcome24hSim.comparison.difference >= 0 ? 'text-emerald-300' : 'text-amber-300'}>
+                    Difference: {simResult.outcome24hSim.comparison.difference >= 0 ? '+' : ''}{fmt(simResult.outcome24hSim.comparison.difference, 3)}
+                  </div>
+                </div>
+              ) : null}
+              {simResult.outcome24hSim.stats?.warning ? (
+                <div className="mt-2 text-xs text-amber-200">⚠️ {simResult.outcome24hSim.stats.warning}</div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
             {(['watch', 'early', 'ready', 'best'] as const).map((stage) => (
