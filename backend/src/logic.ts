@@ -815,22 +815,20 @@ function analyzeSymbolInternal(
   };
 
   const READY_VWAP_EPS_PCT = parseFloat(process.env.READY_VWAP_EPS_PCT || '0.02');
-  // FIX: For longs, we want price AT or SLIGHTLY BELOW VWAP (buying the discount)
-  // NOT above VWAP (buying the premium)
-  const priceAtOrBelowVwapStrict = price <= vwap_i;
-  const readyPriceAtOrBelowVwapRelaxedEligible =
-    !priceAtOrBelowVwapStrict &&
+  // Core VWAP logic: price must be above VWAP (showing strength)
+  // Allow slight dip below (epsilon) OR reclaim pattern (bounce off VWAP)
+  const priceAboveVwapStrict = price > vwap_i;
+  const readyPriceAboveVwapRelaxedEligible =
+    !priceAboveVwapStrict &&
     nearVwapReady;
-  const readyPriceAtOrBelowVwapRelaxedTrue =
-    readyPriceAtOrBelowVwapRelaxedEligible &&
-    price <= vwap_i * (1 + READY_VWAP_EPS_PCT / 100);
-  // Allow slight premium (up to EPS%) OR reclaim pattern
-  const readyPriceAtOrBelowVwap = priceAtOrBelowVwapStrict || readyPriceAtOrBelowVwapRelaxedTrue || reclaimOk;
-  // Keep original naming for compatibility
-  const readyPriceAboveVwap = readyPriceAtOrBelowVwap;
+  const readyPriceAboveVwapRelaxedTrue =
+    readyPriceAboveVwapRelaxedEligible &&
+    price >= vwap_i * (1 - READY_VWAP_EPS_PCT / 100);
+  // Allow slight discount (down to EPS% below) OR reclaim pattern
+  const readyPriceAboveVwap = priceAboveVwapStrict || readyPriceAboveVwapRelaxedTrue || reclaimOk;
   const bestPriceAboveVwap =
-    price <= vwap_i ||
-    (nearVwapBuy && price <= vwap_i * (1 + BEST_VWAP_EPS_PCT / 100));
+    price > vwap_i ||
+    (nearVwapBuy && price >= vwap_i * (1 - BEST_VWAP_EPS_PCT / 100));
 
   const volBestMin  = Math.max(thresholds.volSpikeX, 1.4);
 
