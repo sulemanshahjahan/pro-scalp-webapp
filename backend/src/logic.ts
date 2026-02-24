@@ -1449,8 +1449,8 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     ready: {
       sessionOk: sessionOK,
       priceAboveVwap: readyPriceAboveVwap,
-      priceAboveVwapRelaxedEligible: readyPriceAtOrBelowVwapRelaxedEligible,
-      priceAboveVwapRelaxedTrue: readyPriceAtOrBelowVwapRelaxedTrue,
+      priceAboveVwapRelaxedEligible: readyPriceAboveVwapRelaxedEligible,
+      priceAboveVwapRelaxedTrue: readyPriceAboveVwapRelaxedTrue,
       priceAboveEma,
       nearVwap: nearVwapReady,
       confirm15: confirm15mOk,
