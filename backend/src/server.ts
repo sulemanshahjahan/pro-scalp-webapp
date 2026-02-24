@@ -551,11 +551,11 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
         e.symbol as "symbol",
         e.category as "category",
         e.time as "time",
-        e.price as "price",
-        e.stop as "stop",
-        e.tp1 as "tp1",
-        e.tp2 as "tp2",
-        e.risk_pct as "riskPct",
+        s.price as "price",
+        s.stop as "stop",
+        s.tp1 as "tp1",
+        s.tp2 as "tp2",
+        s.risk_pct as "riskPct",
         e.gate_snapshot_json as "gateSnapshotJson",
         o.result as "outcomeResult",
         o.hit_tp1 as "outcomeHitTp1",
@@ -563,6 +563,7 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
         o.window_status as "outcomeWindowStatus",
         o.r as "r"
       FROM signal_events e
+      LEFT JOIN signals s ON s.id = e.signal_id
       LEFT JOIN signal_outcomes o
         ON o.signal_id = e.signal_id
         AND o.horizon_min = @horizonMin
