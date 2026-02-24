@@ -550,11 +550,18 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
         e.run_id as "runId",
         e.symbol as "symbol",
         e.category as "category",
+        e.time as "time",
+        e.price as "price",
+        e.stop as "stop",
+        e.tp1 as "tp1",
+        e.tp2 as "tp2",
+        e.risk_pct as "riskPct",
         e.gate_snapshot_json as "gateSnapshotJson",
         o.result as "outcomeResult",
         o.hit_tp1 as "outcomeHitTp1",
         o.hit_sl as "outcomeHitSl",
-        o.window_status as "outcomeWindowStatus"
+        o.window_status as "outcomeWindowStatus",
+        o.r as "r"
       FROM signal_events e
       LEFT JOIN signal_outcomes o
         ON o.signal_id = e.signal_id
@@ -584,11 +591,18 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
         s.run_id as "runId",
         s.symbol as "symbol",
         s.category as "category",
+        s.time as "time",
+        s.price as "price",
+        s.stop as "stop",
+        s.tp1 as "tp1",
+        s.tp2 as "tp2",
+        s.risk_pct as "riskPct",
         s.gate_snapshot_json as "gateSnapshotJson",
         o.result as "outcomeResult",
         o.hit_tp1 as "outcomeHitTp1",
         o.hit_sl as "outcomeHitSl",
-        o.window_status as "outcomeWindowStatus"
+        o.window_status as "outcomeWindowStatus",
+        o.r as "r"
       FROM signals s
       LEFT JOIN signal_outcomes o
         ON o.signal_id = s.id

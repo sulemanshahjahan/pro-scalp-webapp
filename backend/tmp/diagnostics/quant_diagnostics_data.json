@@ -1,0 +1,329 @@
+{
+  "dbInfo": {
+    "host": "[RAILWAY-PROD]",
+    "database": "railway",
+    "latestTimestamp": 1771635600000,
+    "rowCount": 39
+  },
+  "official": {
+    "total": 38,
+    "completed": 31,
+    "pending": 7,
+    "winTp2": 13,
+    "lossStop": 16,
+    "flatTimeout": 0,
+    "winTp1": 2,
+    "winRate": 0.4838709677419355,
+    "stopRate": 0.5161290322580645,
+    "timeoutRate": 0
+  },
+  "managed": {
+    "totalClosed": 27,
+    "avgManagedR": 0.060566448801743,
+    "netManagedR": 1.635294117647061,
+    "winRate": 0.5555555555555556,
+    "stopBeforeTp1": 12,
+    "tp1ThenTp2": 6,
+    "tp1ThenBe": 8,
+    "tp1ThenTimeout": 1
+  },
+  "lossPatterns": [
+    {
+      "dimension": "Category",
+      "value": "READY_TO_BUY",
+      "count": 16,
+      "totalTrades": 38,
+      "netRDamage": -11,
+      "avgR": -0.6875,
+      "stopRate": 0.42105263157894735
+    },
+    {
+      "dimension": "Coverage",
+      "value": "High (90%+",
+      "count": 15,
+      "totalTrades": 36,
+      "netRDamage": -10,
+      "avgR": -0.6666666666666666,
+      "stopRate": 0.4166666666666667
+    },
+    {
+      "dimension": "Session",
+      "value": "NY",
+      "count": 9,
+      "totalTrades": 21,
+      "netRDamage": -7.5,
+      "avgR": -0.8333333333333334,
+      "stopRate": 0.42857142857142855
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI 40-55",
+      "count": 7,
+      "totalTrades": 12,
+      "netRDamage": -5.5,
+      "avgR": -0.7857142857142857,
+      "stopRate": 0.5833333333333334
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI 55-70",
+      "count": 5,
+      "totalTrades": 8,
+      "netRDamage": -5,
+      "avgR": -1,
+      "stopRate": 0.625
+    },
+    {
+      "dimension": "Symbol",
+      "value": "ENSOUSDT",
+      "count": 3,
+      "totalTrades": 3,
+      "netRDamage": -3,
+      "avgR": -1,
+      "stopRate": 1
+    },
+    {
+      "dimension": "Session",
+      "value": "London",
+      "count": 4,
+      "totalTrades": 7,
+      "netRDamage": -3,
+      "avgR": -0.75,
+      "stopRate": 0.5714285714285714
+    },
+    {
+      "dimension": "Symbol",
+      "value": "ARBUSDT",
+      "count": 2,
+      "totalTrades": 4,
+      "netRDamage": -2,
+      "avgR": -1,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Symbol",
+      "value": "ALLOUSDT",
+      "count": 1,
+      "totalTrades": 1,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 1
+    },
+    {
+      "dimension": "Symbol",
+      "value": "BTCUSDT",
+      "count": 1,
+      "totalTrades": 3,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.3333333333333333
+    },
+    {
+      "dimension": "Symbol",
+      "value": "BIOUSDT",
+      "count": 1,
+      "totalTrades": 3,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.3333333333333333
+    },
+    {
+      "dimension": "Symbol",
+      "value": "SOLUSDT",
+      "count": 1,
+      "totalTrades": 2,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Symbol",
+      "value": "INJUSDT",
+      "count": 1,
+      "totalTrades": 2,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Symbol",
+      "value": "XRPUSDT",
+      "count": 1,
+      "totalTrades": 3,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.3333333333333333
+    },
+    {
+      "dimension": "Coverage",
+      "value": "Med (70-90%)",
+      "count": 1,
+      "totalTrades": 2,
+      "netRDamage": -1,
+      "avgR": -1,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Session",
+      "value": "LowLiquidity",
+      "count": 2,
+      "totalTrades": 8,
+      "netRDamage": -0.5,
+      "avgR": -0.25,
+      "stopRate": 0.25
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI 70+",
+      "count": 4,
+      "totalTrades": 16,
+      "netRDamage": -0.5,
+      "avgR": -0.125,
+      "stopRate": 0.25
+    },
+    {
+      "dimension": "Symbol",
+      "value": "SUIUSDT",
+      "count": 3,
+      "totalTrades": 4,
+      "netRDamage": 0,
+      "avgR": 0,
+      "stopRate": 0.75
+    },
+    {
+      "dimension": "Symbol",
+      "value": "DOGEUSDT",
+      "count": 2,
+      "totalTrades": 4,
+      "netRDamage": 0,
+      "avgR": 0,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Session",
+      "value": "Asia",
+      "count": 1,
+      "totalTrades": 2,
+      "netRDamage": 0,
+      "avgR": 0,
+      "stopRate": 0.5
+    }
+  ],
+  "tp1Analysis": {
+    "tp1OnlyCount": 4,
+    "tp2Count": 13,
+    "avgMfeTp1Only": 3.0495483506607735,
+    "avgMfeTp2": 5.918046345787982,
+    "avgMaeTp1Only": 1.4831979661641745,
+    "avgMaeTp2": 2.564706989028752,
+    "avgTimeToTp1": 712.4833333333333,
+    "avgCoverageTp1Only": 122.75,
+    "avgCoverageTp2": 913.8461538461538
+  },
+  "winnerClusters": [
+    {
+      "dimension": "Symbol",
+      "value": "DOGEUSDT",
+      "count": 4,
+      "tp2Rate": 0.25,
+      "avgR": 0.5338235294117653,
+      "netR": 2.135294117647061,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI 70+",
+      "count": 13,
+      "tp2Rate": 0.5384615384615384,
+      "avgR": 0.4334841628959278,
+      "netR": 5.635294117647061,
+      "stopRate": 0.3076923076923077
+    },
+    {
+      "dimension": "Symbol",
+      "value": "BTCUSDT",
+      "count": 3,
+      "tp2Rate": 0.3333333333333333,
+      "avgR": 0.3333333333333333,
+      "netR": 1,
+      "stopRate": 0.3333333333333333
+    },
+    {
+      "dimension": "Symbol",
+      "value": "BIOUSDT",
+      "count": 3,
+      "tp2Rate": 0.6666666666666666,
+      "avgR": 0.3333333333333333,
+      "netR": 1,
+      "stopRate": 0.3333333333333333
+    },
+    {
+      "dimension": "Symbol",
+      "value": "SUIUSDT",
+      "count": 4,
+      "tp2Rate": 0.25,
+      "avgR": 0.125,
+      "netR": 0.5,
+      "stopRate": 0.75
+    },
+    {
+      "dimension": "Session",
+      "value": "NY",
+      "count": 18,
+      "tp2Rate": 0.3888888888888889,
+      "avgR": 0.007516339869281167,
+      "netR": 0.135294117647061,
+      "stopRate": 0.5
+    },
+    {
+      "dimension": "Session",
+      "value": "London",
+      "count": 7,
+      "tp2Rate": 0.42857142857142855,
+      "avgR": -0.14285714285714285,
+      "netR": -1,
+      "stopRate": 0.5714285714285714
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI 50-60",
+      "count": 9,
+      "tp2Rate": 0.3333333333333333,
+      "avgR": -0.16666666666666666,
+      "netR": -1.5,
+      "stopRate": 0.6666666666666666
+    },
+    {
+      "dimension": "RSI",
+      "value": "RSI<50",
+      "count": 8,
+      "tp2Rate": 0.375,
+      "avgR": -0.1875,
+      "netR": -1.5,
+      "stopRate": 0.625
+    },
+    {
+      "dimension": "Symbol",
+      "value": "ENSOUSDT",
+      "count": 3,
+      "tp2Rate": 0,
+      "avgR": -1,
+      "netR": -3,
+      "stopRate": 1
+    }
+  ],
+  "recommendations": [
+    {
+      "rank": 1,
+      "name": "Volume Spike Filter",
+      "rule": "vol_spike >= 1.5",
+      "why": "Requires significant volume confirmation for entries",
+      "tradesRemoved": 27,
+      "newAvgR": 0.5794117647058826,
+      "newNetR": 4.635294117647061,
+      "newWinRate": 0.875,
+      "confidence": "high",
+      "envMapping": "THRESHOLD_VOL_SPIKE_X=1.5, READY_VOL_SPIKE_REQUIRED=true"
+    }
+  ]
+}
