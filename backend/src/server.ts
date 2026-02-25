@@ -105,6 +105,12 @@ import {
   type GateResult,
   type SignalQuality,
 } from './signalGate.js';
+import {
+  runGateBacktest,
+  compareGateConfigs,
+  getRecommendedConfigs,
+  type BacktestConfig,
+} from './gateBacktest.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -3589,6 +3595,57 @@ app.post('/api/gate/stats/reset', (req, res) => {
     res.json({ ok: true, message: 'Gate stats reset' });
   } catch (e) {
     console.error('[api/gate/stats/reset] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// GATE BACKTEST API
+// ============================================================================
+
+// Run backtest with custom config
+app.post('/api/gate/backtest', async (req, res) => {
+  try {
+    const config = req.body.config as BacktestConfig;
+    const limit = Math.min(500, Math.max(10, Number(req.body.limit) || 200));
+    
+    if (!config) {
+      return res.status(400).json({ ok: false, error: 'Config required' });
+    }
+
+    const result = await runGateBacktest(config, limit);
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error('[api/gate/backtest] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Compare multiple configs
+app.post('/api/gate/backtest/compare', async (req, res) => {
+  try {
+    const configs = req.body.configs as BacktestConfig[];
+    const limit = Math.min(500, Math.max(10, Number(req.body.limit) || 200));
+    
+    if (!Array.isArray(configs) || configs.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Configs array required' });
+    }
+
+    const results = await compareGateConfigs(configs, limit);
+    res.json({ ok: true, results });
+  } catch (e) {
+    console.error('[api/gate/backtest/compare] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Get recommended configs to test
+app.get('/api/gate/backtest/recommended', (_req, res) => {
+  try {
+    const configs = getRecommendedConfigs();
+    res.json({ ok: true, configs });
+  } catch (e) {
+    console.error('[api/gate/backtest/recommended] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
