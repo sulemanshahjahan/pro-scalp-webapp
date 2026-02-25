@@ -11,6 +11,8 @@ import {
   FilterConfigSection,
   SymbolTierManagement,
   FilterTester,
+  SignalGateStats,
+  SignalQualityBadge,
 } from '../components/DecisionEngine';
 
 const CATEGORIES = [
@@ -622,13 +624,24 @@ export default function ExtendedOutcomePage() {
       <div className="rounded-2xl border border-red-500/30 bg-red-950/20 p-4">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lg">🚨</span>
-          <span className="text-sm font-semibold text-red-200">DECISION ENGINE (Live Entry Filter)</span>
+          <span className="text-sm font-semibold text-red-200">SIGNAL GATE (HARD EXECUTION FILTER)</span>
         </div>
         
         <div className="space-y-4">
+          <SignalGateStats />
           <FilterConfigSection />
           <SymbolTierManagement />
           <FilterTester />
+        </div>
+        
+        <div className="mt-4 pt-4 border-t border-red-500/20 text-xs text-red-300/70">
+          <div className="font-medium mb-1">Hard Gate Rules (Active when LIVE):</div>
+          <ul className="space-y-1 list-disc list-inside">
+            <li>RED tier symbols = BLOCKED</li>
+            <li>MFE30m &lt; 0.3% = BLOCKED (0.5% for YELLOW)</li>
+            <li>MQS &lt; 0.2 = BLOCKED</li>
+            <li>Need 2+ confluence points (score-based)</li>
+          </ul>
         </div>
       </div>
 
@@ -685,6 +698,7 @@ export default function ExtendedOutcomePage() {
                 <th className="text-left px-3 py-2">Entry / Stop / TP1 / TP2</th>
                 {showComparison && <th className="text-left px-3 py-2">240m Result</th>}
                 <th className="text-left px-3 py-2">Status (24h)</th>
+                <th className="text-left px-3 py-2 text-red-400">Quality</th>
                 {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Managed R</th>}
                 {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Runner Exit</th>}
                 <th className="text-left px-3 py-2">TP1 At</th>
@@ -725,6 +739,17 @@ export default function ExtendedOutcomePage() {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border ${STATUS_COLORS[o.status] || 'bg-white/10 border-white/20'}`}>
                       {STATUS_LABELS[o.status] || o.status}
                     </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {o.ext24ManagedR != null && o.ext24ManagedR > 0 ? (
+                      <SignalQualityBadge quality="HIGH" size="sm" />
+                    ) : o.ext24ManagedR != null && o.ext24ManagedR >= 0 ? (
+                      <SignalQualityBadge quality="MEDIUM" size="sm" />
+                    ) : o.ext24ManagedR != null ? (
+                      <SignalQualityBadge quality="REJECTED" size="sm" />
+                    ) : (
+                      <span className="text-white/30 text-xs">--</span>
+                    )}
                   </td>
                   {showManagedStats && (
                     <td className="px-3 py-2">
@@ -779,7 +804,7 @@ export default function ExtendedOutcomePage() {
               ))}
               {!loading && outcomes.length === 0 && (
                 <tr>
-                  <td colSpan={showComparison ? (showManagedStats ? 15 : 13) : (showManagedStats ? 14 : 12)} className="px-3 py-4 text-white/50">
+                  <td colSpan={showComparison ? (showManagedStats ? 16 : 14) : (showManagedStats ? 15 : 13)} className="px-3 py-4 text-white/50">
                     {showImprovementsOnly 
                       ? 'No improved signals found. These are signals that were "no hit" at 240m but hit within 24h.' 
                       : 'No extended outcomes in range. Try backfilling signals or adjusting filters.'}

@@ -95,6 +95,16 @@ import {
   type FilterConfig,
   type SignalWithEarlyMetrics,
 } from './entryFilter.js';
+import {
+  checkSignalGate,
+  filterSignalsThroughGate,
+  getGateConfig,
+  getGateStats,
+  resetGateStats,
+  recordGateResult,
+  type GateResult,
+  type SignalQuality,
+} from './signalGate.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -2232,13 +2242,41 @@ async function runScan(preset: Preset) {
   try {
     const out = await scanOnce(preset);
     const at = Date.now();
-    lastByPreset.set(preset, { signals: out, at });
+    
+    // 🚨 HARD GATE: Filter signals before recording
+    const gateConfig = getGateConfig();
+    let passedSignals = out;
+    let blockedCount = 0;
+    
+    if (gateConfig.enabled) {
+      const gateResult = await filterSignalsThroughGate(out as any, gateConfig);
+      passedSignals = gateResult.allowed;
+      blockedCount = gateResult.stats.blocked;
+      
+      // Log gate results
+      console.log(`[signal-gate] Scan ${preset}: ${gateResult.stats.allowed}/${gateResult.stats.total} passed (${gateResult.stats.reductionPct.toFixed(1)}% blocked)`);
+      
+      // Log blocked signals for debugging
+      if (gateResult.blocked.length > 0) {
+        for (const blocked of gateResult.blocked.slice(0, 5)) {
+          console.log(`[signal-gate] BLOCKED: ${blocked.symbol} ${blocked.category} - ${blocked.reasons.join(', ')}`);
+        }
+        if (gateResult.blocked.length > 5) {
+          console.log(`[signal-gate] ... and ${gateResult.blocked.length - 5} more blocked`);
+        }
+      }
+      
+      // Log quality distribution
+      console.log(`[signal-gate] Quality: HIGH=${gateResult.stats.byQuality.HIGH || 0}, MEDIUM=${gateResult.stats.byQuality.MEDIUM || 0}, LOW=${gateResult.stats.byQuality.LOW || 0}`);
+    }
+    
+    lastByPreset.set(preset, { signals: passedSignals, at });
     try {
-      for (const sig of out) await recordSignal(sig as any, preset);
+      for (const sig of passedSignals) await recordSignal(sig as any, preset);
     } catch (e) {
       console.warn('[signals] record failed:', e);
     }
-    return out;
+    return passedSignals;
   } finally {
     running = null;
     runningPreset = null;
@@ -3476,6 +3514,81 @@ app.post('/api/filter/mqs', (req, res) => {
     res.json({ ok: true, mqs, interpretation });
   } catch (e) {
     console.error('[api/filter/mqs] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// SIGNAL GATE API (Hard Execution Filter)
+// ============================================================================
+
+// Get gate config
+app.get('/api/gate/config', (_req, res) => {
+  try {
+    const config = getGateConfig();
+    res.json({ ok: true, config });
+  } catch (e) {
+    console.error('[api/gate/config] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Check a signal through the gate (dry run)
+app.post('/api/gate/check', async (req, res) => {
+  try {
+    const signal = req.body.signal;
+    const customConfig = req.body.config;
+    
+    if (!signal) {
+      return res.status(400).json({ ok: false, error: 'Signal required' });
+    }
+
+    const result = await checkSignalGate(signal, customConfig);
+    recordGateResult(result);
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error('[api/gate/check] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Batch check signals through gate
+app.post('/api/gate/batch', async (req, res) => {
+  try {
+    const signals = req.body.signals;
+    const customConfig = req.body.config;
+    
+    if (!Array.isArray(signals)) {
+      return res.status(400).json({ ok: false, error: 'Signals array required' });
+    }
+
+    const result = await filterSignalsThroughGate(signals, customConfig);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[api/gate/batch] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Get gate statistics
+app.get('/api/gate/stats', (_req, res) => {
+  try {
+    const stats = getGateStats();
+    res.json({ ok: true, stats });
+  } catch (e) {
+    console.error('[api/gate/stats] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Reset gate statistics (admin)
+app.post('/api/gate/stats/reset', (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    resetGateStats();
+    res.json({ ok: true, message: 'Gate stats reset' });
+  } catch (e) {
+    console.error('[api/gate/stats/reset] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });

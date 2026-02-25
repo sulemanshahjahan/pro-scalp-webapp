@@ -545,3 +545,137 @@ export function FilterTester() {
     </section>
   );
 }
+
+
+// ============================================================================
+// SIGNAL GATE STATS (Real-time blocking metrics)
+// ============================================================================
+
+interface GateStats {
+  totalChecked: number;
+  totalBlocked: number;
+  blockedByRed: number;
+  blockedByScore: number;
+  blockedBy15m: number;
+  passedHigh: number;
+  passedMedium: number;
+  passedLow: number;
+}
+
+export function SignalGateStats() {
+  const [stats, setStats] = useState<GateStats | null>(null);
+  const [config, setConfig] = useState<{ enabled: boolean } | null>(null);
+
+  useEffect(() => {
+    // Fetch both stats and config
+    Promise.all([
+      fetch(API('/api/gate/stats')).then(r => r.json()),
+      fetch(API('/api/gate/config')).then(r => r.json()),
+    ]).then(([statsRes, configRes]) => {
+      if (statsRes.ok) setStats(statsRes.stats);
+      if (configRes.ok) setConfig(configRes.config);
+    });
+
+    // Refresh every 10 seconds
+    const interval = setInterval(() => {
+      fetch(API('/api/gate/stats'))
+        .then(r => r.json())
+        .then(d => { if (d.ok) setStats(d.stats); });
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!stats || !config) {
+    return (
+      <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+        <div className="text-xs text-white/50">Loading gate stats...</div>
+      </div>
+    );
+  }
+
+  const blockedPct = stats.totalChecked > 0 
+    ? (stats.totalBlocked / stats.totalChecked * 100).toFixed(1) 
+    : '0.0';
+
+  const passedTotal = stats.passedHigh + stats.passedMedium + stats.passedLow;
+
+  return (
+    <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-red-400 font-medium">Signal Gate (HARD FILTER)</div>
+        <div className={`text-xs px-2 py-0.5 rounded ${config.enabled ? 'bg-emerald-500/20 text-emerald-200' : 'bg-rose-500/20 text-rose-200'}`}>
+          {config.enabled ? '🔴 LIVE' : '⚪ OFF'}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2 text-xs">
+        <div className="rounded bg-white/5 p-2 text-center">
+          <div className="text-white/50">Checked</div>
+          <div className="text-white font-medium">{stats.totalChecked}</div>
+        </div>
+        <div className="rounded bg-rose-500/10 p-2 text-center">
+          <div className="text-rose-300">Blocked</div>
+          <div className="text-rose-200 font-medium">{stats.totalBlocked} ({blockedPct}%)</div>
+        </div>
+        <div className="rounded bg-emerald-500/10 p-2 text-center">
+          <div className="text-emerald-300">Passed</div>
+          <div className="text-emerald-200 font-medium">{passedTotal}</div>
+        </div>
+        <div className="rounded bg-amber-500/10 p-2 text-center">
+          <div className="text-amber-300">RED Block</div>
+          <div className="text-amber-200 font-medium">{stats.blockedByRed}</div>
+        </div>
+      </div>
+
+      {passedTotal > 0 && (
+        <div className="mt-2 text-xs">
+          <div className="text-white/50 mb-1">Quality Distribution:</div>
+          <div className="flex gap-2">
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-200 text-[10px]">
+              HIGH: {stats.passedHigh}
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200 text-[10px]">
+              MEDIUM: {stats.passedMedium}
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 text-[10px]">
+              LOW: {stats.passedLow}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// SIGNAL QUALITY BADGE
+// ============================================================================
+
+interface SignalQualityProps {
+  quality: 'HIGH' | 'MEDIUM' | 'LOW' | 'REJECTED';
+  score?: number;
+  size?: 'sm' | 'md' | 'lg';
+}
+
+export function SignalQualityBadge({ quality, score, size = 'md' }: SignalQualityProps) {
+  const colors = {
+    HIGH: 'bg-emerald-500/20 text-emerald-200 border-emerald-500/30',
+    MEDIUM: 'bg-blue-500/20 text-blue-200 border-blue-500/30',
+    LOW: 'bg-amber-500/20 text-amber-200 border-amber-500/30',
+    REJECTED: 'bg-rose-500/20 text-rose-200 border-rose-500/30',
+  };
+
+  const sizeClasses = {
+    sm: 'text-[10px] px-1.5 py-0.5',
+    md: 'text-xs px-2 py-1',
+    lg: 'text-sm px-3 py-1.5',
+  };
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded border ${colors[quality]} ${sizeClasses[size]}`}>
+      <span className="font-medium">{quality}</span>
+      {score !== undefined && <span className="opacity-75">({score}/5)</span>}
+    </span>
+  );
+}
