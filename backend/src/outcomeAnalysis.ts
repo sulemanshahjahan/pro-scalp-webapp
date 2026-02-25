@@ -632,7 +632,8 @@ export function computeSymbolTier(winRate: number, totalSignals: number): Symbol
 }
 
 /**
- * Get symbol stats with tiering
+ * Get symbol stats with tiering - works with existing data
+ * Uses canonical bucket classification for consistent win/loss counts
  */
 export async function getSymbolStats(
   startMs?: number,
@@ -645,65 +646,118 @@ export async function getSymbolStats(
   const start = startMs ?? now - 7 * 24 * 60 * 60 * 1000;
   const end = endMs ?? now;
 
+  // First, fetch raw data and compute stats in JS for reliability
   const rows = await d.prepare(`
     SELECT 
       s.symbol,
-      CASE 
+      COALESCE(eo.direction, CASE 
         WHEN s.category IN ('READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT') THEN 'SHORT'
         ELSE 'LONG'
-      END as direction,
-      COUNT(*) as total_signals,
-      SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN eo.status = 'LOSS_STOP' THEN 1 ELSE 0 END) as losses,
-      SUM(CASE WHEN eo.ext24_managed_status = 'CLOSED_BE_AFTER_TP1' THEN 1 ELSE 0 END) as be_count,
-      SUM(CASE WHEN eo.completed_at IS NULL THEN 1 ELSE 0 END) as pending,
-      AVG(eo.ext24_realized_r) as avg_realized_r,
-      (SELECT AVG(ext24_realized_r) FROM (
-        SELECT ext24_realized_r FROM extended_outcomes eo2 
-        JOIN signals s2 ON s2.id = eo2.signal_id 
-        WHERE s2.symbol = s.symbol 
-        AND CASE 
-          WHEN s2.category IN ('READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT') THEN 'SHORT'
-          ELSE 'LONG'
-        END = CASE 
-          WHEN s.category IN ('READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT') THEN 'SHORT'
-          ELSE 'LONG'
-        END
-        AND eo2.completed_at IS NOT NULL
-        ORDER BY eo2.ext24_realized_r 
-        LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM extended_outcomes eo3 JOIN signals s3 ON s3.id = eo3.signal_id WHERE s3.symbol = s.symbol AND CASE WHEN s3.category IN ('READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT') THEN 'SHORT' ELSE 'LONG' END = CASE WHEN s.category IN ('READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT') THEN 'SHORT' ELSE 'LONG' END AND eo3.completed_at IS NOT NULL)
-      )) as median_realized_r
+      END) as direction,
+      eo.status,
+      eo.ext24_managed_status,
+      eo.ext24_realized_r,
+      eo.completed_at
     FROM extended_outcomes eo
     JOIN signals s ON s.id = eo.signal_id
     WHERE eo.signal_time >= @start AND eo.signal_time <= @end
-    GROUP BY s.symbol, direction
-    HAVING COUNT(*) >= @minSignals
-    ORDER BY total_signals DESC
-  `).all({ start, end, minSignals }) as any[];
+  `).all({ start, end }) as any[];
 
-  return rows.map(row => {
-    const total = Number(row.total_signals) || 0;
-    const wins = Number(row.wins) || 0;
-    const losses = Number(row.losses) || 0;
-    const be = Number(row.be_count) || 0;
-    const pending = Number(row.pending) || 0;
-    const completed = total - pending;
-    const winRate = completed > 0 ? wins / completed : 0;
+  // Aggregate by symbol+direction
+  const bySymbol = new Map<string, {
+    symbol: string;
+    direction: 'LONG' | 'SHORT';
+    total: number;
+    wins: number;
+    losses: number;
+    be: number;
+    pending: number;
+    realizedRs: number[];
+  }>();
 
-    return {
-      symbol: String(row.symbol),
-      direction: String(row.direction) as 'LONG' | 'SHORT',
-      totalSignals: total,
-      wins,
-      losses,
-      breakeven: be,
-      pending,
+  for (const row of rows) {
+    const symbol = String(row.symbol);
+    const direction = String(row.direction || 'LONG') as 'LONG' | 'SHORT';
+    const key = `${symbol}_${direction}`;
+    
+    if (!bySymbol.has(key)) {
+      bySymbol.set(key, {
+        symbol,
+        direction,
+        total: 0,
+        wins: 0,
+        losses: 0,
+        be: 0,
+        pending: 0,
+        realizedRs: [],
+      });
+    }
+    
+    const agg = bySymbol.get(key)!;
+    agg.total++;
+    
+    // Use canonical bucket classification
+    const classification = classifyOutcome(
+      row.status,
+      row.ext24_managed_status,
+      row.ext24_realized_r,
+      direction
+    );
+    
+    if (classification.bucket === 'WIN') agg.wins++;
+    else if (classification.bucket === 'LOSS') agg.losses++;
+    else if (classification.bucket === 'BE') agg.be++;
+    else if (classification.bucket === 'PENDING' || classification.bucket === 'EXCLUDE') agg.pending++;
+    
+    // Collect realized R for median calculation
+    if (row.ext24_realized_r != null && row.completed_at != null) {
+      agg.realizedRs.push(Number(row.ext24_realized_r));
+    }
+  }
+
+  // Convert to SymbolStats array
+  const results: SymbolStats[] = [];
+  
+  for (const agg of bySymbol.values()) {
+    if (agg.total < minSignals) continue;
+    
+    const completed = agg.total - agg.pending;
+    const winRate = completed > 0 ? agg.wins / completed : 0;
+    
+    // Calculate average
+    const avgRealizedR = agg.realizedRs.length > 0 
+      ? agg.realizedRs.reduce((a, b) => a + b, 0) / agg.realizedRs.length 
+      : null;
+    
+    // Calculate median
+    let medianRealizedR: number | null = null;
+    if (agg.realizedRs.length > 0) {
+      const sorted = [...agg.realizedRs].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      medianRealizedR = sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+    }
+    
+    results.push({
+      symbol: agg.symbol,
+      direction: agg.direction,
+      totalSignals: agg.total,
+      wins: agg.wins,
+      losses: agg.losses,
+      breakeven: agg.be,
+      pending: agg.pending,
       winRate,
-      avgRealizedR: row.avg_realized_r != null ? Number(row.avg_realized_r) : null,
-      medianRealizedR: row.median_realized_r != null ? Number(row.median_realized_r) : null,
-      tier: computeSymbolTier(winRate, total),
-    };
-  });
+      avgRealizedR,
+      medianRealizedR,
+      tier: computeSymbolTier(winRate, agg.total),
+    });
+  }
+  
+  // Sort by total signals desc
+  results.sort((a, b) => b.totalSignals - a.totalSignals);
+  
+  return results;
 }
 
 // ============================================================================
