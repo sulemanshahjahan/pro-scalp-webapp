@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiUrl as API } from '../config/apiBase';
 
+// New analysis components
+import {
+  BucketAnalysisSection,
+  SymbolTierSection,
+  FilterSimulatorSection,
+} from '../components/OutcomeAnalysis';
+
 const CATEGORIES = [
   'BEST_ENTRY',
   'READY_TO_BUY',
@@ -596,6 +603,15 @@ export default function ExtendedOutcomePage() {
           </>
         )}
       </section>
+
+      {/* Bucket Analysis Section (Step 2) */}
+      <BucketAnalysisSection range={range} />
+
+      {/* Symbol Tier Section (Step 3) */}
+      <SymbolTierSection range={range} />
+
+      {/* Filter Simulator Section (Step 4) */}
+      <FilterSimulatorSection range={range} />
 
       {/* Outcome Breakdown Chart */}
       <section className="rounded-2xl border border-white/10 bg-white/5 p-4">

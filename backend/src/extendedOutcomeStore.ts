@@ -209,6 +209,44 @@ async function migrateManagedPnlColumns(): Promise<void> {
 }
 
 /**
+ * Add early-window metrics columns (Step 1)
+ */
+async function migrateEarlyWindowColumns(): Promise<void> {
+  const d = getDb();
+  const isSQLite = d.driver === 'sqlite';
+  
+  const columnsToAdd = [
+    { name: 'mfe_30m_pct', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'mae_30m_pct', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'mfe_60m_pct', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'mae_60m_pct', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'mfe_mae_ratio_30m', type: isSQLite ? 'REAL' : 'DOUBLE PRECISION' },
+    { name: 'first_hit_30m', type: isSQLite ? 'INTEGER' : 'INTEGER' },
+    { name: 'first_hit_60m', type: isSQLite ? 'INTEGER' : 'INTEGER' },
+    { name: 'tp1_within_35m', type: isSQLite ? 'INTEGER' : 'INTEGER' },
+    { name: 'tp1_within_45m', type: isSQLite ? 'INTEGER' : 'INTEGER' },
+    { name: 'stop_within_30m', type: isSQLite ? 'INTEGER' : 'INTEGER' },
+    { name: 'early_window_computed_at', type: isSQLite ? 'INTEGER' : 'BIGINT' },
+  ];
+  
+  for (const col of columnsToAdd) {
+    try {
+      if (isSQLite) {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN ${col.name} ${col.type}`);
+      } else {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`);
+      }
+    } catch (e: any) {
+      if (!String(e?.message).includes('duplicate column') && 
+          !String(e?.message).includes('already exists')) {
+        console.warn(`[extended-outcomes] Early window migration warning for ${col.name}:`, e?.message);
+      }
+    }
+  }
+  console.log('[extended-outcomes] Early window columns migration completed');
+}
+
+/**
  * Ensure extended outcomes table exists
  * Supports both SQLite and PostgreSQL
  */
@@ -274,6 +312,19 @@ async function ensureSchema(): Promise<void> {
           
           debug_json TEXT,
           managed_debug_json TEXT,
+          
+          -- Early window metrics (Step 1)
+          mfe_30m_pct REAL,
+          mae_30m_pct REAL,
+          mfe_60m_pct REAL,
+          mae_60m_pct REAL,
+          mfe_mae_ratio_30m REAL,
+          first_hit_30m INTEGER,
+          first_hit_60m INTEGER,
+          tp1_within_35m INTEGER,
+          tp1_within_45m INTEGER,
+          stop_within_30m INTEGER,
+          early_window_computed_at INTEGER,
           
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
@@ -345,6 +396,19 @@ async function ensureSchema(): Promise<void> {
           debug_json TEXT,
           managed_debug_json TEXT,
           
+          -- Early window metrics (Step 1)
+          mfe_30m_pct DOUBLE PRECISION,
+          mae_30m_pct DOUBLE PRECISION,
+          mfe_60m_pct DOUBLE PRECISION,
+          mae_60m_pct DOUBLE PRECISION,
+          mfe_mae_ratio_30m DOUBLE PRECISION,
+          first_hit_30m INTEGER,
+          first_hit_60m INTEGER,
+          tp1_within_35m INTEGER,
+          tp1_within_45m INTEGER,
+          stop_within_30m INTEGER,
+          early_window_computed_at BIGINT,
+          
           created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
           updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
           
@@ -362,6 +426,9 @@ async function ensureSchema(): Promise<void> {
 
     // Run migration for managed PnL columns (for existing tables)
     await migrateManagedPnlColumns();
+    
+    // Run migration for early window columns
+    await migrateEarlyWindowColumns();
 
     schemaReady = true;
     console.log('[extended-outcomes] Schema ensured successfully');
@@ -2385,3 +2452,222 @@ export async function getManagedPnlStats(params: {
 
 // Export constants
 export { EXTENDED_WINDOW_MS, EVALUATION_INTERVAL_MIN, RESOLVE_VERSION };
+
+// ============================================================================
+// STEP 1: EARLY-WINDOW METRICS COMPUTATION
+// ============================================================================
+
+const THIRTY_MIN_MS = 30 * 60 * 1000;
+const THIRTY_FIVE_MIN_MS = 35 * 60 * 1000;
+const FORTY_FIVE_MIN_MS = 45 * 60 * 1000;
+const SIXTY_MIN_MS = 60 * 60 * 1000;
+
+interface EarlyWindowMetrics {
+  mfe30mPct: number;
+  mae30mPct: number;
+  mfe60mPct: number;
+  mae60mPct: number;
+  mfeMaeRatio30m: number;
+  firstHit30m: boolean;
+  firstHit60m: boolean;
+  tp1Within35m: boolean;
+  tp1Within45m: boolean;
+  stopWithin30m: boolean;
+}
+
+/**
+ * Calculate early-window metrics from candle data
+ */
+function calculateEarlyWindowMetrics(
+  direction: SignalDirection,
+  entryPrice: number,
+  candles: OHLCV[],
+  entryTime: number,
+  firstTp1At: number | null,
+  stopAt: number | null
+): EarlyWindowMetrics {
+  if (!candles.length || !Number.isFinite(entryPrice) || entryPrice === 0) {
+    return {
+      mfe30mPct: 0,
+      mae30mPct: 0,
+      mfe60mPct: 0,
+      mae60mPct: 0,
+      mfeMaeRatio30m: 0,
+      firstHit30m: false,
+      firstHit60m: false,
+      tp1Within35m: false,
+      tp1Within45m: false,
+      stopWithin30m: false,
+    };
+  }
+
+  // Filter candles within time windows
+  const candles30m = candles.filter(c => c.time >= entryTime && c.time <= entryTime + THIRTY_MIN_MS);
+  const candles60m = candles.filter(c => c.time >= entryTime && c.time <= entryTime + SIXTY_MIN_MS);
+
+  // Calculate MFE/MAE for 30m window
+  let maxHigh30m = -Infinity;
+  let minLow30m = Infinity;
+  for (const c of candles30m) {
+    if (Number.isFinite(c.high)) maxHigh30m = Math.max(maxHigh30m, c.high);
+    if (Number.isFinite(c.low)) minLow30m = Math.min(minLow30m, c.low);
+  }
+
+  // Calculate MFE/MAE for 60m window
+  let maxHigh60m = -Infinity;
+  let minLow60m = Infinity;
+  for (const c of candles60m) {
+    if (Number.isFinite(c.high)) maxHigh60m = Math.max(maxHigh60m, c.high);
+    if (Number.isFinite(c.low)) minLow60m = Math.min(minLow60m, c.low);
+  }
+
+  // Direction-aware MFE/MAE calculation
+  let mfe30mPct = 0;
+  let mae30mPct = 0;
+  let mfe60mPct = 0;
+  let mae60mPct = 0;
+
+  if (direction === 'LONG') {
+    mfe30mPct = maxHigh30m > -Infinity ? ((maxHigh30m - entryPrice) / entryPrice) * 100 : 0;
+    mae30mPct = minLow30m < Infinity ? ((entryPrice - minLow30m) / entryPrice) * 100 : 0;
+    mfe60mPct = maxHigh60m > -Infinity ? ((maxHigh60m - entryPrice) / entryPrice) * 100 : 0;
+    mae60mPct = minLow60m < Infinity ? ((entryPrice - minLow60m) / entryPrice) * 100 : 0;
+  } else {
+    mfe30mPct = minLow30m < Infinity ? ((entryPrice - minLow30m) / entryPrice) * 100 : 0;
+    mae30mPct = maxHigh30m > -Infinity ? ((maxHigh30m - entryPrice) / entryPrice) * 100 : 0;
+    mfe60mPct = minLow60m < Infinity ? ((entryPrice - minLow60m) / entryPrice) * 100 : 0;
+    mae60mPct = maxHigh60m > -Infinity ? ((maxHigh60m - entryPrice) / entryPrice) * 100 : 0;
+  }
+
+  // MFE/MAE ratio (avoid division by zero)
+  const mfeMaeRatio30m = mae30mPct > 0.001 ? mfe30mPct / mae30mPct : (mfe30mPct > 0 ? 999 : 0);
+
+  // Check timing conditions
+  const tp1Within35m = firstTp1At != null && (firstTp1At - entryTime) <= THIRTY_FIVE_MIN_MS;
+  const tp1Within45m = firstTp1At != null && (firstTp1At - entryTime) <= FORTY_FIVE_MIN_MS;
+  const stopWithin30m = stopAt != null && (stopAt - entryTime) <= THIRTY_MIN_MS;
+
+  return {
+    mfe30mPct,
+    mae30mPct,
+    mfe60mPct,
+    mae60mPct,
+    mfeMaeRatio30m,
+    firstHit30m: mfe30mPct > 0.1 || mae30mPct > 0.1,
+    firstHit60m: mfe60mPct > 0.1 || mae60mPct > 0.1,
+    tp1Within35m,
+    tp1Within45m,
+    stopWithin30m,
+  };
+}
+
+/**
+ * Update early window metrics for a signal
+ */
+export async function updateEarlyWindowMetrics(
+  signalId: number,
+  metrics: EarlyWindowMetrics
+): Promise<void> {
+  await ensureSchema();
+  const d = getDb();
+  const now = Date.now();
+
+  await d.prepare(`
+    UPDATE extended_outcomes SET
+      mfe_30m_pct = ?,
+      mae_30m_pct = ?,
+      mfe_60m_pct = ?,
+      mae_60m_pct = ?,
+      mfe_mae_ratio_30m = ?,
+      first_hit_30m = ?,
+      first_hit_60m = ?,
+      tp1_within_35m = ?,
+      tp1_within_45m = ?,
+      stop_within_30m = ?,
+      early_window_computed_at = ?
+    WHERE signal_id = ?
+  `).run(
+    metrics.mfe30mPct,
+    metrics.mae30mPct,
+    metrics.mfe60mPct,
+    metrics.mae60mPct,
+    metrics.mfeMaeRatio30m,
+    metrics.firstHit30m ? 1 : 0,
+    metrics.firstHit60m ? 1 : 0,
+    metrics.tp1Within35m ? 1 : 0,
+    metrics.tp1Within45m ? 1 : 0,
+    metrics.stopWithin30m ? 1 : 0,
+    now,
+    signalId
+  );
+}
+
+/**
+ * Compute and store early window metrics for all completed outcomes that don't have them
+ */
+export async function backfillEarlyWindowMetrics(
+  limit: number = 50
+): Promise<{ processed: number; updated: number; errors: number }> {
+  await ensureSchema();
+  const d = getDb();
+
+  // Find outcomes without early window metrics
+  const rows = await d.prepare(`
+    SELECT 
+      eo.signal_id,
+      eo.symbol,
+      eo.direction,
+      eo.signal_time,
+      eo.entry_price,
+      eo.first_tp1_at,
+      eo.stop_at
+    FROM extended_outcomes eo
+    WHERE eo.completed_at IS NOT NULL
+      AND (eo.early_window_computed_at IS NULL OR eo.early_window_computed_at = 0)
+    ORDER BY eo.completed_at DESC
+    LIMIT ?
+  `).all(limit) as any[];
+
+  let processed = 0;
+  let updated = 0;
+  let errors = 0;
+
+  for (const row of rows) {
+    processed++;
+    try {
+      const signalId = Number(row.signal_id);
+      const symbol = String(row.symbol);
+      const direction = String(row.direction) as SignalDirection;
+      const signalTime = Number(row.signal_time);
+      const entryPrice = Number(row.entry_price);
+      const firstTp1At = row.first_tp1_at ? Number(row.first_tp1_at) : null;
+      const stopAt = row.stop_at ? Number(row.stop_at) : null;
+
+      // Fetch candles for the first 60 minutes
+      const candles = await klinesRange(
+        symbol,
+        '5m',
+        signalTime,
+        signalTime + SIXTY_MIN_MS,
+        20 // 12 candles for 60 minutes (5m intervals) + buffer
+      );
+
+      const metrics = calculateEarlyWindowMetrics(
+        direction,
+        entryPrice,
+        candles,
+        signalTime,
+        firstTp1At,
+        stopAt
+      );
+
+      await updateEarlyWindowMetrics(signalId, metrics);
+      updated++;
+    } catch (e) {
+      console.error(`[extended-outcomes] Early window backfill error for signal ${row.signal_id}:`, e);
+      errors++;
+    }
+  }
+
+  return { processed, updated, errors };
+}

@@ -63,8 +63,19 @@ import {
   listExtendedOutcomesWithComparison,
   getImprovementStats,
   getManagedPnlStats,
+  backfillEarlyWindowMetrics,
   type ExtendedOutcomeInput,
 } from './extendedOutcomeStore.js';
+import {
+  computeBucketAnalysis,
+  getSymbolStats,
+  getDiagnostics,
+  backtestFilter,
+  getFilterSetDefinitions,
+  classifyOutcome,
+  getDirectionFromCategory,
+  type FilterSetId,
+} from './outcomeAnalysis.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -3276,6 +3287,112 @@ app.get('/api/extended-outcomes/improvements', async (req, res) => {
     });
     res.json({ ok: true, ...out });
   } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// OUTCOME ANALYSIS API (Steps 0-4)
+// ============================================================================
+
+// Diagnostics - status inventory and bucket counts
+app.get('/api/stats/ext24/diagnostics', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+
+    const out = await getDiagnostics(
+      Number.isFinite(start) ? start : undefined,
+      Number.isFinite(end) ? end : undefined
+    );
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('[api/stats/ext24/diagnostics] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Bucket analysis - stats by direction+bucket
+app.get('/api/stats/ext24/by-bucket', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+
+    const out = await computeBucketAnalysis(
+      Number.isFinite(start) ? start : undefined,
+      Number.isFinite(end) ? end : undefined
+    );
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('[api/stats/ext24/by-bucket] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Symbol stats with tiering
+app.get('/api/stats/ext24/by-symbol', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const minSignalsRaw = Number((req.query as any)?.minSignals);
+    const minSignals = Number.isFinite(minSignalsRaw) ? minSignalsRaw : 10;
+
+    const out = await getSymbolStats(
+      Number.isFinite(start) ? start : undefined,
+      Number.isFinite(end) ? end : undefined,
+      minSignals
+    );
+    res.json({ ok: true, symbols: out });
+  } catch (e) {
+    console.error('[api/stats/ext24/by-symbol] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Filter set definitions
+app.get('/api/stats/ext24/filter-definitions', async (_req, res) => {
+  try {
+    const out = getFilterSetDefinitions();
+    res.json({ ok: true, filters: out });
+  } catch (e) {
+    console.error('[api/stats/ext24/filter-definitions] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Filter backtest
+app.get('/api/stats/ext24/backtest', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const filterId = String((req.query as any)?.filter || 'A') as FilterSetId;
+
+    if (!['A', 'B', 'C'].includes(filterId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid filter ID. Use A, B, or C.' });
+    }
+
+    const out = await backtestFilter(
+      filterId,
+      Number.isFinite(start) ? start : undefined,
+      Number.isFinite(end) ? end : undefined
+    );
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('[api/stats/ext24/backtest] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Backfill early window metrics
+app.post('/api/extended-outcomes/backfill-early-window', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const limitRaw = Number((req.query as any)?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 50;
+    const out = await backfillEarlyWindowMetrics(limit);
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('[api/extended-outcomes/backfill-early-window] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
