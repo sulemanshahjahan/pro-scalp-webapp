@@ -76,6 +76,25 @@ import {
   getDirectionFromCategory,
   type FilterSetId,
 } from './outcomeAnalysis.js';
+import {
+  getAllSymbolTiers,
+  getSymbolTier,
+  setSymbolTier,
+  computeAndUpdateTiers,
+  clearManualOverride,
+  deleteSymbolTier,
+  type SymbolTier,
+} from './symbolTierStore.js';
+import {
+  getFilterConfig,
+  shouldEnterTrade,
+  filterSignals,
+  simulateFilter,
+  calculateMQS,
+  interpretMQS,
+  type FilterConfig,
+  type SignalWithEarlyMetrics,
+} from './entryFilter.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -3393,6 +3412,172 @@ app.post('/api/extended-outcomes/backfill-early-window', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) {
     console.error('[api/extended-outcomes/backfill-early-window] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// DECISION ENGINE API (Entry Filter & Symbol Tiers)
+// ============================================================================
+
+// Get current filter config
+app.get('/api/filter/config', (_req, res) => {
+  try {
+    const config = getFilterConfig();
+    res.json({ ok: true, config });
+  } catch (e) {
+    console.error('[api/filter/config] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Test a signal against the filter (dry run)
+app.post('/api/filter/test', async (req, res) => {
+  try {
+    const signal = req.body.signal as SignalWithEarlyMetrics;
+    const customConfig = req.body.config as Partial<FilterConfig> | undefined;
+    
+    if (!signal) {
+      return res.status(400).json({ ok: false, error: 'Signal required' });
+    }
+
+    const result = await shouldEnterTrade(signal, customConfig);
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error('[api/filter/test] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Simulate filter on multiple signals
+app.post('/api/filter/simulate', async (req, res) => {
+  try {
+    const signals = req.body.signals as SignalWithEarlyMetrics[];
+    const customConfig = req.body.config as FilterConfig | undefined;
+    
+    if (!Array.isArray(signals)) {
+      return res.status(400).json({ ok: false, error: 'Signals array required' });
+    }
+
+    const result = await simulateFilter(signals, customConfig || getFilterConfig());
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[api/filter/simulate] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Calculate MQS for a signal
+app.post('/api/filter/mqs', (req, res) => {
+  try {
+    const { mfe30mPct, mae30mPct } = req.body;
+    const mqs = calculateMQS(mfe30mPct, mae30mPct);
+    const interpretation = interpretMQS(mqs);
+    res.json({ ok: true, mqs, interpretation });
+  } catch (e) {
+    console.error('[api/filter/mqs] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// SYMBOL TIER API
+// ============================================================================
+
+// Get all symbol tiers
+app.get('/api/symbol-tiers', async (req, res) => {
+  try {
+    const direction = req.query.direction as 'LONG' | 'SHORT' | undefined;
+    const tier = req.query.tier as SymbolTier | undefined;
+    const out = await getAllSymbolTiers(direction, tier);
+    res.json({ ok: true, tiers: out });
+  } catch (e) {
+    console.error('[api/symbol-tiers] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Get specific symbol tier
+app.get('/api/symbol-tiers/:symbol', async (req, res) => {
+  try {
+    const symbol = String(req.params.symbol);
+    const direction = (req.query.direction as 'LONG' | 'SHORT') || 'SHORT';
+    const out = await getSymbolTier(symbol, direction);
+    if (!out) {
+      return res.status(404).json({ ok: false, error: 'Tier not found' });
+    }
+    res.json({ ok: true, tier: out });
+  } catch (e) {
+    console.error('[api/symbol-tiers/:symbol] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Set symbol tier (manual override)
+app.post('/api/symbol-tiers/:symbol', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const symbol = String(req.params.symbol);
+    const direction = (req.body.direction as 'LONG' | 'SHORT') || 'SHORT';
+    const tier = req.body.tier as SymbolTier;
+    const reason = req.body.reason as string | undefined;
+
+    if (!['GREEN', 'YELLOW', 'RED'].includes(tier)) {
+      return res.status(400).json({ ok: false, error: 'Invalid tier. Use GREEN, YELLOW, or RED.' });
+    }
+
+    await setSymbolTier(symbol, direction, tier, reason);
+    res.json({ ok: true, message: `Set ${symbol} ${direction} to ${tier}` });
+  } catch (e) {
+    console.error('[api/symbol-tiers/:symbol POST] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Compute and update tiers from historical data
+app.post('/api/symbol-tiers/compute', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const start = Number(req.query.start);
+    const end = Number(req.query.end);
+    const minSignals = Number(req.query.minSignals) || 10;
+    
+    const out = await computeAndUpdateTiers(
+      Number.isFinite(start) ? start : undefined,
+      Number.isFinite(end) ? end : undefined,
+      minSignals
+    );
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('[api/symbol-tiers/compute] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Clear manual override for a symbol
+app.post('/api/symbol-tiers/:symbol/clear-override', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const symbol = String(req.params.symbol);
+    const direction = (req.body.direction as 'LONG' | 'SHORT') || 'SHORT';
+    await clearManualOverride(symbol, direction);
+    res.json({ ok: true, message: `Cleared manual override for ${symbol} ${direction}` });
+  } catch (e) {
+    console.error('[api/symbol-tiers/:symbol/clear-override] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Delete a symbol tier
+app.delete('/api/symbol-tiers/:symbol', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const symbol = String(req.params.symbol);
+    const direction = (req.query.direction as 'LONG' | 'SHORT') || 'SHORT';
+    await deleteSymbolTier(symbol, direction);
+    res.json({ ok: true, message: `Deleted tier for ${symbol} ${direction}` });
+  } catch (e) {
+    console.error('[api/symbol-tiers/:symbol DELETE] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });

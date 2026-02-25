@@ -7,6 +7,11 @@ import {
   SymbolTierSection,
   FilterSimulatorSection,
 } from '../components/OutcomeAnalysis';
+import {
+  FilterConfigSection,
+  SymbolTierManagement,
+  FilterTester,
+} from '../components/DecisionEngine';
 
 const CATEGORIES = [
   'BEST_ENTRY',
@@ -612,6 +617,20 @@ export default function ExtendedOutcomePage() {
 
       {/* Filter Simulator Section (Step 4) */}
       <FilterSimulatorSection range={range} />
+
+      {/* Decision Engine Sections */}
+      <div className="rounded-2xl border border-red-500/30 bg-red-950/20 p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">🚨</span>
+          <span className="text-sm font-semibold text-red-200">DECISION ENGINE (Live Entry Filter)</span>
+        </div>
+        
+        <div className="space-y-4">
+          <FilterConfigSection />
+          <SymbolTierManagement />
+          <FilterTester />
+        </div>
+      </div>
 
       {/* Outcome Breakdown Chart */}
       <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
