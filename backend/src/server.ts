@@ -4426,4 +4426,41 @@ app.get('/api/v', (req, res) => {
   res.json({ v: '1', t: Date.now() });
 });
 
+// TEMP: Debug why signals aren't being recorded
+app.get('/api/debug/why-no-signals', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Recent scan runs
+  const scans = await d.prepare(`
+    SELECT run_id, started_at, finished_at, status, signals_by_category
+    FROM scan_runs
+    ORDER BY started_at DESC
+    LIMIT 3
+  `).all();
+  
+  // Recent signals
+  const signals = await d.prepare(`
+    SELECT id, symbol, category, created_at
+    FROM signals
+    ORDER BY created_at DESC
+    LIMIT 5
+  `).all();
+  
+  // Count by hour
+  const counts = await d.prepare(`
+    SELECT COUNT(*) as total,
+           MAX(created_at) as latest
+    FROM signals
+  `).get();
+  
+  res.json({
+    ok: true,
+    scans,
+    signals,
+    counts,
+    now: Date.now()
+  });
+});
+
 export { app };
