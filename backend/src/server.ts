@@ -4420,4 +4420,38 @@ app.get('/api/watch-list', async (req, res) => {
   res.json({ ok: true, watches: rows, count: rows.length });
 });
 
+// TEMP: Debug scan and record flow
+app.get('/api/debug/scan-trace', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Check recent scan runs
+  const scans = await d.prepare(`
+    SELECT run_id, started_at, finished_at, status, signals_by_category, error_message
+    FROM scan_runs
+    ORDER BY started_at DESC
+    LIMIT 5
+  `).all();
+  
+  // Check signals count by hour
+  const byHour = await d.prepare(`
+    SELECT 
+      strftime('%Y-%m-%d %H', datetime(created_at/1000, 'unixepoch')) as hour,
+      COUNT(*) as count,
+      SUM(CASE WHEN blocked_reasons_json IS NOT NULL THEN 1 ELSE 0 END) as blocked
+    FROM signals
+    WHERE created_at > ${Date.now() - 24*60*60*1000}
+    GROUP BY hour
+    ORDER BY hour DESC
+  `).all();
+  
+  res.json({
+    ok: true,
+    scans,
+    signalsByHour: byHour,
+    now: Date.now(),
+    iso: new Date().toISOString()
+  });
+});
+
 export { app };
