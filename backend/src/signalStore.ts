@@ -42,13 +42,15 @@ const ENABLE_TIME_SHIFT = (process.env.MIGRATE_SHIFT_TIME_CLOSE ?? 'false').toLo
 const SHORTS_ENABLED = (process.env.ENABLE_SHORT_SIGNALS ?? 'true').toLowerCase() === 'true';
 
 // Validate and normalize SIGNAL_LOG_CATS
+// WATCH added for delayed entry tracking - signals start as WATCH then transition to ENTERED
 const DEFAULT_LOG_CATS = [
   'BEST_ENTRY', 
   'READY_TO_BUY', 
   'BEST_SHORT_ENTRY', 
   'READY_TO_SELL',
   'EARLY_READY',
-  'EARLY_READY_SHORT'
+  'EARLY_READY_SHORT',
+  'WATCH'  // Required for delayed entry tracking
 ];
 
 const SIGNAL_LOG_CATS_RAW = (process.env.SIGNAL_LOG_CATS || DEFAULT_LOG_CATS.join(','))
