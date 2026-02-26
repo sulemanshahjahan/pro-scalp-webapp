@@ -4225,4 +4225,70 @@ app.post('/api/delayed-entry/compare-score-configs', async (req, res) => {
   }
 });
 
+// ============================================================================
+// SCORE + DELAYED ENTRY COMPARISON - GET VERSION (No CORS preflight issues)
+// ============================================================================
+// Usage: /api/delayed-entry/compare-score-configs-get?windowSize=200&configs=A,B,C
+// Where A = Score≥2+0.25%, B = Score≥3+0.30%, C = Score≥2+0.30%
+
+app.get('/api/delayed-entry/compare-score-configs-get', async (req, res) => {
+  try {
+    const windowSize = Number(req.query.windowSize ?? 200);
+    const configParam = String(req.query.configs || 'A,B,C');
+    
+    // Parse config selection (A, B, C)
+    const configMap: Record<string, { name: string; minScore: number; confirmMovePct: number }> = {
+      'A': { name: 'Config A (Score≥2, 0.25%)', minScore: 2, confirmMovePct: 0.25 },
+      'B': { name: 'Config B (Score≥3, 0.30%)', minScore: 3, confirmMovePct: 0.30 },
+      'C': { name: 'Config C (Score≥2, 0.30%)', minScore: 2, confirmMovePct: 0.30 },
+      'D': { name: 'Config D (Score≥2, 0.20%)', minScore: 2, confirmMovePct: 0.20 },
+      'E': { name: 'Config E (Score≥3, 0.35%)', minScore: 3, confirmMovePct: 0.35 },
+    };
+    
+    const configs = configParam
+      .split(',')
+      .map(c => c.trim().toUpperCase())
+      .filter(c => configMap[c])
+      .map(c => configMap[c]);
+    
+    if (configs.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid configs. Use A,B,C,D,E' });
+    }
+    
+    console.log(`[api/delayed-entry/compare-score-configs-get] Testing ${configs.length} configs: ${configParam}`);
+    
+    const { compareScoreDelayedConfigs } = await import('./delayedEntryValidation.js');
+    const results = await compareScoreDelayedConfigs(configs, windowSize);
+    
+    // Format for easy comparison
+    const formatted = results.map(r => ({
+      config: r.configName,
+      passedFilter: r.passedSignals,
+      entered: r.entered,
+      confirmRate: `${(r.confirmRate * 100).toFixed(1)}%`,
+      winRate: `${(r.winRate * 100).toFixed(1)}%`,
+      avgR: r.avgR.toFixed(2),
+      totalR: r.totalR.toFixed(1),
+      rPer100Signals: r.rPer100Signals.toFixed(2),
+      vsBaseline: `${r.improvementPct >= 0 ? '+' : ''}${r.improvementPct.toFixed(0)}%`,
+    }));
+    
+    res.json({ 
+      ok: true, 
+      results,
+      formatted,
+      winner: results[0]?.configName || null,
+      recommendation: results[0] ? `
+🏆 WINNER: ${results[0].configName}
+📊 R per 100 signals: ${results[0].rPer100Signals.toFixed(2)}
+📈 Win rate: ${(results[0].winRate * 100).toFixed(1)}% (${results[0].wins}/${results[0].entered})
+🎯 Confirm rate: ${(results[0].confirmRate * 100).toFixed(1)}% (${results[0].entered}/${results[0].watchCreated})
+      `.trim() : 'No results'
+    });
+  } catch (e) {
+    console.error('[api/delayed-entry/compare-score-configs-get] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 export { app };
