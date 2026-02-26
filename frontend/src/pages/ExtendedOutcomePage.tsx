@@ -17,6 +17,7 @@ import {
 import {
   GateBacktestComparison,
   GateQuickSettings,
+  DeleteEarlyReadyShort,
 } from '../components/GateBacktest';
 
 const CATEGORIES = [
@@ -652,6 +653,9 @@ export default function ExtendedOutcomePage() {
 
       {/* Gate Backtest Comparison */}
       <GateBacktestComparison />
+
+      {/* Delete EARLY_READY_SHORT */}
+      <DeleteEarlyReadyShort />
 
       {/* Outcome Breakdown Chart */}
       <section className="rounded-2xl border border-white/10 bg-white/5 p-4">

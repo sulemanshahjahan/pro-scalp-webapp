@@ -60,11 +60,11 @@ interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG BUILDER
+// PRESET CONFIGURATIONS
 // ============================================================================
 
-const PRESET_CONFIGS = {
-  default: {
+const PRESETS: Record<string, GateConfig> = {
+  current: {
     name: 'Current (Default)',
     enabled: true,
     blockRedTier: true,
@@ -137,23 +137,49 @@ const PRESET_CONFIGS = {
 };
 
 // ============================================================================
-// MAIN COMPONENT
+// MAIN COMPONENT - Backtest Comparison
 // ============================================================================
 
 export function GateBacktestComparison() {
   const [configs, setConfigs] = useState<GateConfig[]>([
-    PRESET_CONFIGS.default,
-    PRESET_CONFIGS.strictScore3,
-    PRESET_CONFIGS.highMfe,
+    { ...PRESETS.current },
+    { ...PRESETS.strictScore3 },
+    { ...PRESETS.highMfe },
   ]);
-  const [results, setResults] = useState<BacktestResult[]>([]);
+  const [results, setResults] = useState<BacktestResult[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [limit, setLimit] = useState(200);
   const [activeTab, setActiveTab] = useState(0);
-  const [showCustom, setShowCustom] = useState(false);
-  const [customConfig, setCustomConfig] = useState<GateConfig>(PRESET_CONFIGS.default);
+  const [limit, setLimit] = useState(200);
+  const [customConfig, setCustomConfig] = useState<GateConfig & { name: string }>({
+    name: 'Custom',
+    enabled: true,
+    blockRedTier: true,
+    minMfe30mPct: 0.30,
+    yellowMinMfe30mPct: 0.50,
+    redMinMfe30mPct: 0.50,
+    minMqs: 0.20,
+    useCombinedScore: true,
+    minCombinedScore: 2,
+    require15mConfirmation: false,
+    minMfe15mPct: 0.20,
+    allowEarlyReady: false,
+  });
 
-  async function runBacktest() {
+  const addPreset = (key: keyof typeof PRESETS) => {
+    const preset = PRESETS[key];
+    if (!configs.find(c => c.name === preset.name)) {
+      setConfigs([...configs, { ...preset }]);
+    }
+  };
+
+  const removeConfig = (index: number) => {
+    setConfigs(configs.filter((_, i) => i !== index));
+    if (activeTab >= index && activeTab > 0) {
+      setActiveTab(activeTab - 1);
+    }
+  };
+
+  const runBacktest = async () => {
     setLoading(true);
     try {
       const res = await fetch(API('/api/gate/backtest/compare'), {
@@ -164,244 +190,249 @@ export function GateBacktestComparison() {
       const data = await res.json();
       if (data.ok) {
         setResults(data.results);
+        setActiveTab(0);
       }
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  function addConfig(presetKey: keyof typeof PRESET_CONFIGS) {
-    const preset = PRESET_CONFIGS[presetKey];
-    if (!configs.find(c => c.name === preset.name)) {
-      setConfigs([...configs, preset]);
-    }
-  }
-
-  function removeConfig(index: number) {
-    setConfigs(configs.filter((_, i) => i !== index));
-  }
-
-  function addCustomConfig() {
+  const addCustomConfig = () => {
     if (!configs.find(c => c.name === customConfig.name)) {
-      setConfigs([...configs, { ...customConfig, name: customConfig.name || 'Custom' }]);
-      setShowCustom(false);
+      setConfigs([...configs, { ...customConfig }]);
     }
-  }
+  };
 
   return (
-    <section className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-4">
+    <div className="rounded-lg border border-cyan-500/20 bg-slate-900/50 p-4">
       <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-cyan-400/80 uppercase tracking-widest">Gate Backtest Comparison</div>
+        <h3 className="text-sm font-medium text-cyan-300">Gate Backtest Comparison</h3>
         <div className="flex items-center gap-2">
-          <select 
-            className="text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+          <select
             value={limit}
             onChange={(e) => setLimit(Number(e.target.value))}
+            className="text-xs px-2 py-1 rounded bg-slate-800 border border-slate-700"
           >
+            <option value={50}>Last 50 signals</option>
             <option value={100}>Last 100 signals</option>
             <option value={200}>Last 200 signals</option>
-            <option value={300}>Last 300 signals</option>
             <option value={500}>Last 500 signals</option>
           </select>
           <button
             onClick={runBacktest}
             disabled={loading || configs.length === 0}
-            className="text-xs px-3 py-1.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 disabled:opacity-50"
+            className="px-3 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 rounded"
           >
             {loading ? 'Running...' : 'Run Backtest'}
           </button>
         </div>
       </div>
 
-      {/* Config Presets */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        <span className="text-xs text-white/50 py-1">Add preset:</span>
-        {Object.entries(PRESET_CONFIGS).map(([key, preset]) => (
+      {/* Presets */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        <span className="text-xs text-white/50">Add preset:</span>
+        {Object.entries(PRESETS).map(([key, preset]) => (
           <button
             key={key}
-            onClick={() => addConfig(key as keyof typeof PRESET_CONFIGS)}
-            disabled={configs.some(c => c.name === preset.name)}
-            className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-30"
+            onClick={() => addPreset(key as keyof typeof PRESETS)}
+            className="text-xs px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700"
           >
-            + {preset.name}
+            +{preset.name}
           </button>
         ))}
         <button
-          onClick={() => setShowCustom(!showCustom)}
-          className="text-xs px-2 py-1 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-300"
+          onClick={addCustomConfig}
+          className="text-xs px-2 py-0.5 rounded bg-emerald-900/50 hover:bg-emerald-900 border border-emerald-800"
         >
-          {showCustom ? 'Cancel Custom' : '+ Custom'}
+          +Custom
         </button>
       </div>
 
-      {/* Custom Config Builder */}
-      {showCustom && (
-        <div className="mb-4 p-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5">
-          <div className="text-xs font-medium text-cyan-300 mb-2">Custom Configuration</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
-            <input
-              type="text"
-              placeholder="Config name"
-              value={customConfig.name}
-              onChange={(e) => setCustomConfig({ ...customConfig, name: e.target.value })}
-              className="text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-            />
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={customConfig.blockRedTier}
-                onChange={(e) => setCustomConfig({ ...customConfig, blockRedTier: e.target.checked })}
-              />
-              Block RED
-            </label>
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={customConfig.useCombinedScore}
-                onChange={(e) => setCustomConfig({ ...customConfig, useCombinedScore: e.target.checked })}
-              />
-              Use Score
-            </label>
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={customConfig.allowEarlyReady}
-                onChange={(e) => setCustomConfig({ ...customConfig, allowEarlyReady: e.target.checked })}
-              />
-              Allow Early Ready
-            </label>
-            <select
-              value={customConfig.minCombinedScore}
-              onChange={(e) => setCustomConfig({ ...customConfig, minCombinedScore: Number(e.target.value) })}
-              className="text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+      {/* Config Tabs */}
+      {configs.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-3">
+          {configs.map((config, i) => (
+            <button
+              key={i}
+              onClick={() => setActiveTab(i)}
+              className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${
+                activeTab === i
+                  ? 'bg-cyan-600 text-white'
+                  : 'bg-slate-800 text-white/70 hover:bg-slate-700'
+              }`}
             >
-              <option value={1}>Score ≥ 1</option>
-              <option value={2}>Score ≥ 2</option>
-              <option value={3}>Score ≥ 3</option>
-              <option value={4}>Score ≥ 4</option>
-              <option value={5}>Score ≥ 5</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <div>
-              <label className="text-[10px] text-white/50">Min MFE30m %</label>
-              <input
-                type="number"
-                step="0.05"
-                value={customConfig.minMfe30mPct}
-                onChange={(e) => setCustomConfig({ ...customConfig, minMfe30mPct: Number(e.target.value) })}
-                className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-white/50">Min MQS</label>
-              <input
-                type="number"
-                step="0.05"
-                value={customConfig.minMqs}
-                onChange={(e) => setCustomConfig({ ...customConfig, minMqs: Number(e.target.value) })}
-                className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-white/50">Yellow MFE %</label>
-              <input
-                type="number"
-                step="0.05"
-                value={customConfig.yellowMinMfe30mPct}
-                onChange={(e) => setCustomConfig({ ...customConfig, yellowMinMfe30mPct: Number(e.target.value) })}
-                className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-white/50">Red MFE %</label>
-              <input
-                type="number"
-                step="0.05"
-                value={customConfig.redMinMfe30mPct}
-                onChange={(e) => setCustomConfig({ ...customConfig, redMinMfe30mPct: Number(e.target.value) })}
-                className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-              />
-            </div>
-          </div>
-          <button
-            onClick={addCustomConfig}
-            className="mt-2 text-xs px-3 py-1.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30"
-          >
-            Add to Comparison
-          </button>
+              {config.name}
+              <span
+                onClick={(e) => { e.stopPropagation(); removeConfig(i); }}
+                className="text-white/50 hover:text-white cursor-pointer"
+              >
+                ×
+              </span>
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Config List */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {configs.map((config, i) => (
-          <div key={i} className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-white/5 border border-white/10">
-            <span className={i === activeTab ? 'text-cyan-300' : ''}>{config.name}</span>
-            <button onClick={() => removeConfig(i)} className="text-white/30 hover:text-rose-400">×</button>
+      {/* Custom Config Editor */}
+      <div className="mb-4 p-3 rounded bg-slate-800/50 border border-slate-700">
+        <div className="text-xs font-medium text-cyan-300 mb-2">Custom Configuration</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+          <input
+            type="text"
+            placeholder="Config name"
+            value={customConfig.name}
+            onChange={(e) => setCustomConfig({ ...customConfig, name: e.target.value })}
+            className="text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+          />
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={customConfig.blockRedTier}
+              onChange={(e) => setCustomConfig({ ...customConfig, blockRedTier: e.target.checked })}
+            />
+            Block RED
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={customConfig.useCombinedScore}
+              onChange={(e) => setCustomConfig({ ...customConfig, useCombinedScore: e.target.checked })}
+            />
+            Use Score
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={customConfig.allowEarlyReady}
+              onChange={(e) => setCustomConfig({ ...customConfig, allowEarlyReady: e.target.checked })}
+            />
+            Allow Early Ready
+          </label>
+          <select
+            value={customConfig.minCombinedScore}
+            onChange={(e) => setCustomConfig({ ...customConfig, minCombinedScore: Number(e.target.value) })}
+            className="text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+          >
+            <option value={1}>Score ≥ 1</option>
+            <option value={2}>Score ≥ 2</option>
+            <option value={3}>Score ≥ 3</option>
+            <option value={4}>Score ≥ 4</option>
+            <option value={5}>Score ≥ 5</option>
+          </select>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div>
+            <label className="text-[10px] text-white/50">Min MFE30m %</label>
+            <input
+              type="number"
+              step="0.05"
+              value={customConfig.minMfe30mPct}
+              onChange={(e) => setCustomConfig({ ...customConfig, minMfe30mPct: Number(e.target.value) })}
+              className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+            />
           </div>
-        ))}
+          <div>
+            <label className="text-[10px] text-white/50">Min MQS</label>
+            <input
+              type="number"
+              step="0.05"
+              value={customConfig.minMqs}
+              onChange={(e) => setCustomConfig({ ...customConfig, minMqs: Number(e.target.value) })}
+              className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-white/50">RED Min MFE %</label>
+            <input
+              type="number"
+              step="0.05"
+              value={customConfig.redMinMfe30mPct}
+              onChange={(e) => setCustomConfig({ ...customConfig, redMinMfe30mPct: Number(e.target.value) })}
+              className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-white/50">YELLOW Min MFE %</label>
+            <input
+              type="number"
+              step="0.05"
+              value={customConfig.yellowMinMfe30mPct}
+              onChange={(e) => setCustomConfig({ ...customConfig, yellowMinMfe30mPct: Number(e.target.value) })}
+              className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Results */}
-      {results.length > 0 && (
-        <div className="space-y-4">
-          {/* Comparison Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="text-white/60">
-                <tr className="border-b border-white/10">
-                  <th className="text-left px-2 py-2">Config</th>
-                  <th className="text-right px-2 py-2">Kept</th>
-                  <th className="text-right px-2 py-2">Blocked</th>
-                  <th className="text-right px-2 py-2">Win Rate</th>
-                  <th className="text-right px-2 py-2">Total R</th>
-                  <th className="text-right px-2 py-2">Avg R</th>
-                  <th className="text-right px-2 py-2">Median R</th>
-                  <th className="text-center px-2 py-2">Quality</th>
+      {/* Results Table */}
+      {results && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-white/50 border-b border-white/10">
+                <th className="text-left py-2">Config</th>
+                <th className="text-right py-2">Kept</th>
+                <th className="text-right py-2">Blocked</th>
+                <th className="text-right py-2">Win Rate</th>
+                <th className="text-right py-2">Total R</th>
+                <th className="text-right py-2">Avg R</th>
+                <th className="text-right py-2">Median R</th>
+                <th className="text-center py-2">Quality</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => (
+                <tr
+                  key={i}
+                  onClick={() => setActiveTab(i)}
+                  className={`border-b border-white/5 cursor-pointer hover:bg-white/5 ${
+                    activeTab === i ? 'bg-cyan-500/10' : ''
+                  }`}
+                >
+                  <td className="py-2 font-medium">{r.config.name}</td>
+                  <td className="text-right py-2">
+                    {r.summary.allowed}
+                    <span className="text-white/50">({(100 - r.summary.reductionPct).toFixed(0)}%)</span>
+                  </td>
+                  <td className="text-right py-2 text-rose-300">
+                    {r.summary.blocked}
+                    <span className="text-white/50">({r.summary.reductionPct.toFixed(0)}%)</span>
+                  </td>
+                  <td className="text-right py-2">
+                    <span className={r.performance.winRate >= 0.5 ? 'text-emerald-300' : 'text-amber-300'}>
+                      {(r.performance.winRate * 100).toFixed(1)}%
+                    </span>
+                  </td>
+                  <td className="text-right py-2 font-medium">
+                    <span className={r.performance.totalR >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
+                      {r.performance.totalR >= 0 ? '+' : ''}{r.performance.totalR.toFixed(2)}R
+                    </span>
+                  </td>
+                  <td className="text-right py-2 text-white/70">
+                    {r.performance.avgR >= 0 ? '+' : ''}{r.performance.avgR.toFixed(2)}R
+                  </td>
+                  <td className="text-right py-2 text-white/70">
+                    {r.performance.medianR >= 0 ? '+' : ''}{r.performance.medianR.toFixed(2)}R
+                  </td>
+                  <td className="text-center py-2">
+                    <div className="flex justify-center gap-1">
+                      {r.quality.high > 0 && (
+                        <span className="px-1 rounded bg-emerald-500/20 text-emerald-300">{r.quality.high}</span>
+                      )}
+                      {r.quality.medium > 0 && (
+                        <span className="px-1 rounded bg-blue-500/20 text-blue-300">{r.quality.medium}</span>
+                      )}
+                      {r.quality.low > 0 && (
+                        <span className="px-1 rounded bg-amber-500/20 text-amber-300">{r.quality.low}</span>
+                      )}
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {results.map((r, i) => (
-                  <tr 
-                    key={i} 
-                    className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${i === activeTab ? 'bg-cyan-500/10' : ''}`}
-                    onClick={() => setActiveTab(i)}
-                  >
-                    <td className="px-2 py-2 font-medium">{r.config.name}</td>
-                    <td className="px-2 py-2 text-right">
-                      {r.summary.allowed} 
-                      <span className="text-white/40">({(100 - r.summary.reductionPct).toFixed(0)}%)</span>
-                    </td>
-                    <td className="px-2 py-2 text-right text-rose-300">
-                      {r.summary.blocked}
-                      <span className="text-white/40">({r.summary.reductionPct.toFixed(0)}%)</span>
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      <span className={r.performance.winRate >= 0.35 ? 'text-emerald-300' : r.performance.winRate >= 0.25 ? 'text-amber-300' : 'text-rose-300'}>
-                        {(r.performance.winRate * 100).toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      <span className={r.performance.totalR >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
-                        {r.performance.totalR >= 0 ? '+' : ''}{r.performance.totalR.toFixed(2)}R
-                      </span>
-                    </td>
-                    <td className="px-2 py-2 text-right">{r.performance.avgR.toFixed(2)}R</td>
-                    <td className="px-2 py-2 text-right">{r.performance.medianR.toFixed(2)}R</td>
-                    <td className="px-2 py-2 text-center">
-                      <div className="flex gap-1 justify-center">
-                        <span className="text-[10px] px-1 rounded bg-emerald-500/20 text-emerald-200">{r.quality.high}</span>
-                        <span className="text-[10px] px-1 rounded bg-blue-500/20 text-blue-200">{r.quality.medium}</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
 
-          {/* Detailed View for Active Config */}
+          {/* Active Config Details */}
           {results[activeTab] && (
             <div className="p-3 rounded-lg border border-white/10 bg-white/5">
               <div className="text-xs font-medium text-cyan-300 mb-2">
@@ -409,7 +440,7 @@ export function GateBacktestComparison() {
               </div>
               
               {/* Config Summary */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-xs">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3 text-xs">
                 <div className="rounded bg-white/5 p-2">
                   <div className="text-white/50">Block RED</div>
                   <div className={results[activeTab].config.blockRedTier ? 'text-emerald-300' : 'text-amber-300'}>
@@ -439,42 +470,47 @@ export function GateBacktestComparison() {
               {/* Blocked Reasons */}
               <div className="text-xs">
                 <div className="text-white/50 mb-1">Blocked Reasons:</div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1">
                   {Object.entries(results[activeTab].blockedReasons).map(([reason, count]) => (
-                    <span key={reason} className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-200 text-[10px]">
-                      {reason.replace(/_/g, ' ')}: {count}
+                    <span key={reason} className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-300">
+                      {reason}: {count}
                     </span>
                   ))}
                 </div>
               </div>
 
               {/* Tier Breakdown */}
-              <div className="mt-3 text-xs">
-                <div className="text-white/50 mb-1">By Tier:</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {Object.entries(results[activeTab].tierBreakdown).map(([tier, data]) => (
-                    <div key={tier} className="rounded bg-white/5 p-2">
-                      <div className={`font-medium ${tier === 'GREEN' ? 'text-emerald-300' : tier === 'YELLOW' ? 'text-amber-300' : 'text-rose-300'}`}>
-                        {tier}
+              {Object.keys(results[activeTab].tierBreakdown).length > 0 && (
+                <div className="mt-3 text-xs">
+                  <div className="text-white/50 mb-1">By Tier:</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {Object.entries(results[activeTab].tierBreakdown).map(([tier, stats]) => (
+                      <div key={tier} className="rounded bg-white/5 p-2">
+                        <div className={`font-medium ${
+                          tier === 'GREEN' ? 'text-emerald-300' :
+                          tier === 'YELLOW' ? 'text-amber-300' :
+                          'text-rose-300'
+                        }`}>
+                          {tier}
+                        </div>
+                        <div className="text-white/70">
+                          {stats.allowed}/{stats.total} passed ({((stats.allowed/stats.total)*100).toFixed(0)}%)
+                        </div>
                       </div>
-                      <div className="text-white/60 text-[10px]">
-                        {data.allowed}/{data.total} passed
-                        <span className="text-white/40"> ({data.total > 0 ? ((data.allowed / data.total) * 100).toFixed(0) : 0}%)</span>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
 // ============================================================================
-// QUICK SETTINGS COMPONENT
+// QUICK TEST COMPONENT
 // ============================================================================
 
 export function GateQuickSettings() {
@@ -487,14 +523,20 @@ export function GateQuickSettings() {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function testSettings() {
+  const runTest = async () => {
     setLoading(true);
     const config: GateConfig = {
-      ...PRESET_CONFIGS.default,
-      minMfe30mPct: settings.mfe30m,
-      minMqs: settings.mqs,
-      minCombinedScore: settings.minScore,
+      enabled: true,
       blockRedTier: settings.blockRed,
+      minMfe30mPct: settings.mfe30m,
+      yellowMinMfe30mPct: 0.50,
+      redMinMfe30mPct: 0.50,
+      minMqs: settings.mqs,
+      useCombinedScore: true,
+      minCombinedScore: settings.minScore,
+      require15mConfirmation: false,
+      minMfe15mPct: 0.20,
+      allowEarlyReady: false,
     };
 
     try {
@@ -546,15 +588,15 @@ export function GateQuickSettings() {
             <option value={2}>2</option>
             <option value={3}>3</option>
             <option value={4}>4</option>
-            <option value={5}>5</option>
           </select>
         </div>
         <div className="flex items-end">
-          <label className="flex items-center gap-2 text-xs">
+          <label className="flex items-center gap-2 text-xs cursor-pointer">
             <input
               type="checkbox"
               checked={settings.blockRed}
               onChange={(e) => setSettings({ ...settings, blockRed: e.target.checked })}
+              className="rounded"
             />
             Block RED
           </label>
@@ -562,11 +604,11 @@ export function GateQuickSettings() {
       </div>
 
       <button
-        onClick={testSettings}
+        onClick={runTest}
         disabled={loading}
-        className="text-xs px-3 py-1.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 disabled:opacity-50"
+        className="w-full py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 rounded"
       >
-        {loading ? 'Testing...' : 'Test on Last 200 Signals'}
+        {loading ? 'Testing...' : 'Test Settings'}
       </button>
 
       {result && (
@@ -589,6 +631,135 @@ export function GateQuickSettings() {
               {result.performance.totalR >= 0 ? '+' : ''}{result.performance.totalR.toFixed(2)}R
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// DELETE EARLY_READY_SHORT COMPONENT
+// ============================================================================
+
+export function DeleteEarlyReadyShort() {
+  const [result, setResult] = useState<{
+    dryRun?: boolean;
+    wouldDelete?: number;
+    deleted?: { signals: number; outcomes: number; extendedOutcomes: number };
+    message: string;
+    sample?: Array<{ id: number; symbol: string; category: string; created_at: string }>;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const checkWhatWouldDelete = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(API('/api/admin/delete-early-ready-short?dryRun=true'), {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setResult(data);
+      setShowConfirm(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doDelete = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(API('/api/admin/delete-early-ready-short?dryRun=false'), {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setResult(data);
+      setShowConfirm(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-rose-300">Delete EARLY_READY_SHORT Signals</h3>
+      </div>
+
+      <p className="text-xs text-white/60 mb-3">
+        Permanently remove all EARLY_READY_SHORT signals and their outcomes from the database.
+        This cannot be undone.
+      </p>
+
+      {!result && (
+        <button
+          onClick={checkWhatWouldDelete}
+          disabled={loading}
+          className="px-3 py-1.5 text-xs bg-rose-600 hover:bg-rose-500 disabled:bg-slate-700 rounded"
+        >
+          {loading ? 'Checking...' : 'Check What Will Be Deleted'}
+        </button>
+      )}
+
+      {result && result.dryRun && (
+        <div className="mb-3 p-3 rounded bg-slate-800/50 border border-amber-500/30">
+          <div className="text-xs font-medium text-amber-300 mb-2">
+            Dry Run Results - Would Delete:
+          </div>
+          <div className="text-sm font-bold text-white mb-2">
+            {result.wouldDelete} EARLY_READY_SHORT signals
+          </div>
+          {result.sample && result.sample.length > 0 && (
+            <div className="text-xs text-white/50 mb-3">
+              Sample: {result.sample.map(s => s.symbol).join(', ')}
+            </div>
+          )}
+          
+          {showConfirm && (
+            <div className="flex gap-2">
+              <button
+                onClick={doDelete}
+                disabled={loading}
+                className="px-3 py-1.5 text-xs bg-rose-600 hover:bg-rose-500 disabled:bg-slate-700 rounded"
+              >
+                {loading ? 'Deleting...' : 'YES, DELETE THEM'}
+              </button>
+              <button
+                onClick={() => { setResult(null); setShowConfirm(false); }}
+                className="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {result && !result.dryRun && (
+        <div className="p-3 rounded bg-emerald-900/30 border border-emerald-500/30">
+          <div className="text-xs font-medium text-emerald-300 mb-2">
+            ✅ Deleted Successfully
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="rounded bg-white/5 p-2 text-center">
+              <div className="text-white/50">Signals</div>
+              <div className="text-white font-medium">{result.deleted?.signals}</div>
+            </div>
+            <div className="rounded bg-white/5 p-2 text-center">
+              <div className="text-white/50">Outcomes</div>
+              <div className="text-white font-medium">{result.deleted?.outcomes}</div>
+            </div>
+            <div className="rounded bg-white/5 p-2 text-center">
+              <div className="text-white/50">Extended</div>
+              <div className="text-white font-medium">{result.deleted?.extendedOutcomes}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => setResult(null)}
+            className="mt-3 px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded"
+          >
+            Done
+          </button>
         </div>
       )}
     </div>
