@@ -4341,4 +4341,22 @@ app.get('/api/x-signals', async (req, res) => {
   res.json({ ok: true, signals, count: signals.length });
 });
 
+// TEMP: Check delayed entry watches
+app.get('/api/watch-list', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  const rows = await d.prepare(`
+    SELECT 
+      s.id, s.symbol, s.category, s.price, s.time,
+      der.status, der.reference_price, der.watch_created_at, der.watch_expires_at
+    FROM signals s
+    LEFT JOIN delayed_entry_records der ON der.signal_id = s.id
+    WHERE der.status = 'WATCH' 
+       OR (der.status IS NULL AND s.category IN ('READY_TO_BUY', 'READY_TO_SELL', 'BEST_ENTRY', 'BEST_SHORT_ENTRY'))
+    ORDER BY s.time DESC
+    LIMIT 20
+  `).all();
+  res.json({ ok: true, watches: rows, count: rows.length });
+});
+
 export { app };
