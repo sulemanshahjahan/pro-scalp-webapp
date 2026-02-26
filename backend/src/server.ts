@@ -4030,8 +4030,18 @@ if (delayedConfig.enabled) {
 }
 
 // ============================================================================
-// DELAYED ENTRY STATS ENDPOINT
+// DELAYED ENTRY ENDPOINTS
 // ============================================================================
+
+// Config endpoint (no DB required)
+app.get('/api/delayed-entry/config', (_req, res) => {
+  try {
+    const config = getDelayedEntryConfig();
+    res.json({ ok: true, config });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 app.get('/api/delayed-entry/stats', async (_req, res) => {
   try {
