@@ -219,6 +219,7 @@ export async function checkSignalGate(
   const tier = tierRecord?.tier || 'YELLOW'; // Default cautious
   
   // Get early metrics (may be missing for new signals)
+  const hasMfeData = signal.mfe30mPct !== undefined && signal.mfe30mPct !== null;
   const mfe30m = signal.mfe30mPct ?? 0;
   const mae30m = signal.mae30mPct ?? 0.001;
   const mfe15m = signal.mfe15mPct ?? null;
@@ -261,7 +262,10 @@ export async function checkSignalGate(
   }
   
   // Hard rule 3: Combined score check (confluence)
-  if (cfg.useCombinedScore && total < cfg.minCombinedScore) {
+  // Skip MFE/MQS check for new signals without historical data - they'll be evaluated after recording
+  const skipMfeCheck = !hasMfeData;
+  
+  if (cfg.useCombinedScore && total < cfg.minCombinedScore && !skipMfeCheck) {
     if (score.mfe30m === 0) reasons.push(`MFE30m too low: ${(mfe30m * 100).toFixed(2)}% < ${(cfg.minMfe30mPct * 100).toFixed(0)}% required`);
     if (score.mqs === 0) reasons.push(`MQS too low: ${mqs.toFixed(2)} < ${cfg.minMqs} required`);
     if (score.tier === 0 && tier !== 'GREEN') reasons.push(`Symbol tier not GREEN: ${tier}`);
