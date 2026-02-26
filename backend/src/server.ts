@@ -4303,4 +4303,31 @@ app.get('/api/delayed-entry/compare-score-configs-get', async (req, res) => {
   }
 });
 
+// TEMP: Direct test endpoints with manual CORS headers (bypass env issues)
+app.get('/api/x-compare', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const { compareScoreDelayedConfigs } = await import('./delayedEntryValidation.js');
+  const configs = [
+    { name: 'Config A (Score≥2, 0.25%)', minScore: 2, confirmMovePct: 0.25 },
+    { name: 'Config B (Score≥3, 0.30%)', minScore: 3, confirmMovePct: 0.30 },
+    { name: 'Config C (Score≥2, 0.30%)', minScore: 2, confirmMovePct: 0.30 },
+  ];
+  const results = await compareScoreDelayedConfigs(configs, 200);
+  res.json({ ok: true, results, winner: results[0]?.configName });
+});
+
+// TEMP: Check recent signals including delayed entry status
+app.get('/api/x-signals', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  const signals = await d.prepare(`
+    SELECT s.id, s.symbol, s.category, s.time, s.run_id,
+           der.status as delayed_status, der.watch_created_at, der.confirmed_price
+    FROM signals s
+    LEFT JOIN delayed_entry_records der ON der.signal_id = s.id
+    ORDER BY s.created_at DESC LIMIT 10
+  `).all();
+  res.json({ ok: true, signals, count: signals.length });
+});
+
 export { app };
