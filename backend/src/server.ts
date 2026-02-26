@@ -4420,34 +4420,10 @@ app.get('/api/watch-list', async (req, res) => {
   res.json({ ok: true, watches: rows, count: rows.length });
 });
 
-// TEMP: Debug scan and record flow
-app.get('/api/debug/scan-trace', async (req, res) => {
+// TEMP: Simple version endpoint that works
+app.get('/api/v', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const d = getDb();
-  
-  // Check recent scan runs
-  const scans = await d.prepare(`
-    SELECT run_id, started_at, finished_at, status, signals_by_category, error_message
-    FROM scan_runs
-    ORDER BY started_at DESC
-    LIMIT 5
-  `).all();
-  
-  // Check last 10 signals regardless of time
-  const recentSignals = await d.prepare(`
-    SELECT id, symbol, category, created_at, blocked_reasons_json
-    FROM signals
-    ORDER BY created_at DESC
-    LIMIT 10
-  `).all();
-  
-  res.json({
-    ok: true,
-    scans,
-    recentSignals,
-    now: Date.now(),
-    iso: new Date().toISOString()
-  });
+  res.json({ v: '1', t: Date.now() });
 });
 
 export { app };
