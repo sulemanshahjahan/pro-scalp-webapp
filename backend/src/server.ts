@@ -3905,12 +3905,21 @@ app.post('/api/signals/clear', async (_req, res) => {
   }
 });
 
-// Serve frontend build
-const feRoot = path.join(__dirname, '../../frontend/dist');
-app.use(express.static(feRoot));
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(feRoot, 'index.html'));
-});
+// Serve frontend build (only in local dev, not on Railway)
+const isRailwayEnv = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+if (!isRailwayEnv) {
+  const feRoot = path.join(__dirname, '../../frontend/dist');
+  app.use(express.static(feRoot));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(feRoot, 'index.html'));
+  });
+} else {
+  // Railway: API only, frontend is on Vercel
+  // Add health check endpoint for root
+  app.get('/', (_req, res) => {
+    res.json({ ok: true, service: 'pro-scalp-backend', env: 'railway' });
+  });
+}
 
 // Server
 const port = parseInt(process.env.PORT || '8080', 10);
