@@ -3661,6 +3661,7 @@ app.post('/api/admin/delete-early-ready-short', async (req, res) => {
     
     const dryRun = (req.query.dryRun || req.body?.dryRun) !== 'false';
     const d = getDb();
+    const isPg = String(process.env.DB_DRIVER).toLowerCase() === 'postgres';
     
     // Count signals to delete
     const countResult = await d.prepare(`
@@ -3674,7 +3675,6 @@ app.post('/api/admin/delete-early-ready-short', async (req, res) => {
     }
     
     if (dryRun) {
-      // Just return what would be deleted
       const sample = await d.prepare(`
         SELECT id, symbol, category, created_at 
         FROM signals 
@@ -3692,49 +3692,68 @@ app.post('/api/admin/delete-early-ready-short', async (req, res) => {
       });
     }
     
-    // Get IDs first to avoid subquery issues
-    const idRows = await d.prepare(`
-      SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT'
-    `).all() as Array<{ id: number }>;
+    // Use batch delete with temp table approach for reliability
+    // First, create a temp table or use a CTE to hold IDs
     
-    const ids = idRows.map(r => r.id);
-    
-    if (ids.length === 0) {
-      return res.json({ ok: true, message: 'No EARLY_READY_SHORT signals found', deleted: 0 });
+    if (isPg) {
+      // PostgreSQL: Use CTE for cleaner delete
+      const outcomesResult = await d.prepare(`
+        WITH ids AS (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+        DELETE FROM outcomes WHERE signal_id IN (SELECT id FROM ids)
+      `).run();
+      
+      const extResult = await d.prepare(`
+        WITH ids AS (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+        DELETE FROM extended_outcomes WHERE signal_id IN (SELECT id FROM ids)
+      `).run();
+      
+      const signalsResult = await d.prepare(`
+        DELETE FROM signals WHERE category = 'EARLY_READY_SHORT'
+      `).run();
+      
+      res.json({
+        ok: true,
+        deleted: {
+          signals: (signalsResult as any).rowCount || signalsResult.changes || 0,
+          outcomes: (outcomesResult as any).rowCount || outcomesResult.changes || 0,
+          extendedOutcomes: (extResult as any).rowCount || extResult.changes || 0
+        },
+        message: `Deleted EARLY_READY_SHORT signals and their outcomes`
+      });
+    } else {
+      // SQLite: Use direct subquery (SQLite supports this)
+      const outcomesResult = await d.prepare(`
+        DELETE FROM outcomes WHERE signal_id IN 
+        (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+      `).run();
+      
+      const extResult = await d.prepare(`
+        DELETE FROM extended_outcomes WHERE signal_id IN 
+        (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+      `).run();
+      
+      const signalsResult = await d.prepare(`
+        DELETE FROM signals WHERE category = 'EARLY_READY_SHORT'
+      `).run();
+      
+      res.json({
+        ok: true,
+        deleted: {
+          signals: signalsResult.changes || 0,
+          outcomes: outcomesResult.changes || 0,
+          extendedOutcomes: extResult.changes || 0
+        },
+        message: `Deleted EARLY_READY_SHORT signals and their outcomes`
+      });
     }
-    
-    // Build placeholders for IN clause
-    const placeholders = ids.map(() => '?').join(',');
-    
-    // Delete outcomes first (foreign key constraints)
-    const outcomesDeleted = await d.prepare(`
-      DELETE FROM outcomes WHERE signal_id IN (${placeholders})
-    `).run(...ids);
-    
-    const extendedOutcomesDeleted = await d.prepare(`
-      DELETE FROM extended_outcomes WHERE signal_id IN (${placeholders})
-    `).run(...ids);
-    
-    const signalsDeleted = await d.prepare(`
-      DELETE FROM signals WHERE category = 'EARLY_READY_SHORT'
-    `).run();
-    
-    res.json({
-      ok: true,
-      deleted: {
-        signals: signalsDeleted.changes,
-        outcomes: outcomesDeleted.changes,
-        extendedOutcomes: extendedOutcomesDeleted.changes
-      },
-      message: `Deleted ${signalsDeleted.changes} EARLY_READY_SHORT signals and their outcomes`
-    });
     
   } catch (e: any) {
     console.error('[api/admin/delete-early-ready-short] Error:', e);
     res.status(500).json({ 
       ok: false, 
       error: String(e),
-      details: e?.message 
+      details: e?.message,
+      stack: e?.stack 
     });
   }
 });
