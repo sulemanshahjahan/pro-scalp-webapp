@@ -2276,11 +2276,17 @@ async function runScan(preset: Preset) {
     const gateConfig = getGateConfig();
     let passedSignals = out;
     let blockedCount = 0;
+    const blockedMap = new Map<string, string[]>(); // symbol -> reasons
     
     if (gateConfig.enabled) {
       const gateResult = await filterSignalsThroughGate(out as any, gateConfig);
       passedSignals = gateResult.allowed;
       blockedCount = gateResult.stats.blocked;
+      
+      // Map blocked signals to their reasons
+      for (const blocked of gateResult.blocked) {
+        blockedMap.set(blocked.symbol, blocked.reasons);
+      }
       
       // Log gate results
       console.log(`[signal-gate] Scan ${preset}: ${gateResult.stats.allowed}/${gateResult.stats.total} passed (${gateResult.stats.reductionPct.toFixed(1)}% blocked)`);
@@ -2301,24 +2307,50 @@ async function runScan(preset: Preset) {
     
     lastByPreset.set(preset, { signals: passedSignals, at });
     try {
-      for (const sig of passedSignals) {
-        // Check delayed entry - only record if not using delayed entry or if delayed entry is disabled
+      // Record ALL signals (both blocked and passed)
+      // Blocked signals get marked with blockedReasons so they appear in DB but don't trade
+      const allSignals = out; // Original scanner output
+      
+      for (const sig of allSignals) {
+        const isBlocked = blockedMap.has(sig.symbol);
+        const blockedReasons = blockedMap.get(sig.symbol) ?? [];
+        
+        // Add gate metadata to signal
+        const sigWithGateInfo = {
+          ...sig,
+          blockedReasons: blockedReasons.length > 0 ? blockedReasons : undefined,
+          firstFailedGate: blockedReasons[0] ?? null,
+          gateBlocked: isBlocked, // Flag for easy filtering
+        };
+        
+        // Check delayed entry
         const delayedConfig = getDelayedEntryConfig();
+        
         if (delayedConfig.enabled) {
-          // Record signal first to get ID
-          const signalId = await recordSignal(sig as any, preset);
+          // Record signal to get ID
+          const signalId = await recordSignal(sigWithGateInfo as any, preset);
+          
           if (signalId) {
-            // Initialize delayed entry watch with original TP/SL for recalculation
-            await initDelayedEntry(
-              { ...sig, id: signalId },
-              sig.stop,
-              sig.tp1,
-              sig.tp2
-            );
+            // Only initialize delayed entry for PASSED signals (not blocked)
+            if (!isBlocked) {
+              await initDelayedEntry(
+                { ...sig, id: signalId },
+                sig.stop,
+                sig.tp1,
+                sig.tp2
+              );
+            } else {
+              console.log(`[signal-gate] Recorded but NOT watching (blocked): ${sig.symbol}`);
+            }
           }
         } else {
-          // Immediate entry (old behavior)
-          await recordSignal(sig as any, preset);
+          // Immediate entry (old behavior) - only for passed signals
+          if (!isBlocked) {
+            await recordSignal(sigWithGateInfo as any, preset);
+          } else {
+            // Still record blocked for visibility
+            await recordSignal(sigWithGateInfo as any, preset);
+          }
         }
       }
     } catch (e) {
