@@ -4303,6 +4303,17 @@ app.get('/api/delayed-entry/compare-score-configs-get', async (req, res) => {
   }
 });
 
+// TEMP: Version check - returns immediately, no DB, no imports
+app.get('/api/version', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({ 
+    version: '1.0.2', 
+    commit: '125e2da',
+    timestamp: Date.now(),
+    cors: 'manual-*'
+  });
+});
+
 // TEMP: Direct test endpoints with manual CORS headers (bypass env issues)
 app.get('/api/x-compare', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
