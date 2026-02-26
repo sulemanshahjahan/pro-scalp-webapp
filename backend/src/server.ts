@@ -4176,4 +4176,53 @@ app.post('/api/delayed-entry/compare', async (req, res) => {
   }
 });
 
+// ============================================================================
+// SCORE + DELAYED ENTRY COMPARISON (Test production candidates)
+// ============================================================================
+
+app.post('/api/delayed-entry/compare-score-configs', async (req, res) => {
+  try {
+    const windowSize = Number(req.body.windowSize ?? 200);
+    const configs = req.body.configs || [
+      { name: 'Config A (Score≥2, 0.25%)', minScore: 2, confirmMovePct: 0.25 },
+      { name: 'Config B (Score≥3, 0.30%)', minScore: 3, confirmMovePct: 0.30 },
+      { name: 'Config C (Score≥2, 0.30%)', minScore: 2, confirmMovePct: 0.30 },
+    ];
+    
+    console.log(`[api/delayed-entry/compare-score-configs] Testing ${configs.length} configs...`);
+    
+    const { compareScoreDelayedConfigs } = await import('./delayedEntryValidation.js');
+    const results = await compareScoreDelayedConfigs(configs, windowSize);
+    
+    // Format for easy comparison
+    const formatted = results.map(r => ({
+      config: r.configName,
+      passedFilter: r.passedSignals,
+      entered: r.entered,
+      confirmRate: `${(r.confirmRate * 100).toFixed(1)}%`,
+      winRate: `${(r.winRate * 100).toFixed(1)}%`,
+      avgR: r.avgR.toFixed(2),
+      totalR: r.totalR.toFixed(1),
+      rPer100Signals: r.rPer100Signals.toFixed(2),
+      vsBaseline: `${r.improvementPct >= 0 ? '+' : ''}${r.improvementPct.toFixed(0)}%`,
+    }));
+    
+    res.json({ 
+      ok: true, 
+      results,
+      formatted,
+      winner: results[0]?.configName || null,
+      recommendation: results[0] ? `
+🏆 WINNER: ${results[0].configName}
+📊 R per 100 signals: ${results[0].rPer100Signals.toFixed(2)}
+📈 Win rate: ${(results[0].winRate * 100).toFixed(1)}% (${results[0].wins}/${results[0].entered})
+🎯 Confirm rate: ${(results[0].confirmRate * 100).toFixed(1)}% (${results[0].entered}/${results[0].watchCreated})
+      `.trim() : 'No results'
+    });
+  } catch (e) {
+    console.error('[api/delayed-entry/compare-score-configs] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 export { app };

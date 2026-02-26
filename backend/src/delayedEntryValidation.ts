@@ -184,6 +184,119 @@ async function validateWindow(
   };
 }
 
+export interface ScoreDelayedConfig {
+  name: string;
+  minScore: number;
+  confirmMovePct: number;
+}
+
+export interface ScoreDelayedResult extends ValidationResult {
+  configName: string;
+  minScore: number;
+  passedSignals: number; // How many signals passed the score filter
+}
+
+/**
+ * Compare Score + Delayed Entry combinations
+ * Tests the 3 production candidates:
+ * - Config A: Score ≥ 2, 0.25%
+ * - Config B: Score ≥ 3, 0.30%  
+ * - Config C: Score ≥ 2, 0.30%
+ */
+export async function compareScoreDelayedConfigs(
+  configs: ScoreDelayedConfig[] = [
+    { name: 'Config A (Score≥2, 0.25%)', minScore: 2, confirmMovePct: 0.25 },
+    { name: 'Config B (Score≥3, 0.30%)', minScore: 3, confirmMovePct: 0.30 },
+    { name: 'Config C (Score≥2, 0.30%)', minScore: 2, confirmMovePct: 0.30 },
+  ],
+  windowSize: number = 200
+): Promise<ScoreDelayedResult[]> {
+  const d = getDb();
+  const results: ScoreDelayedResult[] = [];
+  
+  console.log(`[validation] Fetching signals with score and MFE data...`);
+  
+  // Fetch signals with score data
+  const signals = await d.prepare(`
+    SELECT 
+      s.id,
+      s.symbol,
+      s.category,
+      s.price,
+      s.time,
+      s.stop,
+      s.tp1,
+      s.tp2,
+      s.gate_snapshot_json,
+      eo.ext24_realized_r as realizedR,
+      eo.status as outcomeStatus,
+      eo.mfe_30m_pct as mfe30m,
+      eo.mae_30m_pct as mae30m
+    FROM signals s
+    JOIN extended_outcomes eo ON eo.signal_id = s.id
+    WHERE eo.mfe_30m_pct IS NOT NULL
+      AND s.category IN ('READY_TO_BUY', 'READY_TO_SELL', 'BEST_ENTRY', 'BEST_SHORT_ENTRY')
+    ORDER BY s.created_at DESC
+    LIMIT 250
+  `).all() as any[];
+  
+  console.log(`[validation] Found ${signals.length} signals with MFE data`);
+  
+  if (signals.length === 0) {
+    console.log('[validation] No signals found. Run backfill first.');
+    return [];
+  }
+  
+  // Parse gate_snapshot_json to get scores
+  const signalsWithScores = signals.map(sig => {
+    let score = 0;
+    try {
+      const snapshot = sig.gate_snapshot_json ? JSON.parse(sig.gate_snapshot_json) : null;
+      // Calculate score from snapshot (matches signalGate.ts logic)
+      if (snapshot) {
+        score = (snapshot.tier === 'GREEN' ? 1 : 0) +
+                (snapshot.mfe30mQualifies ? 1 : 0) +
+                (snapshot.mqsQualifies ? 1 : 0) +
+                (snapshot.hasMqsBonus ? 1 : 0) +
+                (snapshot.category?.includes('BEST') ? 1 : 0);
+      }
+    } catch {
+      score = 0;
+    }
+    return { ...sig, score };
+  });
+  
+  for (const config of configs) {
+    console.log(`[validation] Testing ${config.name}...`);
+    
+    // Filter by score
+    const filteredSignals = signalsWithScores.filter(s => s.score >= config.minScore);
+    const windowSignals = filteredSignals.slice(0, Math.min(windowSize, filteredSignals.length));
+    
+    if (windowSignals.length === 0) {
+      console.log(`[validation] No signals passed score filter for ${config.name}`);
+      continue;
+    }
+    
+    console.log(`[validation] ${config.name}: ${filteredSignals.length} passed score filter, testing ${windowSignals.length}...`);
+    
+    // Run delayed entry validation on filtered signals
+    const baseResult = await validateWindow(windowSignals, config.confirmMovePct, windowSize);
+    
+    results.push({
+      ...baseResult,
+      configName: config.name,
+      minScore: config.minScore,
+      passedSignals: filteredSignals.length,
+    });
+  }
+  
+  // Sort by rPer100Signals descending
+  results.sort((a, b) => b.rPer100Signals - a.rPer100Signals);
+  
+  return results;
+}
+
 /**
  * Compare multiple confirmMovePct values
  */
