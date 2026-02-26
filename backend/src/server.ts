@@ -4341,6 +4341,35 @@ app.get('/api/x-signals', async (req, res) => {
   res.json({ ok: true, signals, count: signals.length });
 });
 
+// TEMP: Latest signals check (no DB join)
+app.get('/api/latest-check', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Get last 20 signals of any category
+  const signals = await d.prepare(`
+    SELECT id, symbol, category, price, time, created_at
+    FROM signals
+    ORDER BY created_at DESC
+    LIMIT 20
+  `).all();
+  
+  // Get last scan
+  const scan = await d.prepare(`
+    SELECT run_id, started_at, finished_at, status, signals_by_category
+    FROM scan_runs
+    ORDER BY started_at DESC
+    LIMIT 1
+  `).get();
+  
+  res.json({ 
+    ok: true, 
+    signals: signals.map(s => ({...s, timeFormatted: new Date(Number(s.time)).toISOString()})),
+    scan,
+    serverTime: Date.now()
+  });
+});
+
 // TEMP: Check delayed entry watches
 app.get('/api/watch-list', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
