@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
 import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, thresholdsForPreset, type Preset } from './scanner.js';
+import { klinesRange } from './binance.js';
 import { getLatestScanRuns, listScanRuns, getScanRunByRunId } from './scanStore.js';
 import { listCandidateFeatures, listCandidateFeaturesMulti } from './candidateFeaturesStore.js';
 import { applyOverrides, evalFromFeatures, getTuneConfigFromEnv } from './tuneSim.js';
@@ -112,6 +113,14 @@ import {
   getRecommendedConfigs,
   type BacktestConfig,
 } from './gateBacktest.js';
+import {
+  initDelayedEntry,
+  runDelayedEntryWatcher,
+  getDelayedEntryConfig,
+  simulateDelayedEntry,
+  type DelayedEntryConfig,
+} from './delayedEntry.js';
+import { ensureDelayedEntrySchema } from './db/delayedEntrySchema.js';
 import fs from 'fs';
 import { DB_PATH } from './dbPath.js';
 
@@ -2279,7 +2288,21 @@ async function runScan(preset: Preset) {
     
     lastByPreset.set(preset, { signals: passedSignals, at });
     try {
-      for (const sig of passedSignals) await recordSignal(sig as any, preset);
+      for (const sig of passedSignals) {
+        // Check delayed entry - only record if not using delayed entry or if delayed entry is disabled
+        const delayedConfig = getDelayedEntryConfig();
+        if (delayedConfig.enabled) {
+          // Record signal first to get ID
+          const signalId = await recordSignal(sig as any, preset);
+          if (signalId) {
+            // Initialize delayed entry watch
+            await initDelayedEntry({ ...sig, id: signalId });
+          }
+        } else {
+          // Immediate entry (old behavior)
+          await recordSignal(sig as any, preset);
+        }
+      }
     } catch (e) {
       console.warn('[signals] record failed:', e);
     }
@@ -3957,5 +3980,82 @@ if (SERVER_LOOP_ENABLED) {
 
 // Outcomes updater (safe to run even if no signals yet)
 startOutcomeUpdater();
+
+// ============================================================================
+// DELAYED ENTRY WATCHER (Confirmation-Based Trading)
+// ============================================================================
+
+const delayedConfig = getDelayedEntryConfig();
+
+if (delayedConfig.enabled) {
+  console.log('[delayed-entry] Enabled - confirmation required before entry');
+  console.log(`[delayed-entry] Config: ${delayedConfig.confirmMovePct}% move, ${delayedConfig.maxWaitMinutes}min max wait`);
+  
+  // Ensure schema
+  ensureDelayedEntrySchema().catch(console.error);
+  
+  // Start watcher loop
+  const watcherInterval = setInterval(async () => {
+    try {
+      const result = await runDelayedEntryWatcher();
+      if (result.checked > 0) {
+        console.log(`[delayed-entry] Watcher: ${result.checked} watching, ${result.entered} entered, ${result.expired} expired`);
+      }
+    } catch (e) {
+      console.error('[delayed-entry] Watcher error:', e);
+    }
+  }, delayedConfig.pollIntervalSeconds * 1000);
+  
+  // Cleanup on exit
+  process.on('SIGINT', () => clearInterval(watcherInterval));
+  process.on('SIGTERM', () => clearInterval(watcherInterval));
+} else {
+  console.log('[delayed-entry] Disabled - immediate entry mode');
+}
+
+// ============================================================================
+// BACKTEST SIMULATION ENDPOINT (Delayed Entry)
+// ============================================================================
+
+app.post('/api/delayed-entry/simulate', async (req, res) => {
+  try {
+    const { signalId } = req.body;
+    if (!signalId) {
+      return res.status(400).json({ ok: false, error: 'signalId required' });
+    }
+    
+    const d = getDb();
+    
+    // Get signal
+    const signal = await d.prepare(`
+      SELECT * FROM signals WHERE id = ?
+    `).get(signalId) as any;
+    
+    if (!signal) {
+      return res.status(404).json({ ok: false, error: 'Signal not found' });
+    }
+    
+    // Get candles after signal time
+    const endTime = Date.now();
+    const candles = await klinesRange(signal.symbol, '5m', signal.time, endTime, 50);
+    
+    // Simulate delayed entry
+    const result = await simulateDelayedEntry(
+      {
+        symbol: signal.symbol,
+        category: signal.category,
+        price: signal.price,
+        time: signal.time,
+      } as any,
+      candles,
+      req.body.config
+    );
+    
+    res.json({ ok: true, result });
+  } catch (e) {
+    console.error('[api/delayed-entry/simulate] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 export { app };
