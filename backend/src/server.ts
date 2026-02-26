@@ -3588,6 +3588,17 @@ app.get('/api/gate/stats', (_req, res) => {
   }
 });
 
+// Get current gate config
+app.get('/api/gate/config', (_req, res) => {
+  try {
+    const config = getGateConfig();
+    res.json({ ok: true, config });
+  } catch (e) {
+    console.error('[api/gate/config] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Reset gate statistics (admin)
 app.post('/api/gate/stats/reset', (req, res) => {
   try {
