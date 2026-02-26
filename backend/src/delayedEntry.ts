@@ -29,17 +29,17 @@ export interface DelayedEntryConfig {
 
 export const DEFAULT_DELAYED_ENTRY_CONFIG: DelayedEntryConfig = {
   enabled: true,
-  confirmMovePct: 0.30,          // 0.3% move required
+  confirmMovePct: 0.50,          // 0.5% move required (optimal from validation)
   maxWaitMinutes: 45,            // Wait up to 45 minutes
   pollIntervalSeconds: 30,       // Check every 30 seconds
-  maxExtraMovePct: 0.10,         // Skip if moved > 0.4% (0.3 + 0.1)
+  maxExtraMovePct: 0.10,         // Skip if moved > 0.6% (0.5 + 0.1)
   maxSpreadPct: 0.15,            // 0.15% max spread
 };
 
 export function getDelayedEntryConfig(): DelayedEntryConfig {
   return {
     enabled: (process.env.DELAYED_ENTRY_ENABLED || 'true').toLowerCase() === 'true',
-    confirmMovePct: parseFloat(process.env.DELAYED_ENTRY_CONFIRM_MOVE_PCT || '0.30'),
+    confirmMovePct: parseFloat(process.env.DELAYED_ENTRY_CONFIRM_MOVE_PCT || '0.50'),  // Default: 0.5%
     maxWaitMinutes: parseInt(process.env.DELAYED_ENTRY_MAX_WAIT_MINUTES || '45', 10),
     pollIntervalSeconds: parseInt(process.env.DELAYED_ENTRY_POLL_SECONDS || '30', 10),
     maxExtraMovePct: parseFloat(process.env.DELAYED_ENTRY_MAX_EXTRA_MOVE_PCT || '0.10'),
