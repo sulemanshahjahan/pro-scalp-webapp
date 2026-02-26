@@ -3926,7 +3926,27 @@ if (SERVER_LOOP_ENABLED) {
   console.log('[scan] server loop enabled');
   startLoop(async (signals) => {
     try {
-      for (const sig of signals) await recordSignal(sig as any, undefined);
+      // 🚨 HARD GATE: Filter signals before recording (same as runScan)
+      const gateConfig = getGateConfig();
+      let passedSignals = signals;
+      
+      if (gateConfig.enabled) {
+        const gateResult = await filterSignalsThroughGate(signals as any, gateConfig);
+        passedSignals = gateResult.allowed;
+        
+        if (gateResult.stats.blocked > 0) {
+          console.log(`[signal-gate][loop] ${gateResult.stats.allowed}/${gateResult.stats.total} passed (${gateResult.stats.blocked} blocked)`);
+          // Log blocked EARLY_READY signals
+          const earlyBlocked = gateResult.blocked.filter(b => 
+            b.category === 'EARLY_READY' || b.category === 'EARLY_READY_SHORT'
+          );
+          if (earlyBlocked.length > 0) {
+            console.log(`[signal-gate][loop] Blocked ${earlyBlocked.length} EARLY_READY signals: ${earlyBlocked.map(s => s.symbol).join(', ')}`);
+          }
+        }
+      }
+      
+      for (const sig of passedSignals) await recordSignal(sig as any, undefined);
     } catch (e) {
       console.warn('[signals] record failed (loop):', e);
     }
