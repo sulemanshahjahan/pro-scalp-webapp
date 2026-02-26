@@ -3652,6 +3652,78 @@ app.get('/api/gate/backtest/recommended', (_req, res) => {
 });
 
 // ============================================================================
+// DELETE EARLY_READY_SHORT SIGNALS (ADMIN)
+// ============================================================================
+
+app.post('/api/admin/delete-early-ready-short', async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    
+    const dryRun = (req.query.dryRun || req.body?.dryRun) !== 'false';
+    const d = getDb();
+    
+    // Count signals to delete
+    const countResult = await d.prepare(`
+      SELECT COUNT(*) as count FROM signals WHERE category = 'EARLY_READY_SHORT'
+    `).get() as { count: number };
+    
+    const count = countResult?.count || 0;
+    
+    if (count === 0) {
+      return res.json({ ok: true, message: 'No EARLY_READY_SHORT signals found', deleted: 0 });
+    }
+    
+    if (dryRun) {
+      // Just return what would be deleted
+      const sample = await d.prepare(`
+        SELECT id, symbol, category, created_at 
+        FROM signals 
+        WHERE category = 'EARLY_READY_SHORT'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `).all();
+      
+      return res.json({
+        ok: true,
+        dryRun: true,
+        wouldDelete: count,
+        sample,
+        message: `${count} EARLY_READY_SHORT signals would be deleted. Set dryRun=false to confirm.`
+      });
+    }
+    
+    // Actually delete - delete outcomes first (foreign key constraints)
+    const outcomesDeleted = await d.prepare(`
+      DELETE FROM outcomes 
+      WHERE signal_id IN (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+    `).run();
+    
+    const extendedOutcomesDeleted = await d.prepare(`
+      DELETE FROM extended_outcomes 
+      WHERE signal_id IN (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
+    `).run();
+    
+    const signalsDeleted = await d.prepare(`
+      DELETE FROM signals WHERE category = 'EARLY_READY_SHORT'
+    `).run();
+    
+    res.json({
+      ok: true,
+      deleted: {
+        signals: signalsDeleted.changes,
+        outcomes: outcomesDeleted.changes,
+        extendedOutcomes: extendedOutcomesDeleted.changes
+      },
+      message: `Deleted ${signalsDeleted.changes} EARLY_READY_SHORT signals and their outcomes`
+    });
+    
+  } catch (e) {
+    console.error('[api/admin/delete-early-ready-short] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
 // SYMBOL TIER API
 // ============================================================================
 
