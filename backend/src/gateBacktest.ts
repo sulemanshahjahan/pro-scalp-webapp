@@ -257,5 +257,15 @@ export function getRecommendedConfigs(): BacktestConfig[] {
       minCombinedScore: 3,
       redTierMinMfe30mPct: 1.00,
     },
+    {
+      name: 'No Early Ready',
+      ...DEFAULT_GATE_CONFIG,
+      allowEarlyReady: false,
+    },
+    {
+      name: 'Allow Early Ready',
+      ...DEFAULT_GATE_CONFIG,
+      allowEarlyReady: true,
+    },
   ];
 }

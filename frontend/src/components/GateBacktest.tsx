@@ -27,6 +27,7 @@ interface GateConfig {
   minCombinedScore: number;
   require15mConfirmation: boolean;
   minMfe15mPct: number;
+  allowEarlyReady: boolean;
   name?: string;
 }
 
@@ -75,6 +76,7 @@ const PRESET_CONFIGS = {
     minCombinedScore: 2,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
+    allowEarlyReady: false,
   },
   strictScore3: {
     name: 'Strict - Score >= 3',
@@ -88,6 +90,7 @@ const PRESET_CONFIGS = {
     minCombinedScore: 3,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
+    allowEarlyReady: false,
   },
   highMfe: {
     name: 'High MFE (0.5%)',
@@ -101,6 +104,7 @@ const PRESET_CONFIGS = {
     minCombinedScore: 2,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
+    allowEarlyReady: false,
   },
   blockRedOnly: {
     name: 'Block RED Only',
@@ -114,6 +118,7 @@ const PRESET_CONFIGS = {
     minCombinedScore: 1,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
+    allowEarlyReady: true,
   },
   aggressive: {
     name: 'Very Aggressive',
@@ -127,6 +132,7 @@ const PRESET_CONFIGS = {
     minCombinedScore: 3,
     require15mConfirmation: true,
     minMfe15mPct: 0.30,
+    allowEarlyReady: false,
   },
 };
 
@@ -255,6 +261,14 @@ export function GateBacktestComparison() {
                 onChange={(e) => setCustomConfig({ ...customConfig, useCombinedScore: e.target.checked })}
               />
               Use Score
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={customConfig.allowEarlyReady}
+                onChange={(e) => setCustomConfig({ ...customConfig, allowEarlyReady: e.target.checked })}
+              />
+              Allow Early Ready
             </label>
             <select
               value={customConfig.minCombinedScore}
@@ -413,6 +427,12 @@ export function GateBacktestComparison() {
                 <div className="rounded bg-white/5 p-2">
                   <div className="text-white/50">Min Score</div>
                   <div className="text-white/80">{results[activeTab].config.minCombinedScore}</div>
+                </div>
+                <div className="rounded bg-white/5 p-2">
+                  <div className="text-white/50">Early Ready</div>
+                  <div className={results[activeTab].config.allowEarlyReady ? 'text-amber-300' : 'text-emerald-300'}>
+                    {results[activeTab].config.allowEarlyReady ? 'ALLOWED' : 'BLOCKED'}
+                  </div>
                 </div>
               </div>
 

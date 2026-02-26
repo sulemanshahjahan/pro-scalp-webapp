@@ -37,6 +37,9 @@ export interface GateConfig {
   require15mConfirmation: boolean;
   minMfe15mPct: number;
   
+  // Signal type filtering
+  allowEarlyReady: boolean;  // If false, blocks EARLY_READY and EARLY_READY_SHORT
+  
   // Target: reduce signals by 40-60%
   targetReductionPct: number;
 }
@@ -52,6 +55,7 @@ export const DEFAULT_GATE_CONFIG: GateConfig = {
   minCombinedScore: 2,      // Need 2+ points to pass
   require15mConfirmation: false, // Optional: wait for 15m proof
   minMfe15mPct: 0.20,       // 0.2% in first 15m
+  allowEarlyReady: false,   // Block EARLY_READY - only allow READY/BEST_ENTRY
   targetReductionPct: 50,   // Aim to cut 50% of signals
 };
 
@@ -67,6 +71,7 @@ export function getGateConfig(): GateConfig {
     minCombinedScore: parseInt(process.env.SIGNAL_GATE_MIN_SCORE || '2', 10),
     require15mConfirmation: (process.env.SIGNAL_GATE_15M || 'false').toLowerCase() === 'true',
     minMfe15mPct: parseFloat(process.env.SIGNAL_GATE_MIN_MFE15M || '0.20'),
+    allowEarlyReady: (process.env.SIGNAL_GATE_ALLOW_EARLY_READY || 'false').toLowerCase() === 'true',
     targetReductionPct: parseInt(process.env.SIGNAL_GATE_TARGET_REDUCTION || '50', 10),
   };
 }
@@ -239,7 +244,23 @@ export async function checkSignalGate(
     };
   }
   
-  // Hard rule 2: Combined score check (confluence)
+  // Hard rule 2: Block EARLY_READY signals (only allow READY/BEST_ENTRY)
+  if (!cfg.allowEarlyReady) {
+    const earlyCategories = ['EARLY_READY', 'EARLY_READY_SHORT'];
+    if (earlyCategories.includes(signal.category.toUpperCase())) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['EARLY_READY_BLOCKED', `${signal.category} not allowed - only READY/BEST_ENTRY signals permitted`],
+        tier,
+        mqs,
+      };
+    }
+  }
+  
+  // Hard rule 3: Combined score check (confluence)
   if (cfg.useCombinedScore && total < cfg.minCombinedScore) {
     if (score.mfe30m === 0) reasons.push(`MFE30m too low: ${(mfe30m * 100).toFixed(2)}% < ${(cfg.minMfe30mPct * 100).toFixed(0)}% required`);
     if (score.mqs === 0) reasons.push(`MQS too low: ${mqs.toFixed(2)} < ${cfg.minMqs} required`);
