@@ -117,6 +117,7 @@ import {
   initDelayedEntry,
   runDelayedEntryWatcher,
   getDelayedEntryConfig,
+  getDelayedEntryStats,
   simulateDelayedEntry,
   type DelayedEntryConfig,
 } from './delayedEntry.js';
@@ -2295,8 +2296,13 @@ async function runScan(preset: Preset) {
           // Record signal first to get ID
           const signalId = await recordSignal(sig as any, preset);
           if (signalId) {
-            // Initialize delayed entry watch
-            await initDelayedEntry({ ...sig, id: signalId });
+            // Initialize delayed entry watch with original TP/SL for recalculation
+            await initDelayedEntry(
+              { ...sig, id: signalId },
+              sig.stop,
+              sig.tp1,
+              sig.tp2
+            );
           }
         } else {
           // Immediate entry (old behavior)
@@ -3969,7 +3975,17 @@ if (SERVER_LOOP_ENABLED) {
         }
       }
       
-      for (const sig of passedSignals) await recordSignal(sig as any, undefined);
+      for (const sig of passedSignals) {
+        const signalId = await recordSignal(sig as any, undefined);
+        if (signalId) {
+          await initDelayedEntry(
+            { ...sig, id: signalId },
+            sig.stop,
+            sig.tp1,
+            sig.tp2
+          );
+        }
+      }
     } catch (e) {
       console.warn('[signals] record failed (loop):', e);
     }
@@ -4012,6 +4028,20 @@ if (delayedConfig.enabled) {
 } else {
   console.log('[delayed-entry] Disabled - immediate entry mode');
 }
+
+// ============================================================================
+// DELAYED ENTRY STATS ENDPOINT
+// ============================================================================
+
+app.get('/api/delayed-entry/stats', async (_req, res) => {
+  try {
+    const stats = await getDelayedEntryStats();
+    res.json({ ok: true, stats });
+  } catch (e) {
+    console.error('[api/delayed-entry/stats] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 // ============================================================================
 // BACKTEST SIMULATION ENDPOINT (Delayed Entry)

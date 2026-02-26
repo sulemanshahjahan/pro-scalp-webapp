@@ -20,10 +20,17 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
         target_confirm_price DOUBLE PRECISION NOT NULL,
         watch_started_at BIGINT NOT NULL,
         watch_expires_at BIGINT NOT NULL,
-        status VARCHAR(20) NOT NULL DEFAULT 'WATCH' CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED')),
+        status VARCHAR(20) NOT NULL DEFAULT 'WATCH' CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED', 'SKIPPED_SPIKE')),
         confirmed_at BIGINT,
         confirmed_price DOUBLE PRECISION,
+        confirmed_stop_price DOUBLE PRECISION,
+        confirmed_tp1_price DOUBLE PRECISION,
+        confirmed_tp2_price DOUBLE PRECISION,
         reason VARCHAR(100),
+        -- Original TP/SL for recalculation
+        original_stop DOUBLE PRECISION,
+        original_tp1 DOUBLE PRECISION,
+        original_tp2 DOUBLE PRECISION,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -38,6 +45,10 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_expires ON delayed_entry_records(watch_expires_at)
     `).run();
     
+    await d.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_delayed_entry_symbol ON delayed_entry_records(symbol)
+    `).run();
+    
   } else {
     // SQLite
     await d.prepare(`
@@ -50,10 +61,16 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
         target_confirm_price REAL NOT NULL,
         watch_started_at INTEGER NOT NULL,
         watch_expires_at INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'WATCH' CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED')),
+        status TEXT NOT NULL DEFAULT 'WATCH' CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED', 'SKIPPED_SPIKE')),
         confirmed_at INTEGER,
         confirmed_price REAL,
+        confirmed_stop_price REAL,
+        confirmed_tp1_price REAL,
+        confirmed_tp2_price REAL,
         reason TEXT,
+        original_stop REAL,
+        original_tp1 REAL,
+        original_tp2 REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -65,6 +82,10 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_expires ON delayed_entry_records(watch_expires_at)
+    `).run();
+    
+    await d.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_delayed_entry_symbol ON delayed_entry_records(symbol)
     `).run();
   }
   

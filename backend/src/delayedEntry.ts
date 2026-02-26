@@ -1,5 +1,5 @@
 /**
- * Delayed Entry System - Confirmation-Based Trading
+ * Delayed Entry System - Confirmation-Based Trading (Production Ready)
  * 
  * Instead of entering immediately when signal appears, we:
  * 1. Mark signal as WATCH
@@ -7,11 +7,11 @@
  * 3. Only THEN enter the trade
  * 4. If no confirmation within maxWaitMinutes, expire the signal
  * 
- * This solves the "MFE30m = 0" problem - we only enter after movement is proven.
+ * This solves the "MFE30m = 0" problem - we only enter AFTER movement is proven.
  */
 
 import { getDb } from './db/db.js';
-import { klines, klinesRange } from './binance.js';
+import { klinesRange } from './binance.js';
 import type { Signal } from './types.js';
 
 // ============================================================================
@@ -20,18 +20,20 @@ import type { Signal } from './types.js';
 
 export interface DelayedEntryConfig {
   enabled: boolean;
-  confirmMovePct: number;      // % move required to confirm (e.g., 0.3 = 0.3%)
-  maxWaitMinutes: number;      // How long to wait for confirmation
-  pollIntervalSeconds: number; // How often to check price
-  maxSpreadPct: number;        // Max spread to allow entry (optional)
+  confirmMovePct: number;        // % move required to confirm (e.g., 0.3 = 0.3%)
+  maxWaitMinutes: number;        // How long to wait for confirmation
+  pollIntervalSeconds: number;   // How often to check price
+  maxExtraMovePct: number;       // Spike protection - skip if moved beyond this
+  maxSpreadPct: number;          // Max spread to allow entry
 }
 
 export const DEFAULT_DELAYED_ENTRY_CONFIG: DelayedEntryConfig = {
   enabled: true,
-  confirmMovePct: 0.30,        // 0.3% move required
-  maxWaitMinutes: 45,          // Wait up to 45 minutes
-  pollIntervalSeconds: 30,     // Check every 30 seconds
-  maxSpreadPct: 0.15,          // 0.15% max spread
+  confirmMovePct: 0.30,          // 0.3% move required
+  maxWaitMinutes: 45,            // Wait up to 45 minutes
+  pollIntervalSeconds: 30,       // Check every 30 seconds
+  maxExtraMovePct: 0.10,         // Skip if moved > 0.4% (0.3 + 0.1)
+  maxSpreadPct: 0.15,            // 0.15% max spread
 };
 
 export function getDelayedEntryConfig(): DelayedEntryConfig {
@@ -40,6 +42,7 @@ export function getDelayedEntryConfig(): DelayedEntryConfig {
     confirmMovePct: parseFloat(process.env.DELAYED_ENTRY_CONFIRM_MOVE_PCT || '0.30'),
     maxWaitMinutes: parseInt(process.env.DELAYED_ENTRY_MAX_WAIT_MINUTES || '45', 10),
     pollIntervalSeconds: parseInt(process.env.DELAYED_ENTRY_POLL_SECONDS || '30', 10),
+    maxExtraMovePct: parseFloat(process.env.DELAYED_ENTRY_MAX_EXTRA_MOVE_PCT || '0.10'),
     maxSpreadPct: parseFloat(process.env.DELAYED_ENTRY_MAX_SPREAD_PCT || '0.15'),
   };
 }
@@ -52,7 +55,8 @@ export type DelayedEntryStatus =
   | 'WATCH'              // Signal created, waiting for confirmation
   | 'ENTERED'            // Confirmed and entered
   | 'EXPIRED_NO_ENTRY'   // Never confirmed within window
-  | 'CANCELLED';         // Cancelled for other reasons
+  | 'CANCELLED'          // Cancelled for other reasons
+  | 'SKIPPED_SPIKE';     // Moved too far (spike protection)
 
 export interface DelayedEntryRecord {
   signalId: number;
@@ -65,7 +69,21 @@ export interface DelayedEntryRecord {
   status: DelayedEntryStatus;
   confirmedAt?: number;        // When confirmed (if entered)
   confirmedPrice?: number;     // Price at confirmation (if entered)
-  reason?: string;             // Why expired/cancelled
+  reason?: string;             // Why expired/cancelled/skipped
+  
+  // Recalculated TP/SL from confirmed entry
+  confirmedStopPrice?: number;
+  confirmedTp1Price?: number;
+  confirmedTp2Price?: number;
+}
+
+export interface DelayedEntryStats {
+  watchCreated: number;
+  entered: number;
+  expired: number;
+  skippedSpike: number;
+  confirmRate: number;         // entered / watchCreated
+  avgMoveToConfirm?: number;   // Average % move when confirmed
 }
 
 // ============================================================================
@@ -78,6 +96,9 @@ export interface DelayedEntryRecord {
  */
 export async function initDelayedEntry(
   signal: Signal & { id?: number },
+  originalStop: number | null,
+  originalTp1: number | null,
+  originalTp2: number | null,
   config?: Partial<DelayedEntryConfig>
 ): Promise<{ shouldProceed: boolean; record?: DelayedEntryRecord }> {
   const cfg = { ...getDelayedEntryConfig(), ...config };
@@ -109,8 +130,15 @@ export async function initDelayedEntry(
     status: 'WATCH',
   };
   
+  // Store original TP/SL for later recalculation
+  if (originalStop) {
+    (record as any).originalStop = originalStop;
+    (record as any).originalTp1 = originalTp1;
+    (record as any).originalTp2 = originalTp2;
+  }
+  
   // Store in database
-  await storeDelayedEntryRecord(record);
+  await storeDelayedEntryRecord(record, originalStop, originalTp1, originalTp2);
   
   console.log(`[delayed-entry] WATCH: ${signal.symbol} ${signal.category} - waiting for ${direction === 'LONG' ? '+' : '-'}${cfg.confirmMovePct}% move (target: ${targetConfirmPrice.toFixed(4)})`);
   
@@ -125,7 +153,7 @@ export async function checkDelayedEntryConfirmation(
   record: DelayedEntryRecord,
   currentPrice: number,
   config?: Partial<DelayedEntryConfig>
-): Promise<{ confirmed: boolean; reason?: string }> {
+): Promise<{ confirmed: boolean; skipped?: boolean; reason?: string }> {
   const cfg = { ...getDelayedEntryConfig(), ...config };
   const now = Date.now();
   
@@ -140,13 +168,29 @@ export async function checkDelayedEntryConfirmation(
     ? currentPrice >= record.targetConfirmPrice
     : currentPrice <= record.targetConfirmPrice;
   
-  if (confirmed) {
-    await updateDelayedEntryStatus(record.signalId, 'ENTERED', undefined, now, currentPrice);
-    console.log(`[delayed-entry] ENTERED: ${record.symbol} at ${currentPrice.toFixed(4)} (moved ${calculateMovePct(record.referencePrice, currentPrice, record.direction).toFixed(2)}%)`);
-    return { confirmed: true };
+  if (!confirmed) {
+    return { confirmed: false };
   }
   
-  return { confirmed: false };
+  // CONFIRMED - Now apply spike protection
+  const actualMovePct = Math.abs((currentPrice - record.referencePrice) / record.referencePrice) * 100;
+  const maxAllowedMove = cfg.confirmMovePct + cfg.maxExtraMovePct;
+  
+  if (actualMovePct > maxAllowedMove) {
+    // Spike too big - skip this entry
+    await updateDelayedEntryStatus(
+      record.signalId, 
+      'SKIPPED_SPIKE', 
+      `MOVE_TOO_LARGE: ${actualMovePct.toFixed(2)}% > ${maxAllowedMove.toFixed(2)}% allowed`
+    );
+    console.log(`[delayed-entry] SKIPPED_SPIKE: ${record.symbol} moved ${actualMovePct.toFixed(2)}% (max ${maxAllowedMove}%)`);
+    return { confirmed: false, skipped: true, reason: 'SPIKE_TOO_LARGE' };
+  }
+  
+  // PASSED all checks - Enter
+  await updateDelayedEntryStatus(record.signalId, 'ENTERED', undefined, now, currentPrice);
+  console.log(`[delayed-entry] ENTERED: ${record.symbol} at ${currentPrice.toFixed(4)} (moved ${actualMovePct.toFixed(2)}%)`);
+  return { confirmed: true };
 }
 
 /**
@@ -167,26 +211,36 @@ export async function getActiveWatches(limit: number = 200): Promise<DelayedEntr
       status,
       confirmed_at as confirmedAt,
       confirmed_price as confirmedPrice,
-      reason
+      reason,
+      original_stop as originalStop,
+      original_tp1 as originalTp1,
+      original_tp2 as originalTp2
     FROM delayed_entry_records
     WHERE status = 'WATCH'
     ORDER BY watch_started_at ASC
     LIMIT @limit
   `).all({ limit }) as any[];
   
-  return rows.map(row => ({
-    signalId: Number(row.signalId),
-    symbol: String(row.symbol),
-    direction: String(row.direction) as 'LONG' | 'SHORT',
-    referencePrice: Number(row.referencePrice),
-    targetConfirmPrice: Number(row.targetConfirmPrice),
-    watchStartedAt: Number(row.watchStartedAt),
-    watchExpiresAt: Number(row.watchExpiresAt),
-    status: String(row.status) as DelayedEntryStatus,
-    confirmedAt: row.confirmedAt ? Number(row.confirmedAt) : undefined,
-    confirmedPrice: row.confirmedPrice ? Number(row.confirmedPrice) : undefined,
-    reason: row.reason ? String(row.reason) : undefined,
-  }));
+  return rows.map(row => {
+    const record: DelayedEntryRecord = {
+      signalId: Number(row.signalId),
+      symbol: String(row.symbol),
+      direction: String(row.direction) as 'LONG' | 'SHORT',
+      referencePrice: Number(row.referencePrice),
+      targetConfirmPrice: Number(row.targetConfirmPrice),
+      watchStartedAt: Number(row.watchStartedAt),
+      watchExpiresAt: Number(row.watchExpiresAt),
+      status: String(row.status) as DelayedEntryStatus,
+      confirmedAt: row.confirmedAt ? Number(row.confirmedAt) : undefined,
+      confirmedPrice: row.confirmedPrice ? Number(row.confirmedPrice) : undefined,
+      reason: row.reason ? String(row.reason) : undefined,
+    };
+    // Store original TP/SL for recalculation
+    (record as any).originalStop = row.originalStop ? Number(row.originalStop) : null;
+    (record as any).originalTp1 = row.originalTp1 ? Number(row.originalTp1) : null;
+    (record as any).originalTp2 = row.originalTp2 ? Number(row.originalTp2) : null;
+    return record;
+  });
 }
 
 /**
@@ -196,20 +250,22 @@ export async function runDelayedEntryWatcher(): Promise<{
   checked: number;
   entered: number;
   expired: number;
+  skipped: number;
 }> {
   const cfg = getDelayedEntryConfig();
   
   if (!cfg.enabled) {
-    return { checked: 0, entered: 0, expired: 0 };
+    return { checked: 0, entered: 0, expired: 0, skipped: 0 };
   }
   
   const watches = await getActiveWatches();
   let entered = 0;
   let expired = 0;
+  let skipped = 0;
   
   for (const watch of watches) {
     try {
-      // Get current price (use latest 1m candle close)
+      // Get current price (use latest 1m candle)
       const now = Date.now();
       const candles = await klinesRange(watch.symbol, '1m', now - 60000, now, 1);
       if (!candles || candles.length === 0) continue;
@@ -219,9 +275,11 @@ export async function runDelayedEntryWatcher(): Promise<{
       const result = await checkDelayedEntryConfirmation(watch, currentPrice);
       
       if (result.confirmed) {
-        // Trigger actual entry - create/update outcomes
+        // Trigger actual entry with recalculated TP/SL
         await executeDelayedEntry(watch, currentPrice);
         entered++;
+      } else if (result.skipped) {
+        skipped++;
       } else if (result.reason === 'EXPIRED') {
         expired++;
       }
@@ -231,28 +289,34 @@ export async function runDelayedEntryWatcher(): Promise<{
   }
   
   if (watches.length > 0) {
-    console.log(`[delayed-entry] Watcher: checked ${watches.length}, entered ${entered}, expired ${expired}`);
+    console.log(`[delayed-entry] Watcher: checked ${watches.length}, entered ${entered}, expired ${expired}, skipped ${skipped}`);
   }
   
-  return { checked: watches.length, entered, expired };
+  return { checked: watches.length, entered, expired, skipped };
 }
 
 // ============================================================================
 // DATABASE FUNCTIONS
 // ============================================================================
 
-async function storeDelayedEntryRecord(record: DelayedEntryRecord): Promise<void> {
+async function storeDelayedEntryRecord(
+  record: DelayedEntryRecord,
+  originalStop?: number | null,
+  originalTp1?: number | null,
+  originalTp2?: number | null
+): Promise<void> {
   const d = getDb();
   
   await d.prepare(`
     INSERT INTO delayed_entry_records (
       signal_id, symbol, direction, reference_price, target_confirm_price,
-      watch_started_at, watch_expires_at, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      watch_started_at, watch_expires_at, status, original_stop, original_tp1, original_tp2
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(signal_id) DO UPDATE SET
       status = excluded.status,
       watch_started_at = excluded.watch_started_at,
-      watch_expires_at = excluded.watch_expires_at
+      watch_expires_at = excluded.watch_expires_at,
+      target_confirm_price = excluded.target_confirm_price
   `).run(
     record.signalId,
     record.symbol,
@@ -261,7 +325,10 @@ async function storeDelayedEntryRecord(record: DelayedEntryRecord): Promise<void
     record.targetConfirmPrice,
     record.watchStartedAt,
     record.watchExpiresAt,
-    record.status
+    record.status,
+    originalStop ?? null,
+    originalTp1 ?? null,
+    originalTp2 ?? null
   );
 }
 
@@ -274,61 +341,162 @@ async function updateDelayedEntryStatus(
 ): Promise<void> {
   const d = getDb();
   
-  await d.prepare(`
+  // Atomic update - only change if still WATCH (prevents double-entry)
+  const result = await d.prepare(`
     UPDATE delayed_entry_records
     SET status = ?, reason = ?, confirmed_at = ?, confirmed_price = ?
-    WHERE signal_id = ?
+    WHERE signal_id = ? AND status = 'WATCH'
   `).run(status, reason || null, confirmedAt || null, confirmedPrice || null, signalId);
+  
+  if (result.changes === 0) {
+    console.log(`[delayed-entry] Signal ${signalId} already processed (not in WATCH state)`);
+  }
 }
 
 // ============================================================================
-// EXECUTION
+// EXECUTION WITH RECALCULATED TP/SL
 // ============================================================================
 
 async function executeDelayedEntry(
   record: DelayedEntryRecord,
   entryPrice: number
 ): Promise<void> {
-  // Create extended outcome with the CONFIRMED entry price
   const d = getDb();
   
+  // Get original TP/SL from the record
+  const originalStop = (record as any).originalStop as number | null;
+  const originalTp1 = (record as any).originalTp1 as number | null;
+  const originalTp2 = (record as any).originalTp2 as number | null;
+  
+  // Recalculate TP/SL maintaining the same distance percentages
+  const recalculated = recalculateTpSl(
+    entryPrice,
+    record.referencePrice,
+    originalStop,
+    originalTp1,
+    originalTp2,
+    record.direction
+  );
+  
+  // Update delayed entry record with confirmed prices
+  await d.prepare(`
+    UPDATE delayed_entry_records
+    SET confirmed_stop_price = ?, confirmed_tp1_price = ?, confirmed_tp2_price = ?
+    WHERE signal_id = ?
+  `).run(
+    recalculated.stop ?? null,
+    recalculated.tp1 ?? null,
+    recalculated.tp2 ?? null,
+    record.signalId
+  );
+  
+  // Create extended outcome with the CONFIRMED entry price and recalculated TP/SL
   await d.prepare(`
     INSERT INTO extended_outcomes (
       signal_id, symbol, direction, signal_time, started_at, entry_price,
       stop_price, tp1_price, tp2_price, status, risk_usd_snapshot
     )
     SELECT 
-      s.id, s.symbol, ?, s.time, ?, ?, s.stop, s.tp1, s.tp2, 'ACTIVE', 15
+      s.id, s.symbol, ?, s.time, ?, ?, ?, ?, ?, 'ACTIVE', 15
     FROM signals s
     WHERE s.id = ?
     ON CONFLICT(signal_id) DO UPDATE SET
       started_at = excluded.started_at,
       entry_price = excluded.entry_price,
+      stop_price = excluded.stop_price,
+      tp1_price = excluded.tp1_price,
+      tp2_price = excluded.tp2_price,
       status = 'ACTIVE'
   `).run(
     record.direction,
     Date.now(),
     entryPrice,
+    recalculated.stop,
+    recalculated.tp1,
+    recalculated.tp2,
     record.signalId
   );
   
   console.log(`[delayed-entry] Executed entry for signal ${record.signalId} at ${entryPrice.toFixed(4)}`);
+  if (recalculated.tp1) {
+    console.log(`[delayed-entry] Recalculated: Stop=${recalculated.stop?.toFixed(4)}, TP1=${recalculated.tp1?.toFixed(4)}, TP2=${recalculated.tp2?.toFixed(4)}`);
+  }
 }
 
 // ============================================================================
-// HELPERS
+// TP/SL RECALCULATION (Option B)
 // ============================================================================
 
-function getDirectionFromCategory(category: string): 'LONG' | 'SHORT' {
-  const shortCategories = ['READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT'];
-  return shortCategories.includes(category.toUpperCase()) ? 'SHORT' : 'LONG';
+function recalculateTpSl(
+  confirmedEntry: number,
+  originalEntry: number,
+  originalStop: number | null,
+  originalTp1: number | null,
+  originalTp2: number | null,
+  direction: 'LONG' | 'SHORT'
+): { stop: number | null; tp1: number | null; tp2: number | null } {
+  if (!originalStop) {
+    return { stop: null, tp1: null, tp2: null };
+  }
+  
+  // Calculate percentage distances from original entry
+  const stopDistancePct = Math.abs((originalStop - originalEntry) / originalEntry);
+  const tp1DistancePct = originalTp1 ? Math.abs((originalTp1 - originalEntry) / originalEntry) : null;
+  const tp2DistancePct = originalTp2 ? Math.abs((originalTp2 - originalEntry) / originalEntry) : null;
+  
+  // Apply same distances to confirmed entry
+  const stop = direction === 'LONG'
+    ? confirmedEntry * (1 - stopDistancePct)
+    : confirmedEntry * (1 + stopDistancePct);
+  
+  const tp1 = tp1DistancePct
+    ? (direction === 'LONG'
+        ? confirmedEntry * (1 + tp1DistancePct)
+        : confirmedEntry * (1 - tp1DistancePct))
+    : null;
+  
+  const tp2 = tp2DistancePct
+    ? (direction === 'LONG'
+        ? confirmedEntry * (1 + tp2DistancePct)
+        : confirmedEntry * (1 - tp2DistancePct))
+    : null;
+  
+  return { stop, tp1, tp2 };
 }
 
-function calculateMovePct(reference: number, current: number, direction: 'LONG' | 'SHORT'): number {
-  const move = direction === 'LONG'
-    ? (current - reference) / reference
-    : (reference - current) / reference;
-  return move * 100;
+// ============================================================================
+// STATS & METRICS
+// ============================================================================
+
+export async function getDelayedEntryStats(): Promise<DelayedEntryStats> {
+  const d = getDb();
+  
+  const result = await d.prepare(`
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'WATCH' THEN 1 ELSE 0 END) as watching,
+      SUM(CASE WHEN status = 'ENTERED' THEN 1 ELSE 0 END) as entered,
+      SUM(CASE WHEN status = 'EXPIRED_NO_ENTRY' THEN 1 ELSE 0 END) as expired,
+      SUM(CASE WHEN status = 'SKIPPED_SPIKE' THEN 1 ELSE 0 END) as skipped,
+      AVG(CASE WHEN status = 'ENTERED' THEN 
+        ABS((confirmed_price - reference_price) / reference_price) * 100 
+      END) as avgMovePct
+    FROM delayed_entry_records
+  `).get() as any;
+  
+  const watchCreated = Number(result.total || 0);
+  const entered = Number(result.entered || 0);
+  const expired = Number(result.expired || 0);
+  const skipped = Number(result.skipped || 0);
+  
+  return {
+    watchCreated,
+    entered,
+    expired,
+    skippedSpike: skipped,
+    confirmRate: watchCreated > 0 ? entered / watchCreated : 0,
+    avgMoveToConfirm: result.avgMovePct ? Number(result.avgMovePct) : undefined,
+  };
 }
 
 // ============================================================================
@@ -348,7 +516,7 @@ export async function simulateDelayedEntry(
   entryPrice?: number;
   entryTime?: number;
   movePct?: number;
-  reason: 'CONFIRMED' | 'EXPIRED' | 'NO_CANDLES';
+  reason: 'CONFIRMED' | 'EXPIRED' | 'SKIPPED_SPIKE' | 'NO_CANDLES';
 }> {
   const cfg = { ...DEFAULT_DELAYED_ENTRY_CONFIG, ...config };
   const direction = getDirectionFromCategory(signal.category);
@@ -356,6 +524,7 @@ export async function simulateDelayedEntry(
   const signalTime = signal.time;
   const maxWaitTime = signalTime + (cfg.maxWaitMinutes * 60 * 1000);
   const targetMove = cfg.confirmMovePct / 100;
+  const maxMove = (cfg.confirmMovePct + cfg.maxExtraMovePct) / 100;
   
   // Filter candles within the watch window
   const relevantCandles = candles.filter(c => c.time >= signalTime && c.time <= maxWaitTime);
@@ -371,12 +540,31 @@ export async function simulateDelayedEntry(
       ? signal.price * (1 + targetMove)
       : signal.price * (1 - targetMove);
     
+    const maxPrice = direction === 'LONG'
+      ? signal.price * (1 + maxMove)
+      : signal.price * (1 - maxMove);
+    
+    // Check if moved too far (spike protection)
+    const tooFar = direction === 'LONG'
+      ? candle.high > maxPrice
+      : candle.low < maxPrice;
+    
+    if (tooFar) {
+      return { 
+        wouldEnter: false, 
+        reason: 'SKIPPED_SPIKE',
+        entryTime: candle.time,
+        movePct: Math.abs((candle.close - signal.price) / signal.price) * 100
+      };
+    }
+    
+    // Check if confirmed
     const hit = direction === 'LONG'
       ? candle.high >= confirmPrice
       : candle.low <= confirmPrice;
     
     if (hit) {
-      const entryPrice = confirmPrice; // Enter at confirmation level
+      const entryPrice = confirmPrice;
       const movePct = Math.abs((entryPrice - signal.price) / signal.price) * 100;
       
       return {
@@ -391,4 +579,13 @@ export async function simulateDelayedEntry(
   
   // Never confirmed within window
   return { wouldEnter: false, reason: 'EXPIRED' };
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+function getDirectionFromCategory(category: string): 'LONG' | 'SHORT' {
+  const shortCategories = ['READY_TO_SELL', 'BEST_SHORT_ENTRY', 'EARLY_READY_SHORT'];
+  return shortCategories.includes(category.toUpperCase()) ? 'SHORT' : 'LONG';
 }
