@@ -27,14 +27,15 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
         confirmed_tp1_price DOUBLE PRECISION,
         confirmed_tp2_price DOUBLE PRECISION,
         reason VARCHAR(100),
-        -- Original TP/SL for recalculation
-        original_stop DOUBLE PRECISION,
-        original_tp1 DOUBLE PRECISION,
-        original_tp2 DOUBLE PRECISION,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    
+    // Add columns if they don't exist (migration for existing tables)
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'original_stop', 'DOUBLE PRECISION');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'original_tp1', 'DOUBLE PRECISION');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'original_tp2', 'DOUBLE PRECISION');
     
     // Index for efficient WATCH queries
     await d.prepare(`
@@ -68,13 +69,15 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
         confirmed_tp1_price REAL,
         confirmed_tp2_price REAL,
         reason TEXT,
-        original_stop REAL,
-        original_tp1 REAL,
-        original_tp2 REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `).run();
+    
+    // Add columns if they don't exist (SQLite)
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_stop', 'REAL');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_tp1', 'REAL');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_tp2', 'REAL');
     
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)
@@ -90,4 +93,41 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
   }
   
   console.log('[delayed-entry] Schema ensured');
+}
+
+// PostgreSQL: Add column if not exists
+async function addColumnIfNotExists(
+  d: any,
+  table: string,
+  column: string,
+  type: string
+): Promise<void> {
+  try {
+    await d.prepare(`
+      ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}
+    `).run();
+  } catch (e) {
+    console.log(`[schema] Column ${column} may already exist:`, e);
+  }
+}
+
+// SQLite: Add column if not exists (SQLite doesn't support IF NOT EXISTS for columns)
+async function addColumnIfNotExistsSQLite(
+  d: any,
+  table: string,
+  column: string,
+  type: string
+): Promise<void> {
+  try {
+    // Check if column exists
+    const info = await d.prepare(`PRAGMA table_info(${table})`).all();
+    const exists = info.some((col: any) => col.name === column);
+    
+    if (!exists) {
+      await d.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+      console.log(`[schema] Added column ${column} to ${table}`);
+    }
+  } catch (e) {
+    console.log(`[schema] Column ${column} may already exist:`, e);
+  }
 }
