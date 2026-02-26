@@ -4431,9 +4431,9 @@ app.get('/api/debug/why-no-signals', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
   
-  // Recent scan runs
+  // Recent scan runs - use portable columns
   const scans = await d.prepare(`
-    SELECT run_id, started_at, finished_at, status, signals_by_category
+    SELECT run_id, started_at, finished_at, status
     FROM scan_runs
     ORDER BY started_at DESC
     LIMIT 3
@@ -4447,7 +4447,7 @@ app.get('/api/debug/why-no-signals', async (req, res) => {
     LIMIT 5
   `).all();
   
-  // Count by hour
+  // Count
   const counts = await d.prepare(`
     SELECT COUNT(*) as total,
            MAX(created_at) as latest
