@@ -3692,16 +3692,28 @@ app.post('/api/admin/delete-early-ready-short', async (req, res) => {
       });
     }
     
-    // Actually delete - delete outcomes first (foreign key constraints)
+    // Get IDs first to avoid subquery issues
+    const idRows = await d.prepare(`
+      SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT'
+    `).all() as Array<{ id: number }>;
+    
+    const ids = idRows.map(r => r.id);
+    
+    if (ids.length === 0) {
+      return res.json({ ok: true, message: 'No EARLY_READY_SHORT signals found', deleted: 0 });
+    }
+    
+    // Build placeholders for IN clause
+    const placeholders = ids.map(() => '?').join(',');
+    
+    // Delete outcomes first (foreign key constraints)
     const outcomesDeleted = await d.prepare(`
-      DELETE FROM outcomes 
-      WHERE signal_id IN (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
-    `).run();
+      DELETE FROM outcomes WHERE signal_id IN (${placeholders})
+    `).run(...ids);
     
     const extendedOutcomesDeleted = await d.prepare(`
-      DELETE FROM extended_outcomes 
-      WHERE signal_id IN (SELECT id FROM signals WHERE category = 'EARLY_READY_SHORT')
-    `).run();
+      DELETE FROM extended_outcomes WHERE signal_id IN (${placeholders})
+    `).run(...ids);
     
     const signalsDeleted = await d.prepare(`
       DELETE FROM signals WHERE category = 'EARLY_READY_SHORT'
@@ -3717,9 +3729,13 @@ app.post('/api/admin/delete-early-ready-short', async (req, res) => {
       message: `Deleted ${signalsDeleted.changes} EARLY_READY_SHORT signals and their outcomes`
     });
     
-  } catch (e) {
+  } catch (e: any) {
     console.error('[api/admin/delete-early-ready-short] Error:', e);
-    res.status(500).json({ ok: false, error: String(e) });
+    res.status(500).json({ 
+      ok: false, 
+      error: String(e),
+      details: e?.message 
+    });
   }
 });
 
