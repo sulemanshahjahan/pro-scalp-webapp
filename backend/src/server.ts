@@ -4088,4 +4088,73 @@ app.post('/api/delayed-entry/simulate', async (req, res) => {
   }
 });
 
+// ============================================================================
+// DELAYED ENTRY VALIDATION ENDPOINT (200/100/50 test)
+// ============================================================================
+
+app.post('/api/delayed-entry/validate', async (req, res) => {
+  try {
+    const confirmMovePct = Number(req.body.confirmMovePct ?? 0.30);
+    const windowSizes = req.body.windowSizes || [200, 100, 50];
+    const maxWaitMinutes = Number(req.body.maxWaitMinutes ?? 45);
+    
+    if (!Number.isFinite(confirmMovePct) || confirmMovePct <= 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid confirmMovePct' });
+    }
+    
+    console.log(`[api/delayed-entry/validate] Testing confirmMovePct=${confirmMovePct} on windows: ${windowSizes.join(',')}`);
+    
+    const { validateDelayedEntry } = await import('./delayedEntryValidation.js');
+    const results = await validateDelayedEntry(confirmMovePct, windowSizes, maxWaitMinutes);
+    
+    res.json({ 
+      ok: true, 
+      results,
+      summary: {
+        confirmMovePct,
+        windows: results.map(r => ({
+          size: r.windowSize,
+          confirmRate: r.confirmRate,
+          winRate: r.winRate,
+          rPer100: r.rPer100Signals,
+          improvement: r.improvementPct,
+        })),
+      }
+    });
+  } catch (e) {
+    console.error('[api/delayed-entry/validate] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ============================================================================
+// DELAYED ENTRY COMPARE THRESHOLDS (Find optimal confirmMovePct)
+// ============================================================================
+
+app.post('/api/delayed-entry/compare', async (req, res) => {
+  try {
+    const thresholds = req.body.thresholds || [0.20, 0.25, 0.30, 0.35, 0.40];
+    const windowSize = Number(req.body.windowSize ?? 200);
+    
+    console.log(`[api/delayed-entry/compare] Comparing thresholds: ${thresholds.join(',')}`);
+    
+    const { compareConfirmThresholds } = await import('./delayedEntryValidation.js');
+    const comparisons = await compareConfirmThresholds(thresholds, windowSize);
+    
+    res.json({ 
+      ok: true, 
+      comparisons,
+      best: comparisons[0], // Highest score
+      recommendation: `
+        Best threshold: ${comparisons[0]?.threshold}%
+        R per 100 signals: ${comparisons[0]?.results[0]?.rPer100Signals.toFixed(2)}
+        Confirm rate: ${(comparisons[0]?.results[0]?.confirmRate * 100).toFixed(1)}%
+      `.trim()
+    });
+  } catch (e) {
+    console.error('[api/delayed-entry/compare] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 export { app };
