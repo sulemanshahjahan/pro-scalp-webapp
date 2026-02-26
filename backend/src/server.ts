@@ -2306,53 +2306,56 @@ async function runScan(preset: Preset) {
     }
     
     lastByPreset.set(preset, { signals: passedSignals, at });
+    
+    // DEBUG: Log what we're about to record
+    console.log(`[DEBUG] Recording ${out.length} signals (${blockedCount} blocked, ${passedSignals.length} passed)`);
+    
     try {
       // Record ALL signals (both blocked and passed)
-      // Blocked signals get marked with blockedReasons so they appear in DB but don't trade
-      const allSignals = out; // Original scanner output
+      const allSignals = out;
+      let recorded = 0;
+      let failed = 0;
       
       for (const sig of allSignals) {
         const isBlocked = blockedMap.has(sig.symbol);
         const blockedReasons = blockedMap.get(sig.symbol) ?? [];
         
-        // Add gate metadata to signal
         const sigWithGateInfo = {
           ...sig,
           blockedReasons: blockedReasons.length > 0 ? blockedReasons : undefined,
           firstFailedGate: blockedReasons[0] ?? null,
-          gateBlocked: isBlocked, // Flag for easy filtering
+          gateBlocked: isBlocked,
         };
         
-        // Check delayed entry
-        const delayedConfig = getDelayedEntryConfig();
+        console.log(`[DEBUG] Recording ${sig.symbol} ${sig.category} (blocked: ${isBlocked})...`);
         
-        if (delayedConfig.enabled) {
-          // Record signal to get ID
+        try {
           const signalId = await recordSignal(sigWithGateInfo as any, preset);
           
           if (signalId) {
-            // Only initialize delayed entry for PASSED signals (not blocked)
-            if (!isBlocked) {
+            recorded++;
+            console.log(`[DEBUG] Recorded ${sig.symbol} with ID ${signalId}`);
+            
+            const delayedConfig = getDelayedEntryConfig();
+            if (delayedConfig.enabled && !isBlocked) {
               await initDelayedEntry(
                 { ...sig, id: signalId },
                 sig.stop,
                 sig.tp1,
                 sig.tp2
               );
-            } else {
-              console.log(`[signal-gate] Recorded but NOT watching (blocked): ${sig.symbol}`);
             }
-          }
-        } else {
-          // Immediate entry (old behavior) - only for passed signals
-          if (!isBlocked) {
-            await recordSignal(sigWithGateInfo as any, preset);
           } else {
-            // Still record blocked for visibility
-            await recordSignal(sigWithGateInfo as any, preset);
+            console.log(`[DEBUG] recordSignal returned null for ${sig.symbol}`);
+            failed++;
           }
+        } catch (recordErr) {
+          console.error(`[DEBUG] FAILED to record ${sig.symbol}:`, recordErr);
+          failed++;
         }
       }
+      
+      console.log(`[DEBUG] Recording complete: ${recorded} success, ${failed} failed, ${allSignals.length} total`);
     } catch (e) {
       console.warn('[signals] record failed:', e);
     }
