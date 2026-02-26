@@ -19,15 +19,15 @@ import { apiUrl as API } from '../config/apiBase';
 interface GateConfig {
   enabled: boolean;
   blockRedTier: boolean;
-  minMfe30mPct: number;
-  yellowMinMfe30mPct: number;
-  redMinMfe30mPct: number;
+  minMfe30mPct: number;        // Default MFE for all tiers
+  redTierMinMfe30mPct: number; // Special MFE for RED tier only
   minMqs: number;
   useCombinedScore: boolean;
   minCombinedScore: number;
   require15mConfirmation: boolean;
   minMfe15mPct: number;
   allowEarlyReady: boolean;
+  targetReductionPct?: number;
   name?: string;
 }
 
@@ -69,70 +69,70 @@ const PRESETS: Record<string, GateConfig> = {
     enabled: true,
     blockRedTier: true,
     minMfe30mPct: 0.30,
-    yellowMinMfe30mPct: 0.50,
-    redMinMfe30mPct: 0.50,
+    redTierMinMfe30mPct: 0.50,
     minMqs: 0.20,
     useCombinedScore: true,
     minCombinedScore: 2,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
     allowEarlyReady: false,
+    targetReductionPct: 50,
   },
   strictScore3: {
     name: 'Strict - Score >= 3',
     enabled: true,
     blockRedTier: true,
     minMfe30mPct: 0.30,
-    yellowMinMfe30mPct: 0.50,
-    redMinMfe30mPct: 0.50,
+    redTierMinMfe30mPct: 0.50,
     minMqs: 0.20,
     useCombinedScore: true,
     minCombinedScore: 3,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
     allowEarlyReady: false,
+    targetReductionPct: 50,
   },
   highMfe: {
     name: 'High MFE (0.5%)',
     enabled: true,
     blockRedTier: true,
     minMfe30mPct: 0.50,
-    yellowMinMfe30mPct: 0.70,
-    redMinMfe30mPct: 0.90,
+    redTierMinMfe30mPct: 0.90,
     minMqs: 0.30,
     useCombinedScore: true,
     minCombinedScore: 2,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
     allowEarlyReady: false,
+    targetReductionPct: 50,
   },
   blockRedOnly: {
     name: 'Block RED Only',
     enabled: true,
     blockRedTier: true,
     minMfe30mPct: 0.20,
-    yellowMinMfe30mPct: 0.30,
-    redMinMfe30mPct: 0.40,
+    redTierMinMfe30mPct: 0.40,
     minMqs: 0.10,
     useCombinedScore: false,
     minCombinedScore: 1,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
     allowEarlyReady: true,
+    targetReductionPct: 50,
   },
   aggressive: {
     name: 'Very Aggressive',
     enabled: true,
     blockRedTier: true,
     minMfe30mPct: 0.60,
-    yellowMinMfe30mPct: 0.80,
-    redMinMfe30mPct: 1.00,
+    redTierMinMfe30mPct: 1.00,
     minMqs: 0.40,
     useCombinedScore: true,
     minCombinedScore: 3,
     require15mConfirmation: true,
     minMfe15mPct: 0.30,
     allowEarlyReady: false,
+    targetReductionPct: 50,
   },
 };
 
@@ -154,15 +154,15 @@ export function GateBacktestComparison() {
     name: 'Custom',
     enabled: true,
     blockRedTier: true,
-    minMfe30mPct: 0.30,
-    yellowMinMfe30mPct: 0.50,
-    redMinMfe30mPct: 0.50,
+    minMfe30mPct: 0.30,        // Default MFE for YELLOW/GREEN tiers
+    redTierMinMfe30mPct: 0.50, // Higher MFE required for RED tier
     minMqs: 0.20,
     useCombinedScore: true,
     minCombinedScore: 2,
     require15mConfirmation: false,
     minMfe15mPct: 0.20,
     allowEarlyReady: false,
+    targetReductionPct: 50,
   });
 
   const addPreset = (key: keyof typeof PRESETS) => {
@@ -182,10 +182,22 @@ export function GateBacktestComparison() {
   const runBacktest = async () => {
     setLoading(true);
     try {
+      // Update custom config in configs array with latest values before running
+      const updatedConfigs = configs.map(c => 
+        c.name === customConfig.name ? { ...customConfig } : c
+      );
+      
+      // If custom config not in list, add it
+      if (!updatedConfigs.find(c => c.name === customConfig.name)) {
+        updatedConfigs.push({ ...customConfig });
+      }
+      
+      console.log('[runBacktest] Sending configs:', JSON.stringify(updatedConfigs));
+      
       const res = await fetch(API('/api/gate/backtest/compare'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ configs, limit }),
+        body: JSON.stringify({ configs: updatedConfigs, limit }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -342,24 +354,17 @@ export function GateBacktestComparison() {
             />
           </div>
           <div>
-            <label className="text-[10px] text-white/50">RED Min MFE %</label>
+            <label className="text-[10px] text-white/50">RED Tier MFE %</label>
             <input
               type="number"
               step="0.05"
-              value={customConfig.redMinMfe30mPct}
-              onChange={(e) => setCustomConfig({ ...customConfig, redMinMfe30mPct: Number(e.target.value) })}
+              value={customConfig.redTierMinMfe30mPct}
+              onChange={(e) => setCustomConfig({ ...customConfig, redTierMinMfe30mPct: Number(e.target.value) })}
               className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
             />
           </div>
-          <div>
-            <label className="text-[10px] text-white/50">YELLOW Min MFE %</label>
-            <input
-              type="number"
-              step="0.05"
-              value={customConfig.yellowMinMfe30mPct}
-              onChange={(e) => setCustomConfig({ ...customConfig, yellowMinMfe30mPct: Number(e.target.value) })}
-              className="w-full text-xs px-2 py-1 rounded bg-white/10 border border-white/10"
-            />
+          <div className="flex items-end pb-2">
+            <span className="text-[10px] text-white/40">Min MFE applies to YELLOW/GREEN tiers</span>
           </div>
         </div>
       </div>
@@ -464,6 +469,10 @@ export function GateBacktestComparison() {
                   <div className={results[activeTab].config.allowEarlyReady ? 'text-amber-300' : 'text-emerald-300'}>
                     {results[activeTab].config.allowEarlyReady ? 'ALLOWED' : 'BLOCKED'}
                   </div>
+                </div>
+                <div className="rounded bg-white/5 p-2">
+                  <div className="text-white/50">RED Tier MFE</div>
+                  <div className="text-white/80">{((results[activeTab].config.redTierMinMfe30mPct ?? results[activeTab].config.minMfe30mPct) * 100).toFixed(0)}%</div>
                 </div>
               </div>
 
