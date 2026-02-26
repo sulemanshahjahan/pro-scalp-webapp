@@ -4433,22 +4433,18 @@ app.get('/api/debug/scan-trace', async (req, res) => {
     LIMIT 5
   `).all();
   
-  // Check signals count by hour
-  const byHour = await d.prepare(`
-    SELECT 
-      strftime('%Y-%m-%d %H', datetime(created_at/1000, 'unixepoch')) as hour,
-      COUNT(*) as count,
-      SUM(CASE WHEN blocked_reasons_json IS NOT NULL THEN 1 ELSE 0 END) as blocked
+  // Check last 10 signals regardless of time
+  const recentSignals = await d.prepare(`
+    SELECT id, symbol, category, created_at, blocked_reasons_json
     FROM signals
-    WHERE created_at > ${Date.now() - 24*60*60*1000}
-    GROUP BY hour
-    ORDER BY hour DESC
+    ORDER BY created_at DESC
+    LIMIT 10
   `).all();
   
   res.json({
     ok: true,
     scans,
-    signalsByHour: byHour,
+    recentSignals,
     now: Date.now(),
     iso: new Date().toISOString()
   });
