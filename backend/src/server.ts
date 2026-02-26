@@ -4466,4 +4466,33 @@ app.get('/api/debug/why-no-signals', async (req, res) => {
   });
 });
 
+// TEMP: Kill stuck scan
+app.post('/api/debug/kill-stuck-scan', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Find stuck scans (running for > 10 minutes)
+  const stuck = await d.prepare(`
+    SELECT id, run_id, started_at, instance_id
+    FROM scan_runs
+    WHERE status = 'RUNNING'
+      AND started_at < ${Date.now() - 10*60*1000}
+    ORDER BY started_at DESC
+  `).all();
+  
+  let fixed = 0;
+  for (const scan of stuck) {
+    await d.prepare(`
+      UPDATE scan_runs
+      SET status = 'FAILED',
+          finished_at = ${Date.now()},
+          error_message = 'Killed: stuck scan'
+      WHERE id = ${scan.id}
+    `).run();
+    fixed++;
+  }
+  
+  res.json({ ok: true, killed: fixed, stuckScans: stuck });
+});
+
 export { app };
