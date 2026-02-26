@@ -141,10 +141,22 @@ const corsOrigins = (process.env.CORS_ORIGINS || '*')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+
+// Allow Vercel preview/production domains and localhost automatically
+const isAllowedOrigin = (origin: string): boolean => {
+  if (corsOrigins.includes('*')) return true;
+  if (corsOrigins.includes(origin)) return true;
+  if (origin.includes('vercel.app')) return true;
+  if (origin.includes('localhost')) return true;
+  if (origin.includes('127.0.0.1')) return true;
+  return false;
+};
+
 app.use(cors({
   origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
     if (!origin) return cb(null, true);
-    if (corsOrigins.includes('*') || corsOrigins.includes(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    console.log(`[CORS blocked] Origin: ${origin}`);
     return cb(new Error('CORS not allowed'));
   },
   credentials: true,
