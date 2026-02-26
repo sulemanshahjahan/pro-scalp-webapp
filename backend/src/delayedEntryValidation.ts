@@ -124,11 +124,14 @@ async function validateWindow(
   for (const sig of signals) {
     watchCreated++;
     
-    // Get baseline (immediate entry)
-    const baselineR = sig.realizedR != null ? Number(sig.realizedR) : 0;
-    baselineTotalR += baselineR;
+    // Get baseline (immediate entry) - handle both camelCase and lowercase (PostgreSQL)
+    const baselineR = sig.realizedR ?? sig.realizedr ?? sig.ext24_realized_r ?? 0;
+    const baselineRNum = Number(baselineR) || 0;
+    baselineTotalR += baselineRNum;
     
-    const mfe30m = sig.mfe30m != null ? Number(sig.mfe30m) : 0;
+    // Get MFE - handle both camelCase and lowercase
+    const mfe30mRaw = sig.mfe30m ?? sig.mfe30mpct ?? sig.mfe_30m_pct ?? 0;
+    const mfe30m = Number(mfe30mRaw) || 0;
     
     // Check spike protection (mfe > confirm + extra)
     const maxAllowedMove = confirmMovePct + 0.10; // 0.10 is maxExtraMovePct
@@ -142,10 +145,10 @@ async function validateWindow(
       entered++;
       
       // Use actual outcome from original entry
-      totalR += baselineR;
+      totalR += baselineRNum;
       
-      if (baselineR > 0.1) wins++;
-      else if (baselineR < -0.1) losses++;
+      if (baselineRNum > 0.1) wins++;
+      else if (baselineRNum < -0.1) losses++;
       else be++;
     } else {
       // Didn't confirm within window - expired
