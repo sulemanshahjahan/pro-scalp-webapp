@@ -49,6 +49,26 @@ export async function runGateBacktest(
   config: BacktestConfig,
   limit: number = 200
 ): Promise<BacktestResult> {
+  console.log('[gateBacktest] Received config:', JSON.stringify(config));
+  
+  // Ensure all config values are explicitly set (don't fallback to env vars)
+  const explicitConfig: BacktestConfig = {
+    enabled: config.enabled ?? true,
+    blockRedTier: config.blockRedTier ?? true,
+    minMfe30mPct: config.minMfe30mPct ?? 0.30,
+    redTierMinMfe30mPct: config.redTierMinMfe30mPct ?? 0.50,
+    minMqs: config.minMqs ?? 0.20,
+    useCombinedScore: config.useCombinedScore ?? true,
+    minCombinedScore: config.minCombinedScore ?? 2,
+    require15mConfirmation: config.require15mConfirmation ?? false,
+    minMfe15mPct: config.minMfe15mPct ?? 0.20,
+    allowEarlyReady: config.allowEarlyReady ?? false,
+    targetReductionPct: config.targetReductionPct ?? 50,
+    name: config.name || 'Custom',
+  };
+  
+  console.log('[gateBacktest] Using explicit config:', JSON.stringify(explicitConfig));
+  
   const d = getDb();
   
   // Fetch recent signals with their outcomes
@@ -121,7 +141,7 @@ export async function runGateBacktest(
     const tier = tierRecord?.tier || 'YELLOW';
     
     // Run through gate
-    const result = await checkSignalGate(signal, config);
+    const result = await checkSignalGate(signal, explicitConfig);
     
     // Track tier breakdown
     if (!tierBreakdown[tier]) {
@@ -178,7 +198,7 @@ export async function runGateBacktest(
     : 0;
 
   return {
-    config,
+    config: explicitConfig,
     summary: {
       totalSignals: total,
       allowed,
