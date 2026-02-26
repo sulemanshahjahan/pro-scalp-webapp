@@ -97,6 +97,14 @@ export interface ExtendedOutcome {
   // Debug info (stored as JSON)
   debugJson: string | null;
   managedDebugJson: string | null;
+  
+  // Early window metrics (Step 1)
+  mfe30mPct: number | null;
+  mae30mPct: number | null;
+  mfe60mPct: number | null;
+  mae60mPct: number | null;
+  tp1Within45m: boolean;
+  earlyWindowComputedAt: number | null;
 }
 
 // Input for creating/updating extended outcome
@@ -885,6 +893,12 @@ export async function getOrCreateExtendedOutcome(
       resolveVersion: String((existing as any).resolve_version || ''),
       debugJson: (existing as any).debug_json != null ? String((existing as any).debug_json) : null,
       managedDebugJson: (existing as any).managed_debug_json != null ? String((existing as any).managed_debug_json) : null,
+      mfe30mPct: (existing as any).mfe_30m_pct != null ? Number((existing as any).mfe_30m_pct) : null,
+      mae30mPct: (existing as any).mae_30m_pct != null ? Number((existing as any).mae_30m_pct) : null,
+      mfe60mPct: (existing as any).mfe_60m_pct != null ? Number((existing as any).mfe_60m_pct) : null,
+      mae60mPct: (existing as any).mae_60m_pct != null ? Number((existing as any).mae_60m_pct) : null,
+      tp1Within45m: (existing as any).tp1_within_45m === 1 || (existing as any).tp1_within_45m === true,
+      earlyWindowComputedAt: (existing as any).early_window_computed_at != null ? Number((existing as any).early_window_computed_at) : null,
     };
     return { outcome: mapped, created: false };
   }
@@ -974,6 +988,12 @@ export async function getOrCreateExtendedOutcome(
     resolveVersion: String(newOutcomeRaw.resolve_version || ''),
     debugJson: newOutcomeRaw.debug_json != null ? String(newOutcomeRaw.debug_json) : null,
     managedDebugJson: null,
+    mfe30mPct: null,
+    mae30mPct: null,
+    mfe60mPct: null,
+    mae60mPct: null,
+    tp1Within45m: false,
+    earlyWindowComputedAt: null,
   };
 
   return { outcome: newOutcome, created: true };
@@ -1304,7 +1324,13 @@ export async function listExtendedOutcomes(params: {
       eo.ext24_runner_exit_reason,
       eo.ext24_timeout_exit_price,
       eo.ext24_risk_usd_snapshot,
-      eo.managed_debug_json
+      eo.managed_debug_json,
+      eo.mfe_30m_pct,
+      eo.mae_30m_pct,
+      eo.mfe_60m_pct,
+      eo.mae_60m_pct,
+      eo.tp1_within_45m,
+      eo.early_window_computed_at
     FROM extended_outcomes eo
     ${whereClause}
     ${sortClause}
@@ -1356,6 +1382,12 @@ export async function listExtendedOutcomes(params: {
     resolveVersion: String(row.resolve_version || ''),
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
     managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
+    mfe30mPct: row.mfe_30m_pct != null ? Number(row.mfe_30m_pct) : null,
+    mae30mPct: row.mae_30m_pct != null ? Number(row.mae_30m_pct) : null,
+    mfe60mPct: row.mfe_60m_pct != null ? Number(row.mfe_60m_pct) : null,
+    mae60mPct: row.mae_60m_pct != null ? Number(row.mae_60m_pct) : null,
+    tp1Within45m: row.tp1_within_45m === 1 || row.tp1_within_45m === true,
+    earlyWindowComputedAt: row.early_window_computed_at != null ? Number(row.early_window_computed_at) : null,
   }));
 
   return { rows, total: countRow.total };
@@ -1525,7 +1557,9 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
       eo.ext24_runner_exit_reason,
       eo.ext24_timeout_exit_price,
       eo.ext24_risk_usd_snapshot,
-      eo.managed_debug_json
+      eo.managed_debug_json,
+      eo.mfe_30m_pct,
+      eo.mae_30m_pct
     FROM extended_outcomes eo
     WHERE eo.completed_at IS NULL
       AND eo.expires_at <= ?
@@ -1578,6 +1612,12 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
     resolveVersion: String(row.resolve_version || ''),
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
     managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
+    mfe30mPct: row.mfe_30m_pct != null ? Number(row.mfe_30m_pct) : null,
+    mae30mPct: row.mae_30m_pct != null ? Number(row.mae_30m_pct) : null,
+    mfe60mPct: null,
+    mae60mPct: null,
+    tp1Within45m: false,
+    earlyWindowComputedAt: null,
   }));
 
   return rows;
@@ -1711,6 +1751,12 @@ export async function reevaluatePendingExtendedOutcomes(
     resolveVersion: RESOLVE_VERSION,
     debugJson: null,
     managedDebugJson: null,
+    mfe30mPct: null,
+    mae30mPct: null,
+    mfe60mPct: null,
+    mae60mPct: null,
+    tp1Within45m: false,
+    earlyWindowComputedAt: null,
   }));
 
   let evaluated = 0;
@@ -2240,6 +2286,12 @@ export async function listExtendedOutcomesWithComparison(params: {
     managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
     horizon240mResult: row.horizon_240m_result != null ? String(row.horizon_240m_result) : null,
     improved: Boolean(row.improved),
+    mfe30mPct: row.mfe_30m_pct != null ? Number(row.mfe_30m_pct) : null,
+    mae30mPct: row.mae_30m_pct != null ? Number(row.mae_30m_pct) : null,
+    mfe60mPct: null,
+    mae60mPct: null,
+    tp1Within45m: false,
+    earlyWindowComputedAt: null,
   }));
 
   return { rows: mappedRows, total: countRow.total };
