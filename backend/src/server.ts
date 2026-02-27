@@ -4535,4 +4535,48 @@ app.get('/api/expired-signals', async (req, res) => {
   }
 });
 
+// TEMP: Fix managed PnL values for WIN_TP2 signals
+app.post('/api/debug/fix-managed-pnl', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Find all WIN_TP2 signals with incorrect managedR
+  const signals = await d.prepare(`
+    SELECT id, signal_id, symbol, status, tp2_at, first_tp1_at
+    FROM extended_outcomes
+    WHERE status = 'WIN_TP2'
+      AND (ext24_managed_r IS NULL OR ext24_managed_r < 1.0)
+  `).all();
+  
+  let fixed = 0;
+  const riskUsd = 15; // Default risk
+  
+  for (const sig of signals) {
+    const pnlUsd = 1.5 * riskUsd;
+    const now = Date.now();
+    await d.prepare(`
+      UPDATE extended_outcomes SET
+        ext24_managed_status = @status,
+        ext24_managed_r = @managedR,
+        ext24_managed_pnl_usd = @pnlUsd,
+        ext24_realized_r = @realizedR,
+        ext24_runner_exit_reason = @exitReason,
+        ext24_runner_be_at = NULL,
+        updated_at = @now
+      WHERE id = @id
+    `).run({
+      status: 'CLOSED_TP2',
+      managedR: 1.5,
+      pnlUsd: pnlUsd,
+      realizedR: 1.5,
+      exitReason: 'TP2',
+      now: now,
+      id: sig.id
+    });
+    fixed++;
+  }
+  
+  res.json({ ok: true, fixed, signals: signals.map(s => ({ symbol: s.symbol, id: s.id })) });
+});
+
 export { app };
