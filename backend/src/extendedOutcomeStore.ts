@@ -1964,7 +1964,7 @@ export async function backfillManagedPnlForCompleted(
       if (managedPnl.managedR === null && storedStatus) {
         console.log(`[extended-outcomes] Using direct fallback for ${signalId}, status: '${storedStatus}'`);
         
-        if (storedStatus === 'WIN_TP2' || storedStatus.includes('WIN') && storedStatus.includes('TP2') || storedTp2At) {
+        if (storedStatus === 'WIN_TP2' || (storedStatus.includes('WIN') && storedStatus.includes('TP2')) || storedTp2At) {
           // TP2 hit = +1.5R
           managedPnl = {
             ...managedPnl,
