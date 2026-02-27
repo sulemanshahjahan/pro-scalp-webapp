@@ -4495,4 +4495,49 @@ app.post('/api/debug/kill-stuck-scan', async (req, res) => {
   res.json({ ok: true, killed: fixed, stuckScans: stuck });
 });
 
+// TEMP: See expired signals (cancelled due to no price confirmation)
+app.get('/api/expired-signals', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Get signals that are in delayed_entry_records but EXPIRED
+  const expired = await d.prepare(`
+    SELECT 
+      s.id, s.symbol, s.category, s.price, s.time,
+      der.status, der.reference_price, der.watch_created_at, der.watch_expires_at,
+      (SELECT MAX(mfe_30m_pct) FROM extended_outcomes WHERE signal_id = s.id) as mfe30m
+    FROM signals s
+    JOIN delayed_entry_records der ON der.signal_id = s.id
+    WHERE der.status = 'EXPIRED'
+    ORDER BY der.watch_expires_at DESC
+    LIMIT 20
+  `).all();
+  
+  // Also get signals that never even created a delayed_entry record
+  // (were blocked by gate after being detected)
+  const blocked = await d.prepare(`
+    SELECT 
+      s.id, s.symbol, s.category, s.price, s.time,
+      s.blocked_reasons_json as blocked_reasons
+    FROM signals s
+    LEFT JOIN delayed_entry_records der ON der.signal_id = s.id
+    WHERE der.id IS NULL
+      AND s.category IN ('READY_TO_BUY', 'READY_TO_SELL', 'BEST_ENTRY', 'BEST_SHORT_ENTRY')
+    ORDER BY s.time DESC
+    LIMIT 20
+  `).all();
+  
+  res.json({
+    ok: true,
+    expired: expired.map(e => ({
+      ...e,
+      reason: 'Price did not move 0.5% within 45 minutes'
+    })),
+    blockedByGate: blocked.map(b => ({
+      ...b,
+      reason: b.blocked_reasons ? JSON.parse(b.blocked_reasons).join(', ') : 'Unknown'
+    }))
+  });
+});
+
 export { app };
