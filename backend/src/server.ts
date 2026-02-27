@@ -4535,6 +4535,57 @@ app.get('/api/expired-signals', async (req, res) => {
   }
 });
 
+// TEMP: Fix outcome status for completed managed PnL signals
+app.post('/api/debug/fix-completed-status', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  // Find signals where managed PnL shows completed but main status doesn't
+  const signals = await d.prepare(`
+    SELECT id, signal_id, symbol, status, ext24_runner_exit_reason, completed_at
+    FROM extended_outcomes
+    WHERE ext24_runner_exit_reason IS NOT NULL
+      AND (completed_at IS NULL OR status = 'ACHIEVED_TP1')
+  `).all();
+  
+  let fixed = 0;
+  
+  for (const sig of signals) {
+    const now = Date.now();
+    
+    // Determine correct status based on runner exit
+    let newStatus = sig.status;
+    if (sig.ext24_runner_exit_reason === 'TP2') {
+      newStatus = 'WIN_TP2';
+    } else if (sig.ext24_runner_exit_reason === 'BREAK_EVEN') {
+      newStatus = 'WIN_TP1'; // TP1 hit, then BE
+    } else if (sig.ext24_runner_exit_reason === 'STOP_BEFORE_TP1') {
+      newStatus = 'LOSS_STOP';
+    }
+    
+    if (newStatus !== sig.status || !sig.completed_at) {
+      await d.prepare(`
+        UPDATE extended_outcomes SET
+          status = @status,
+          completed_at = @now,
+          updated_at = @now
+        WHERE id = @id
+      `).run({
+        status: newStatus,
+        now: now,
+        id: sig.id
+      });
+      fixed++;
+    }
+  }
+  
+  res.json({ ok: true, fixed, signals: signals.map(s => ({ 
+    symbol: s.symbol, 
+    oldStatus: s.status,
+    runnerExit: s.ext24_runner_exit_reason
+  })) });
+});
+
 // TEMP: Fix managed PnL values for WIN_TP2 signals
 app.post('/api/debug/fix-managed-pnl', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
