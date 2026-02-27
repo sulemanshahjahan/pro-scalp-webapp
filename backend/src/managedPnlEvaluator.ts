@@ -582,8 +582,9 @@ export function evaluateManagedPnl(
     
     // === WIN_TP2 ===
     // TP2 was hit - full success (+1.5R)
+    console.log('[managed-pnl] Checking WIN_TP2:', { status, tp2At, isWinTp2: status === 'WIN_TP2', hasTp2At: !!tp2At });
     if (status === 'WIN_TP2' || tp2At) {
-      console.log('[managed-pnl] WIN_TP2 path:', { status, tp2At, realizedR: 1.5 });
+      console.log('[managed-pnl] WIN_TP2 path TAKEN:', { status, tp2At, realizedR: 1.5 });
       managedStatus = 'CLOSED_TP2';
       runnerExitReason = 'TP2';
       runnerExitAt = tp2At || expiresAt;
@@ -608,7 +609,9 @@ export function evaluateManagedPnl(
     
     // === WIN_TP1 or ACHIEVED_TP1 (no TP2) ===
     // TP1 hit but TP2 not hit - need to determine if BE was hit or timeout
+    console.log('[managed-pnl] Checking WIN_TP1/ACHIEVED_TP1:', { status, firstTp1At, tp2At });
     if ((status === 'WIN_TP1' || status === 'ACHIEVED_TP1') && firstTp1At && !tp2At) {
+      console.log('[managed-pnl] WIN_TP1/ACHIEVED_TP1 path TAKEN');
       // Check if BE was hit after TP1 by scanning candles
       const beHitAfterTp1 = findBreakEvenHit(
         sortedCandles,
