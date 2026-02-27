@@ -4535,35 +4535,38 @@ app.get('/api/expired-signals', async (req, res) => {
   }
 });
 
-// TEMP: Fix outcome status for completed managed PnL signals
-app.post('/api/debug/fix-completed-status', async (req, res) => {
+// TEMP: Fix outcome status for ALL mismatched signals
+app.post('/api/debug/fix-all-status', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
   
-  // Find signals where managed PnL shows completed but main status doesn't
+  // Find ALL signals with managed PnL data to check for mismatches
   const signals = await d.prepare(`
-    SELECT id, signal_id, symbol, status, ext24_runner_exit_reason, completed_at
+    SELECT id, signal_id, symbol, status, ext24_runner_exit_reason, ext24_managed_r, completed_at
     FROM extended_outcomes
     WHERE ext24_runner_exit_reason IS NOT NULL
-      AND (completed_at IS NULL OR status = 'ACHIEVED_TP1')
   `).all();
   
   let fixed = 0;
+  const updates = [];
   
   for (const sig of signals) {
     const now = Date.now();
     
     // Determine correct status based on runner exit
-    let newStatus = sig.status;
+    let expectedStatus = sig.status;
     if (sig.ext24_runner_exit_reason === 'TP2') {
-      newStatus = 'WIN_TP2';
+      expectedStatus = 'WIN_TP2';
     } else if (sig.ext24_runner_exit_reason === 'BREAK_EVEN') {
-      newStatus = 'WIN_TP1'; // TP1 hit, then BE
+      expectedStatus = 'WIN_TP1'; // TP1 hit, then BE = WIN
     } else if (sig.ext24_runner_exit_reason === 'STOP_BEFORE_TP1') {
-      newStatus = 'LOSS_STOP';
+      expectedStatus = 'LOSS_STOP';
+    } else if (sig.ext24_runner_exit_reason === 'TIMEOUT_MARKET') {
+      expectedStatus = 'FLAT_TIMEOUT_24H';
     }
     
-    if (newStatus !== sig.status || !sig.completed_at) {
+    // Fix if status is wrong or not completed
+    if (expectedStatus !== sig.status || !sig.completed_at) {
       await d.prepare(`
         UPDATE extended_outcomes SET
           status = @status,
@@ -4571,19 +4574,22 @@ app.post('/api/debug/fix-completed-status', async (req, res) => {
           updated_at = @now
         WHERE id = @id
       `).run({
-        status: newStatus,
+        status: expectedStatus,
         now: now,
         id: sig.id
       });
       fixed++;
+      updates.push({
+        symbol: sig.symbol,
+        oldStatus: sig.status,
+        newStatus: expectedStatus,
+        runnerExit: sig.ext24_runner_exit_reason,
+        managedR: sig.ext24_managed_r
+      });
     }
   }
   
-  res.json({ ok: true, fixed, signals: signals.map(s => ({ 
-    symbol: s.symbol, 
-    oldStatus: s.status,
-    runnerExit: s.ext24_runner_exit_reason
-  })) });
+  res.json({ ok: true, fixed, totalChecked: signals.length, updates });
 });
 
 // TEMP: Fix managed PnL values for WIN_TP2 signals
