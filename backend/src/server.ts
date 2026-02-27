@@ -4495,36 +4495,40 @@ app.post('/api/debug/kill-stuck-scan', async (req, res) => {
   res.json({ ok: true, killed: fixed, stuckScans: stuck });
 });
 
-// TEMP: See expired signals (simpler query)
+// TEMP: See blocked signals with reasons
 app.get('/api/expired-signals', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
   
   try {
-    // Just count signals by category
-    const byCat = await d.prepare(`
-      SELECT category, COUNT(*) as count
-      FROM signals
-      GROUP BY category
-      ORDER BY count DESC
-    `).all();
-    
     // Recent signals with blocked reasons
     const recent = await d.prepare(`
-      SELECT id, symbol, category, time, blocked_reasons_json
+      SELECT id, symbol, category, time, blocked_reasons_json, first_failed_gate
       FROM signals
       ORDER BY created_at DESC
-      LIMIT 10
+      LIMIT 20
     `).all();
+    
+    // Parse blocked reasons
+    const withReasons = recent.map(r => {
+      let reasons = [];
+      try {
+        if (r.blocked_reasons_json) {
+          reasons = JSON.parse(r.blocked_reasons_json);
+        }
+      } catch {}
+      return {
+        symbol: r.symbol,
+        category: r.category,
+        blocked: reasons.length > 0 ? 'YES' : 'NO',
+        reasons: reasons.join(', '),
+        firstFailed: r.first_failed_gate
+      };
+    });
     
     res.json({
       ok: true,
-      byCategory: byCat,
-      recent: recent.map(r => ({
-        symbol: r.symbol,
-        category: r.category,
-        blocked: r.blocked_reasons_json ? 'YES' : 'NO'
-      }))
+      recent: withReasons
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
