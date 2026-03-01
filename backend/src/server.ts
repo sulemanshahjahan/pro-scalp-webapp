@@ -4658,21 +4658,26 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
 app.post('/api/debug/backfill-no-trade', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
-  const { dryRun = true } = req.body || {};
+  const { dryRun = true, includeWatch = false } = req.body || {};
   
   try {
     // Find all delayed entry records that expired without confirmation
+    // OR are still in WATCH but have LOSS_STOP outcomes (never confirmed but marked as loss)
     const expiredRecords = await d.prepare(`
       SELECT 
         der.signal_id,
         der.symbol,
         der.status as delayed_status,
+        der.confirmed_at,
         eo.id as outcome_id,
         eo.status as outcome_status,
         eo.ext24_managed_r
       FROM delayed_entry_records der
       JOIN extended_outcomes eo ON eo.signal_id = der.signal_id
-      WHERE der.status IN ('EXPIRED_NO_ENTRY', 'CANCELLED')
+      WHERE (
+        der.status IN ('EXPIRED_NO_ENTRY', 'CANCELLED')
+        OR (der.status = 'WATCH' AND der.confirmed_at IS NULL AND eo.status = 'LOSS_STOP')
+      )
         AND eo.status != 'NO_TRADE'
     `).all();
     
