@@ -44,7 +44,8 @@ export type ManagedStatus =
   | 'CLOSED_STOP'
   | 'CLOSED_TP2'
   | 'CLOSED_BE_AFTER_TP1'
-  | 'CLOSED_TIMEOUT';
+  | 'CLOSED_TIMEOUT'
+  | 'NO_TRADE';
 
 // Runner exit reason
 export type RunnerExitReason =
