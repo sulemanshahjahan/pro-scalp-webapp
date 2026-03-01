@@ -560,72 +560,14 @@ export async function evaluateExtended24hOutcome(
   const expiresAt = signalTime + EXTENDED_WINDOW_MS;
   const now = Date.now();
 
-  // CHECK: Was this signal ever confirmed in delayed entry?
-  // If not, it's NO_TRADE (not a loss)
-  const d = getDb();
-  const delayedRecord = await d.prepare(`
-    SELECT status FROM delayed_entry_records 
-    WHERE signal_id = ?
-  `).get(signalId) as { status: string } | null;
-  
-  const wasConfirmed = delayedRecord?.status === 'ENTERED';
-  const wasExpired = delayedRecord?.status === 'EXPIRED';
-  
-  // If signal never confirmed (still WATCH or EXPIRED), mark as NO_TRADE
-  if (!wasConfirmed && (wasExpired || !delayedRecord)) {
-    console.log(`[extended-outcomes] Signal ${signalId} (${signal.symbol}) never confirmed - NO_TRADE`);
-    
-    return {
-      status: 'NO_TRADE',
-      completed: true,
-      firstTp1At: null,
-      tp2At: null,
-      stopAt: null,
-      timeToTp1Seconds: null,
-      timeToTp2Seconds: null,
-      timeToStopSeconds: null,
-      timeToFirstHitSeconds: null,
-      maxFavorableExcursionPct: 0,
-      maxAdverseExcursionPct: 0,
-      coveragePct: 100,
-      nCandlesEvaluated: 0,
-      nCandlesExpected: 0,
-      debug: {
-        candlesProcessed: 0,
-        stopHitCandleIndex: null,
-        tp1HitCandleIndex: null,
-        tp2HitCandleIndex: null,
-        sameCandleConflicts: [],
-        coverageCalc: {
-          signalTime,
-          windowEnd: signalTime,
-          windowDurationMs: 0,
-          expectedCandles: 0,
-          actualCandles: 0,
-          coveragePct: 100,
-          windowExpired: true,
-          completedEarly: false,
-          minCoverageRequired: 80,
-          coverageCheckPassed: true,
-        }
-      },
-      managedPnl: {
-        managedStatus: 'NO_TRADE',
-        managedR: 0,
-        managedPnlUsd: 0,
-        realizedR: 0,
-        unrealizedRunnerR: null,
-        liveManagedR: 0,
-        tp1PartialAt: null,
-        runnerBeAt: null,
-        runnerExitAt: null,
-        runnerExitReason: null,
-        timeoutExitPrice: null,
-        riskUsdSnapshot: getRiskPerTradeUsd(),
-        debug: { fullPositionStopHit: false, fullPositionStopTime: null, runnerActive: false, runnerStopPrice: null, lastEvaluatedPrice: null, sameCandleConflicts: [] },
-      },
-    };
-  }
+  // TEMPORARILY DISABLED: Checking delayed entry confirmation
+  // TODO: Re-enable with proper logic for both LONG and SHORT signals
+  // const d = getDb();
+  // const delayedRecord = await d.prepare(`
+  //   SELECT status FROM delayed_entry_records 
+  //   WHERE signal_id = ?
+  // `).get(signalId) as { status: string } | null;
+  // ...
 
   // Load candles if not provided
   let evaluationCandles: OHLCV[];
