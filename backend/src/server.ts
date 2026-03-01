@@ -4687,12 +4687,13 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
     const updates = [];
     
     for (const record of expiredRecords) {
-      const { signal_id, symbol, delayed_status, outcome_id, outcome_status, ext24_managed_r } = record;
+      const { signal_id, symbol, delayed_status, confirmed_at, outcome_id, outcome_status, ext24_managed_r } = record;
       
       updates.push({
         signalId: signal_id,
         symbol,
         delayedStatus: delayed_status,
+        confirmedAt: confirmed_at,
         oldOutcomeStatus: outcome_status,
         oldManagedR: ext24_managed_r,
         newOutcomeStatus: 'NO_TRADE',
@@ -4700,27 +4701,31 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
       });
       
       if (!dryRun) {
-        // Update extended outcome to NO_TRADE
-        await d.prepare(`
-          UPDATE extended_outcomes SET
-            status = 'NO_TRADE',
-            ext24_managed_status = 'NO_TRADE',
-            ext24_managed_r = 0,
-            ext24_managed_pnl_usd = 0,
-            ext24_realized_r = 0,
-            ext24_runner_exit_reason = NULL,
-            updated_at = ?
-          WHERE id = ?
-        `).run(Date.now(), outcome_id);
-        
-        // Also update signal_outcomes if exists
-        await d.prepare(`
-          UPDATE signal_outcomes 
-          SET outcome = 'NO_TRADE', updated_at = ?
-          WHERE signal_id = ?
-        `).run(new Date().toISOString(), signal_id);
-        
-        updated++;
+        try {
+          // Update extended outcome to NO_TRADE
+          await d.prepare(`
+            UPDATE extended_outcomes SET
+              status = 'NO_TRADE',
+              ext24_managed_status = 'NO_TRADE',
+              ext24_managed_r = 0,
+              ext24_managed_pnl_usd = 0,
+              ext24_realized_r = 0,
+              ext24_runner_exit_reason = NULL,
+              updated_at = ?
+            WHERE id = ?
+          `).run(Date.now(), outcome_id);
+          
+          // Also update signal_outcomes if exists
+          await d.prepare(`
+            UPDATE signal_outcomes 
+            SET outcome = 'NO_TRADE', updated_at = ?
+            WHERE signal_id = ?
+          `).run(new Date().toISOString(), signal_id);
+          
+          updated++;
+        } catch (updateError) {
+          console.error(`[debug/backfill-no-trade] Error updating signal ${signal_id}:`, updateError);
+        }
       }
     }
     
