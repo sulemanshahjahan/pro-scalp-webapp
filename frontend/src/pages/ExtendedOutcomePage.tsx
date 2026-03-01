@@ -172,6 +172,61 @@ interface ManagedPnlStats {
   riskPerTradeUsd: number;
 }
 
+// Self-verifying stats with counts + denominators (Step 2)
+interface RateWithDenom {
+  pct: number;
+  num: number;
+  den: number;
+  label: string;
+}
+
+interface VerifiableStats {
+  ok: boolean;
+  totals: {
+    totalSignals: number;
+    completedSignals: number;
+    pendingSignals: number;
+  };
+  signalCounts: {
+    winTp1: number;
+    winTp2: number;
+    lossStop: number;
+    flatTimeout: number;
+    noTrade: number;
+    achievedTp1: number;
+  };
+  signalRates: {
+    winRate: RateWithDenom;
+    tp1TouchRate: RateWithDenom;
+    tp2Conversion: RateWithDenom;
+  };
+  managedCounts: {
+    closed: number;
+    wins: number;
+    losses: number;
+    breakeven: number;
+    beSaves: number;
+    timeoutExits: number;
+    tp2Hits: number;
+  };
+  managedRates: {
+    winRate: RateWithDenom;
+    beRate: RateWithDenom;
+  };
+  performance: {
+    totalManagedR: number;
+    avgManagedR: number;
+    avgTimeToTp1Seconds: number | null;
+    avgMfePct: number | null;
+    avgMaePct: number | null;
+  };
+  verification: {
+    completedCheck: number;
+    sumOfOutcomes: number;
+    matches: boolean;
+  };
+}
+
 export default function ExtendedOutcomePage() {
   // Filters
   const [datePreset, setDatePreset] = useState<'today' | '24h' | '7d' | '30d' | 'custom'>('7d');
@@ -187,6 +242,7 @@ export default function ExtendedOutcomePage() {
   const [outcomes, setOutcomes] = useState<Array<ExtendedOutcome & { horizon240mResult?: string | null; improved?: boolean }>>([]);
   const [stats, setStats] = useState<StatsData | null>(null);
   const [managedStats, setManagedStats] = useState<ManagedPnlStats | null>(null);
+  const [verifiableStats, setVerifiableStats] = useState<VerifiableStats | null>(null);
   const [improvementStats, setImprovementStats] = useState<{ noHitAt240m: number; laterHitTp1: number; laterHitTp2: number; laterHitStop: number; improvedWinRate: number } | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -244,10 +300,11 @@ export default function ExtendedOutcomePage() {
     setStatsLoading(true);
     try {
       const qs = buildParams(false);
-      const [resp, improvResp, managedResp] = await Promise.all([
+      const [resp, improvResp, managedResp, verifiableResp] = await Promise.all([
         fetch(API(`/api/extended-outcomes/stats?${qs}`)).then(r => r.json()),
         fetch(API(`/api/extended-outcomes/improvements?${qs}`)).then(r => r.json()),
         fetch(API(`/api/extended-outcomes/managed-stats?${qs}`)).then(r => r.json()),
+        fetch(API(`/api/stats/verifiable?${qs}`)).then(r => r.json()),
       ]);
       if (resp?.ok) {
         setStats(resp);
@@ -257,6 +314,9 @@ export default function ExtendedOutcomePage() {
       }
       if (managedResp?.ok) {
         setManagedStats(managedResp);
+      }
+      if (verifiableResp?.ok) {
+        setVerifiableStats(verifiableResp);
       }
     } finally {
       setStatsLoading(false);
@@ -446,42 +506,50 @@ export default function ExtendedOutcomePage() {
         </div>
       </section>
 
-      {/* Stats Cards */}
+      {/* Stats Cards - Self-verifying with counts/denominators (Step 2) */}
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <KpiCard 
           label="Total Signals" 
-          value={stats?.totalSignals ?? '--'} 
+          value={verifiableStats?.totals.totalSignals ?? stats?.totalSignals ?? '--'} 
           sub="24h extended window" 
           loading={statsLoading}
         />
         <KpiCard 
           label="Completed" 
-          value={stats?.completed ?? '--'} 
-          sub={`${stats?.completed && stats?.totalSignals ? fmtRate(stats.completed / stats.totalSignals, 0) : '--'} of total`}
+          value={verifiableStats?.totals.completedSignals ?? stats?.completed ?? '--'} 
+          sub={verifiableStats 
+            ? `${verifiableStats.totals.completedSignals} / ${verifiableStats.totals.totalSignals} total` 
+            : `${stats?.completed && stats?.totalSignals ? fmtRate(stats.completed / stats.totalSignals, 0) : '--'} of total`}
           loading={statsLoading}
         />
         <KpiCard 
           label="Win Rate" 
-          value={stats ? fmtRate(stats.winRate, 1) : '--'} 
-          sub="TP1 + TP2 / completed"
+          value={verifiableStats 
+            ? `${verifiableStats.signalRates.winRate.pct.toFixed(1)}%` 
+            : stats ? fmtRate(stats.winRate, 1) : '--'} 
+          sub={verifiableStats?.signalRates.winRate.label ?? "TP1 + TP2 / completed"}
           loading={statsLoading}
         />
         <KpiCard 
           label="Pending / Active" 
-          value={stats?.pending ?? '--'} 
+          value={verifiableStats?.totals.pendingSignals ?? stats?.pending ?? '--'} 
           sub="Within 24h window"
           loading={statsLoading}
         />
         <KpiCard 
-          label="Avg Time to TP1" 
-          value={stats ? fmtDuration(stats.avgTimeToTp1Seconds) : '--'} 
-          sub="When TP1 hit"
+          label="TP1 Touch Rate" 
+          value={verifiableStats 
+            ? `${verifiableStats.signalRates.tp1TouchRate.pct.toFixed(1)}%` 
+            : '--'} 
+          sub={verifiableStats?.signalRates.tp1TouchRate.label ?? "Any TP1 touch / total"}
           loading={statsLoading}
         />
         <KpiCard 
-          label="Avg MFE / MAE" 
-          value={stats ? `${fmt(stats.avgMfePct, 1)}% / ${fmt(stats.avgMaePct, 1)}%` : '--'} 
-          sub="Max excursion"
+          label="TP2 Conversion" 
+          value={verifiableStats 
+            ? `${verifiableStats.signalRates.tp2Conversion.pct.toFixed(1)}%` 
+            : '--'} 
+          sub={verifiableStats?.signalRates.tp2Conversion.label ?? "TP2 / touched TP1"}
           loading={statsLoading}
         />
       </section>
@@ -559,8 +627,14 @@ export default function ExtendedOutcomePage() {
               </div>
               <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
                 <div className="text-xs text-cyan-300">Managed Win Rate</div>
-                <div className="text-lg font-semibold text-cyan-200">{managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</div>
-                <div className="text-[10px] text-cyan-300/60">managed_r &gt; 0 / closed</div>
+                <div className="text-lg font-semibold text-cyan-200">
+                  {verifiableStats 
+                    ? `${verifiableStats.managedRates.winRate.pct.toFixed(1)}%` 
+                    : managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}
+                </div>
+                <div className="text-[10px] text-cyan-300/60">
+                  {verifiableStats?.managedRates.winRate.label ?? "managed_r > 0 / closed"}
+                </div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/50">Avg R / Trade</div>
@@ -570,9 +644,15 @@ export default function ExtendedOutcomePage() {
                 <div className="text-[10px] text-white/40">Mean per closed trade</div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/50">TP2 Conversion</div>
-                <div className="text-lg font-semibold text-white/90">{managedStats ? fmtRate(managedStats.tp2ConversionRate, 1) : '--'}</div>
-                <div className="text-[10px] text-white/40">TP2 hits / TP1 touches</div>
+                <div className="text-xs text-white/50">BE Rate</div>
+                <div className="text-lg font-semibold text-white/90">
+                  {verifiableStats 
+                    ? `${verifiableStats.managedRates.beRate.pct.toFixed(1)}%` 
+                    : '--'}
+                </div>
+                <div className="text-[10px] text-white/40">
+                  {verifiableStats?.managedRates.beRate.label ?? "managed_r = 0 / closed"}
+                </div>
               </div>
             </div>
             
@@ -580,17 +660,25 @@ export default function ExtendedOutcomePage() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
                 <div className="text-xs text-amber-300">BE Saves</div>
-                <div className="text-lg font-semibold text-amber-200">{managedStats?.beSaves ?? '--'}</div>
+                <div className="text-lg font-semibold text-amber-200">
+                  {verifiableStats?.managedCounts.beSaves ?? managedStats?.beSaves ?? '--'}
+                </div>
                 <div className="text-[10px] text-amber-300/60">TP1 → BE exits</div>
               </div>
               <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3">
                 <div className="text-xs text-blue-300">Timeout Exits</div>
-                <div className="text-lg font-semibold text-blue-200">{managedStats?.timeoutExits ?? '--'}</div>
+                <div className="text-lg font-semibold text-blue-200">
+                  {verifiableStats?.managedCounts.timeoutExits ?? managedStats?.timeoutExits ?? '--'}
+                </div>
                 <div className="text-[10px] text-blue-300/60">24h market close</div>
               </div>
               <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
                 <div className="text-xs text-purple-300">TP1 Touch Rate</div>
-                <div className="text-lg font-semibold text-purple-200">{managedStats ? fmtRate(managedStats.tp1TouchRate, 1) : '--'}</div>
+                <div className="text-lg font-semibold text-purple-200">
+                  {verifiableStats 
+                    ? `${verifiableStats.signalRates.tp1TouchRate.pct.toFixed(1)}%` 
+                    : managedStats ? fmtRate(managedStats.tp1TouchRate, 1) : '--'}
+                </div>
                 <div className="text-[10px] text-purple-300/60">Any TP1 hit</div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -605,11 +693,11 @@ export default function ExtendedOutcomePage() {
               </div>
             </div>
             
-            {/* Win rate comparison note */}
+            {/* Win rate comparison note - Self-verifying (Step 2) */}
             <div className="mt-3 text-xs">
-              <div className="flex gap-4 text-white/60">
-                <span>A) Signal Win Rate: <strong className="text-white">{stats ? fmtRate(stats.winRate, 1) : '--'}</strong> (TP1 counts as win)</span>
-                <span>B) Managed Win Rate: <strong className="text-cyan-300">{managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</strong> (Option B, official)</span>
+              <div className="flex gap-4 text-white/60 flex-wrap">
+                <span>A) Signal Win Rate: <strong className="text-white">{verifiableStats ? `${verifiableStats.signalRates.winRate.pct.toFixed(1)}%` : stats ? fmtRate(stats.winRate, 1) : '--'}</strong> <span className="text-white/40">({verifiableStats?.signalRates.winRate.label})</span></span>
+                <span>B) Managed Win Rate: <strong className="text-cyan-300">{verifiableStats ? `${verifiableStats.managedRates.winRate.pct.toFixed(1)}%` : managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</strong> <span className="text-white/40">({verifiableStats?.managedRates.winRate.label})</span></span>
               </div>
             </div>
           </>

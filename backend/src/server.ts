@@ -3235,6 +3235,202 @@ app.get('/api/extended-outcomes/managed-stats', async (req, res) => {
   }
 });
 
+/**
+ * Self-verifying stats endpoint (Step 2)
+ * Returns counts + denominators for every percentage
+ */
+app.get('/api/stats/verifiable', async (req, res) => {
+  try {
+    const start = Number((req.query as any)?.start);
+    const end = Number((req.query as any)?.end);
+    const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
+    const category = String((req.query as any)?.category || '').trim() || undefined;
+    const direction = String((req.query as any)?.direction || '').trim() || undefined;
+
+    const d = getDb();
+    
+    // Build WHERE clause
+    const conditions: string[] = [];
+    const values: any[] = [];
+
+    if (start !== undefined && Number.isFinite(start)) {
+      conditions.push('eo.signal_time >= ?');
+      values.push(start);
+    }
+    if (end !== undefined && Number.isFinite(end)) {
+      conditions.push('eo.signal_time <= ?');
+      values.push(end);
+    }
+    if (symbol) {
+      conditions.push('eo.symbol = ?');
+      values.push(symbol.toUpperCase());
+    }
+    if (category) {
+      conditions.push('eo.category = ?');
+      values.push(category);
+    }
+    if (direction) {
+      conditions.push('eo.direction = ?');
+      values.push(direction);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Get all counts in a single query
+    const stats = await d.prepare(`
+      SELECT
+        -- Totals
+        COUNT(*) as total_signals,
+        SUM(CASE WHEN eo.completed_at IS NOT NULL THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN eo.completed_at IS NULL THEN 1 ELSE 0 END) as pending,
+        
+        -- Signal outcome counts
+        SUM(CASE WHEN eo.status = 'WIN_TP2' THEN 1 ELSE 0 END) as win_tp2,
+        SUM(CASE WHEN eo.status = 'WIN_TP1' THEN 1 ELSE 0 END) as win_tp1,
+        SUM(CASE WHEN eo.status = 'LOSS_STOP' THEN 1 ELSE 0 END) as loss_stop,
+        SUM(CASE WHEN eo.status = 'FLAT_TIMEOUT_24H' THEN 1 ELSE 0 END) as flat_timeout,
+        SUM(CASE WHEN eo.status = 'NO_TRADE' THEN 1 ELSE 0 END) as no_trade,
+        SUM(CASE WHEN eo.status = 'ACHIEVED_TP1' THEN 1 ELSE 0 END) as achieved_tp1,
+        
+        -- TP touch counts (for rates)
+        SUM(CASE WHEN eo.first_tp1_at IS NOT NULL THEN 1 ELSE 0 END) as tp1_touched,
+        SUM(CASE WHEN eo.tp2_at IS NOT NULL THEN 1 ELSE 0 END) as tp2_touched,
+        
+        -- Managed counts
+        SUM(CASE WHEN eo.ext24_managed_r IS NOT NULL THEN 1 ELSE 0 END) as managed_closed,
+        SUM(CASE WHEN eo.ext24_managed_r > 0 THEN 1 ELSE 0 END) as managed_wins,
+        SUM(CASE WHEN eo.ext24_managed_r < 0 THEN 1 ELSE 0 END) as managed_losses,
+        SUM(CASE WHEN eo.ext24_managed_r = 0 AND eo.ext24_managed_status IS NOT NULL THEN 1 ELSE 0 END) as managed_be,
+        SUM(CASE WHEN eo.ext24_runner_exit_reason = 'BREAK_EVEN' THEN 1 ELSE 0 END) as be_saves,
+        SUM(CASE WHEN eo.ext24_runner_exit_reason = 'TIMEOUT_MARKET' THEN 1 ELSE 0 END) as timeout_exits,
+        SUM(CASE WHEN eo.ext24_runner_exit_reason = 'TP2' THEN 1 ELSE 0 END) as tp2_hits,
+        
+        -- Averages
+        AVG(eo.time_to_tp1_seconds) as avg_time_to_tp1,
+        AVG(eo.max_favorable_excursion_pct) as avg_mfe_pct,
+        AVG(eo.max_adverse_excursion_pct) as avg_mae_pct,
+        AVG(eo.ext24_managed_r) as avg_managed_r,
+        SUM(eo.ext24_managed_r) as total_managed_r
+      FROM extended_outcomes eo
+      ${whereClause}
+    `).get(...values) as any;
+
+    // Parse counts
+    const totalSignals = Number(stats.total_signals) || 0;
+    const completed = Number(stats.completed) || 0;
+    const pending = Number(stats.pending) || 0;
+    const winTp2 = Number(stats.win_tp2) || 0;
+    const winTp1 = Number(stats.win_tp1) || 0;
+    const lossStop = Number(stats.loss_stop) || 0;
+    const flatTimeout = Number(stats.flat_timeout) || 0;
+    const noTrade = Number(stats.no_trade) || 0;
+    const tp1Touched = Number(stats.tp1_touched) || 0;
+    const tp2Touched = Number(stats.tp2_touched) || 0;
+    const managedClosed = Number(stats.managed_closed) || 0;
+    const managedWins = Number(stats.managed_wins) || 0;
+    const managedLosses = Number(stats.managed_losses) || 0;
+    const managedBE = Number(stats.managed_be) || 0;
+    const beSaves = Number(stats.be_saves) || 0;
+    const timeoutExits = Number(stats.timeout_exits) || 0;
+    const tp2Hits = Number(stats.tp2_hits) || 0;
+
+    // Calculate rates with explicit numerators/denominators
+    const wins = winTp1 + winTp2;
+    
+    const response = {
+      ok: true,
+      
+      // Totals
+      totals: {
+        totalSignals,
+        completedSignals: completed,
+        pendingSignals: pending,
+      },
+      
+      // Signal outcome counts (the canonical buckets)
+      signalCounts: {
+        winTp1,
+        winTp2,
+        lossStop,
+        flatTimeout,
+        noTrade,
+        achievedTp1: Number(stats.achieved_tp1) || 0,
+      },
+      
+      // Signal rates with num/den
+      signalRates: {
+        winRate: {
+          pct: completed > 0 ? Number(((wins / completed) * 100).toFixed(1)) : 0,
+          num: wins,
+          den: completed,
+          label: `${wins} / ${completed} completed`
+        },
+        tp1TouchRate: {
+          pct: totalSignals > 0 ? Number(((tp1Touched / totalSignals) * 100).toFixed(1)) : 0,
+          num: tp1Touched,
+          den: totalSignals,
+          label: `${tp1Touched} / ${totalSignals} total`
+        },
+        tp2Conversion: {
+          pct: tp1Touched > 0 ? Number(((tp2Touched / tp1Touched) * 100).toFixed(1)) : 0,
+          num: tp2Touched,
+          den: tp1Touched,
+          label: `${tp2Touched} / ${tp1Touched} touched TP1`
+        },
+      },
+      
+      // Managed outcome counts
+      managedCounts: {
+        closed: managedClosed,
+        wins: managedWins,
+        losses: managedLosses,
+        breakeven: managedBE,
+        beSaves,
+        timeoutExits,
+        tp2Hits,
+      },
+      
+      // Managed rates with num/den
+      managedRates: {
+        winRate: {
+          pct: managedClosed > 0 ? Number(((managedWins / managedClosed) * 100).toFixed(1)) : 0,
+          num: managedWins,
+          den: managedClosed,
+          label: `${managedWins} / ${managedClosed} closed`
+        },
+        beRate: {
+          pct: managedClosed > 0 ? Number(((managedBE / managedClosed) * 100).toFixed(1)) : 0,
+          num: managedBE,
+          den: managedClosed,
+          label: `${managedBE} / ${managedClosed} closed`
+        },
+      },
+      
+      // Performance metrics
+      performance: {
+        totalManagedR: Number(stats.total_managed_r) || 0,
+        avgManagedR: Number(stats.avg_managed_r) || 0,
+        avgTimeToTp1Seconds: stats.avg_time_to_tp1,
+        avgMfePct: stats.avg_mfe_pct,
+        avgMaePct: stats.avg_mae_pct,
+      },
+      
+      // Verification checksum
+      verification: {
+        // These should match: completed = winTp1 + winTp2 + lossStop + flatTimeout + noTrade
+        completedCheck: completed,
+        sumOfOutcomes: winTp1 + winTp2 + lossStop + flatTimeout + noTrade,
+        matches: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade),
+      }
+    };
+
+    res.json(response);
+  } catch (e: any) {
+    console.error('[api/stats/verifiable] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), details: e?.message });
+  }
+});
+
 app.post('/api/extended-outcomes/backfill', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   try {
