@@ -31,6 +31,20 @@ interface GateConfig {
   name?: string;
 }
 
+// Self-verifying rate with numerator/denominator (Step 2/3)
+interface RateWithDenom {
+  pct: number;
+  num: number;
+  den: number;
+  label: string;
+}
+
+// Throughput metric with value and label (Step 3)
+interface ThroughputMetric {
+  value: number;
+  label: string;
+}
+
 interface BacktestResult {
   config: GateConfig;
   summary: {
@@ -39,16 +53,23 @@ interface BacktestResult {
     blocked: number;
     reductionPct: number;
     targetMet: boolean;
+    // Self-verifying kept rate (Step 3)
+    keptRate: RateWithDenom;
   };
   performance: {
     wins: number;
     losses: number;
     be: number;
     pending: number;
-    winRate: number;
+    closed: number;
+    // Self-verifying win rate (Step 3)
+    winRate: RateWithDenom;
     totalR: number;
     avgR: number;
     medianR: number;
+    // Throughput metrics (Step 3)
+    rPer100Scanned: ThroughputMetric;
+    tradesPer100Scanned: ThroughputMetric;
   };
   quality: {
     high: number;
@@ -369,7 +390,39 @@ export function GateBacktestComparison() {
         </div>
       </div>
 
-      {/* Results Table */}
+      {/* Best Badges (Step 3) */}
+      {results && results.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {(() => {
+            // Calculate best expectancy (R/100 scanned)
+            const bestExpectancy = results.reduce((best, r, i) => 
+              r.performance.rPer100Scanned.value > best.value ? { value: r.performance.rPer100Scanned.value, index: i, name: r.config.name } : best,
+              { value: -Infinity, index: -1, name: '' }
+            );
+            // Calculate best frequency (Trades/100 scanned)
+            const bestFrequency = results.reduce((best, r, i) => 
+              r.performance.tradesPer100Scanned.value > best.value ? { value: r.performance.tradesPer100Scanned.value, index: i, name: r.config.name } : best,
+              { value: -Infinity, index: -1, name: '' }
+            );
+            return (
+              <>
+                {bestExpectancy.index >= 0 && (
+                  <span className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-medium">
+                    🏆 Best Expectancy (R/100): {bestExpectancy.name} ({bestExpectancy.value.toFixed(1)}R)
+                  </span>
+                )}
+                {bestFrequency.index >= 0 && (
+                  <span className="px-2 py-1 rounded bg-blue-500/20 text-blue-300 text-xs font-medium">
+                    📈 Best Frequency: {bestFrequency.name} ({bestFrequency.value.toFixed(1)} trades)
+                  </span>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Results Table - Step 3: Self-verifying with throughput metrics */}
       {results && (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -377,11 +430,10 @@ export function GateBacktestComparison() {
               <tr className="text-white/50 border-b border-white/10">
                 <th className="text-left py-2">Config</th>
                 <th className="text-right py-2">Kept</th>
-                <th className="text-right py-2">Blocked</th>
                 <th className="text-right py-2">Win Rate</th>
                 <th className="text-right py-2">Total R</th>
-                <th className="text-right py-2">Avg R</th>
-                <th className="text-right py-2">Median R</th>
+                <th className="text-right py-2 text-emerald-300">R / 100 Scanned</th>
+                <th className="text-right py-2 text-blue-300">Trades / 100 Scanned</th>
                 <th className="text-center py-2">Quality</th>
               </tr>
             </thead>
@@ -396,28 +448,29 @@ export function GateBacktestComparison() {
                 >
                   <td className="py-2 font-medium">{r.config.name}</td>
                   <td className="text-right py-2">
-                    {r.summary.allowed}
-                    <span className="text-white/50">({(100 - r.summary.reductionPct).toFixed(0)}%)</span>
-                  </td>
-                  <td className="text-right py-2 text-rose-300">
-                    {r.summary.blocked}
-                    <span className="text-white/50">({r.summary.reductionPct.toFixed(0)}%)</span>
+                    <span className="text-white">{r.summary.keptRate?.pct ?? (100 - r.summary.reductionPct).toFixed(0)}%</span>
+                    <span className="text-white/40 text-[10px] block">{r.summary.keptRate?.label ?? `${r.summary.allowed} / ${r.summary.totalSignals}`}</span>
                   </td>
                   <td className="text-right py-2">
-                    <span className={r.performance.winRate >= 0.5 ? 'text-emerald-300' : 'text-amber-300'}>
-                      {(r.performance.winRate * 100).toFixed(1)}%
+                    <span className={r.performance.winRate.pct >= 50 ? 'text-emerald-300' : 'text-amber-300'}>
+                      {r.performance.winRate.pct.toFixed(1)}%
                     </span>
+                    <span className="text-white/40 text-[10px] block">{r.performance.winRate.label}</span>
                   </td>
                   <td className="text-right py-2 font-medium">
                     <span className={r.performance.totalR >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
                       {r.performance.totalR >= 0 ? '+' : ''}{r.performance.totalR.toFixed(2)}R
                     </span>
                   </td>
-                  <td className="text-right py-2 text-white/70">
-                    {r.performance.avgR >= 0 ? '+' : ''}{r.performance.avgR.toFixed(2)}R
+                  <td className="text-right py-2">
+                    <span className={r.performance.rPer100Scanned.value >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
+                      {r.performance.rPer100Scanned.value >= 0 ? '+' : ''}{r.performance.rPer100Scanned.value.toFixed(1)}R
+                    </span>
+                    <span className="text-white/40 text-[10px] block">{r.performance.rPer100Scanned.label}</span>
                   </td>
-                  <td className="text-right py-2 text-white/70">
-                    {r.performance.medianR >= 0 ? '+' : ''}{r.performance.medianR.toFixed(2)}R
+                  <td className="text-right py-2">
+                    <span className="text-blue-300">{r.performance.tradesPer100Scanned.value.toFixed(1)}</span>
+                    <span className="text-white/40 text-[10px] block">{r.performance.tradesPer100Scanned.label}</span>
                   </td>
                   <td className="text-center py-2">
                     <div className="flex justify-center gap-1">

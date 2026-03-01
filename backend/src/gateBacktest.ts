@@ -10,8 +10,28 @@ import { classifyOutcome, getDirectionFromCategory } from './outcomeAnalysis.js'
 import { getSymbolTier } from './symbolTierStore.js';
 import type { Signal } from './types.js';
 
+// Helper to format numbers
+function fmt(n: number, digits = 2): string {
+  if (!Number.isFinite(n)) return '0';
+  return n.toFixed(digits);
+}
+
 export interface BacktestConfig extends GateConfig {
   name?: string;
+}
+
+// Rate with denominator for self-verifying stats (Step 3)
+export interface RateWithDenom {
+  pct: number;
+  num: number;
+  den: number;
+  label: string;
+}
+
+// Throughput metric with value and label
+export interface ThroughputMetric {
+  value: number;
+  label: string;
 }
 
 export interface BacktestResult {
@@ -22,16 +42,23 @@ export interface BacktestResult {
     blocked: number;
     reductionPct: number;
     targetMet: boolean;
+    // Self-verifying rates (Step 3)
+    keptRate: RateWithDenom;  // allowed / totalSignals
   };
   performance: {
     wins: number;
     losses: number;
     be: number;
     pending: number;
-    winRate: number;
+    closed: number;  // wins + losses + be
+    // Self-verifying win rate (Step 3)
+    winRate: RateWithDenom;
     totalR: number;
     avgR: number;
     medianR: number;
+    // Throughput metrics (Step 3)
+    rPer100Scanned: ThroughputMetric;  // (totalR / totalSignals) * 100
+    tradesPer100Scanned: ThroughputMetric;  // (allowed / totalSignals) * 100
   };
   quality: {
     high: number;
@@ -197,6 +224,17 @@ export async function runGateBacktest(
       : sortedR[Math.floor(sortedR.length / 2)]
     : 0;
 
+  // Step 3: Calculate throughput metrics with self-verifying counts
+  const rPer100Scanned: ThroughputMetric = {
+    value: total > 0 ? (totalR / total) * 100 : 0,
+    label: `${fmt(totalR)}R / ${total} scanned`,
+  };
+  
+  const tradesPer100Scanned: ThroughputMetric = {
+    value: total > 0 ? (allowed / total) * 100 : 0,
+    label: `${allowed} kept / ${total} scanned`,
+  };
+
   return {
     config: explicitConfig,
     summary: {
@@ -205,16 +243,33 @@ export async function runGateBacktest(
       blocked,
       reductionPct: total > 0 ? (blocked / total) * 100 : 0,
       targetMet: total > 0 && (blocked / total) >= 0.40 && (blocked / total) <= 0.60,
+      // Self-verifying kept rate (Step 3)
+      keptRate: {
+        pct: total > 0 ? Number(((allowed / total) * 100).toFixed(1)) : 0,
+        num: allowed,
+        den: total,
+        label: `${allowed} / ${total} scanned`,
+      },
     },
     performance: {
       wins,
       losses,
       be,
       pending,
-      winRate: completed > 0 ? wins / completed : 0,
+      closed: completed,
+      // Self-verifying win rate (Step 3)
+      winRate: {
+        pct: completed > 0 ? Number(((wins / completed) * 100).toFixed(1)) : 0,
+        num: wins,
+        den: completed,
+        label: `${wins} / ${completed} closed`,
+      },
       totalR,
       avgR: rs.length > 0 ? totalR / rs.length : 0,
       medianR,
+      // Throughput metrics (Step 3)
+      rPer100Scanned,
+      tradesPer100Scanned,
     },
     quality: { high, medium, low },
     blockedReasons,
