@@ -4636,4 +4636,158 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
   res.json({ ok: true, fixed, signals: signals.map(s => ({ symbol: s.symbol, id: s.id })) });
 });
 
+/**
+ * Debug endpoint: Backfill NO_TRADE status for signals that never confirmed
+ * Finds signals with EXPIRED_NO_ENTRY delayed entry status that are currently marked as LOSS_STOP
+ * and updates them to NO_TRADE (0R instead of -1R)
+ */
+app.post('/api/debug/backfill-no-trade', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  const { dryRun = true } = req.body || {};
+  
+  try {
+    // Find all delayed entry records that expired without confirmation
+    const expiredRecords = await d.prepare(`
+      SELECT 
+        der.signal_id,
+        der.symbol,
+        der.status as delayed_status,
+        eo.id as outcome_id,
+        eo.status as outcome_status,
+        eo.ext24_managed_r
+      FROM delayed_entry_records der
+      JOIN extended_outcomes eo ON eo.signal_id = der.signal_id
+      WHERE der.status IN ('EXPIRED_NO_ENTRY', 'CANCELLED')
+        AND eo.status != 'NO_TRADE'
+    `).all();
+    
+    console.log(`[debug/backfill-no-trade] Found ${expiredRecords.length} signals that never confirmed`);
+    
+    let updated = 0;
+    const updates = [];
+    
+    for (const record of expiredRecords) {
+      const { signal_id, symbol, delayed_status, outcome_id, outcome_status, ext24_managed_r } = record;
+      
+      updates.push({
+        signalId: signal_id,
+        symbol,
+        delayedStatus: delayed_status,
+        oldOutcomeStatus: outcome_status,
+        oldManagedR: ext24_managed_r,
+        newOutcomeStatus: 'NO_TRADE',
+        newManagedR: 0
+      });
+      
+      if (!dryRun) {
+        // Update extended outcome to NO_TRADE
+        await d.prepare(`
+          UPDATE extended_outcomes SET
+            status = 'NO_TRADE',
+            ext24_managed_status = 'NO_TRADE',
+            ext24_managed_r = 0,
+            ext24_managed_pnl_usd = 0,
+            ext24_realized_r = 0,
+            ext24_runner_exit_reason = NULL,
+            updated_at = ?
+          WHERE id = ?
+        `).run(Date.now(), outcome_id);
+        
+        // Also update signal_outcomes if exists
+        await d.prepare(`
+          UPDATE signal_outcomes 
+          SET outcome = 'NO_TRADE', updated_at = ?
+          WHERE signal_id = ?
+        `).run(new Date().toISOString(), signal_id);
+        
+        updated++;
+      }
+    }
+    
+    res.json({ 
+      ok: true, 
+      dryRun,
+      found: expiredRecords.length,
+      updated,
+      updates: updates.slice(0, 20) // Return first 20 for inspection
+    });
+    
+  } catch (error) {
+    console.error('[debug/backfill-no-trade] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
+ */
+app.post('/api/debug/reevaluate-signal', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const { signalId } = req.body || {};
+  
+  if (!signalId) {
+    return res.status(400).json({ ok: false, error: 'signalId required' });
+  }
+  
+  try {
+    const d = getDb();
+    
+    // Get signal details
+    const signal = await d.prepare(`
+      SELECT * FROM signals WHERE id = ?
+    `).get(signalId) as any;
+    
+    if (!signal) {
+      return res.status(404).json({ ok: false, error: 'Signal not found' });
+    }
+    
+    // Get delayed entry record
+    const { getDelayedEntryRecordBySignalId } = await import('./delayedEntry.js');
+    const delayedRecord = await getDelayedEntryRecordBySignalId(Number(signalId));
+    
+    // Get current outcome
+    const currentOutcome = await d.prepare(`
+      SELECT * FROM extended_outcomes WHERE signal_id = ?
+    `).get(signalId);
+    
+    // Force re-evaluation by clearing completed_at temporarily
+    await d.prepare(`
+      UPDATE extended_outcomes 
+      SET completed_at = NULL, status = 'PENDING'
+      WHERE signal_id = ?
+    `).run(signalId);
+    
+    // Re-evaluate
+    const { evaluateAndUpdateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+    
+    const result = await evaluateAndUpdateExtendedOutcome({
+      signalId: Number(signalId),
+      symbol: signal.symbol,
+      category: signal.category,
+      direction: signal.category.includes('SHORT') ? 'SHORT' : 'LONG',
+      signalTime: signal.time,
+      entryPrice: signal.price,
+      stopPrice: signal.stop_price,
+      tp1Price: signal.tp1_price,
+      tp2Price: signal.tp2_price,
+    });
+    
+    res.json({
+      ok: true,
+      signalId,
+      symbol: signal.symbol,
+      delayedEntryStatus: delayedRecord?.status || 'NO_RECORD',
+      previousStatus: currentOutcome?.status,
+      newStatus: result.status,
+      newManagedR: result.managedPnl.managedR,
+      completed: result.completed
+    });
+    
+  } catch (error) {
+    console.error('[debug/reevaluate-signal] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
 export { app };
