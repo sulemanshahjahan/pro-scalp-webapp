@@ -17,6 +17,7 @@ import type { Signal, OHLCV } from './types.js';
 import { klinesFrom, klinesRange } from './binance.js';
 import { getDb } from './db/db.js';
 import { evaluateManagedPnl, ManagedPnlResult, ManagedPnlInput, getRiskPerTradeUsd } from './managedPnlEvaluator.js';
+import { getDelayedEntryRecordBySignalId, type DelayedEntryRecord } from './delayedEntry.js';
 
 // Constants
 const EXTENDED_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -560,14 +561,144 @@ export async function evaluateExtended24hOutcome(
   const expiresAt = signalTime + EXTENDED_WINDOW_MS;
   const now = Date.now();
 
-  // TEMPORARILY DISABLED: Checking delayed entry confirmation
-  // TODO: Re-enable with proper logic for both LONG and SHORT signals
-  // const d = getDb();
-  // const delayedRecord = await d.prepare(`
-  //   SELECT status FROM delayed_entry_records 
-  //   WHERE signal_id = ?
-  // `).get(signalId) as { status: string } | null;
-  // ...
+  // Check delayed entry status to determine if this signal should be evaluated
+  // If signal never confirmed (EXPIRED_NO_ENTRY or CANCELLED), mark as NO_TRADE (0R)
+  const delayedRecord = await getDelayedEntryRecordBySignalId(signalId);
+  
+  if (delayedRecord) {
+    if (delayedRecord.status === 'EXPIRED_NO_ENTRY' || delayedRecord.status === 'CANCELLED') {
+      // Signal never confirmed - this is a NO_TRADE (0R, not a loss)
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} never confirmed (${delayedRecord.status}) - marking as NO_TRADE`);
+      
+      const noTradeResult: EvaluationResult = {
+        status: 'NO_TRADE',
+        completed: true,
+        firstTp1At: null,
+        tp2At: null,
+        stopAt: null,
+        timeToFirstHitSeconds: null,
+        timeToTp1Seconds: null,
+        timeToTp2Seconds: null,
+        timeToStopSeconds: null,
+        maxFavorableExcursionPct: 0,
+        maxAdverseExcursionPct: 0,
+        coveragePct: 0,
+        nCandlesEvaluated: 0,
+        nCandlesExpected: 0,
+        debug: {
+          candlesProcessed: 0,
+          stopHitCandleIndex: null,
+          tp1HitCandleIndex: null,
+          tp2HitCandleIndex: null,
+          sameCandleConflicts: [],
+          coverageCalc: {
+            signalTime,
+            windowEnd: signalTime,
+            windowDurationMs: 0,
+            expectedCandles: 0,
+            actualCandles: 0,
+            coveragePct: 0,
+            windowExpired: true,
+            completedEarly: false,
+            minCoverageRequired: 80,
+            coverageCheckPassed: true,
+          },
+        },
+        managedPnl: {
+          managedStatus: 'NO_TRADE',
+          managedR: 0,  // 0R - no loss, no gain
+          managedPnlUsd: 0,
+          realizedR: 0,
+          unrealizedRunnerR: null,
+          liveManagedR: 0,
+          tp1PartialAt: null,
+          runnerBeAt: null,
+          runnerExitAt: null,
+          runnerExitReason: null,
+          timeoutExitPrice: null,
+          riskUsdSnapshot: getRiskPerTradeUsd(),
+          debug: {
+            fullPositionStopHit: false,
+            fullPositionStopTime: null,
+            runnerActive: false,
+            runnerStopPrice: null,
+            lastEvaluatedPrice: null,
+            sameCandleConflicts: [],
+          },
+        },
+      };
+      
+      return noTradeResult;
+    }
+    
+    if (delayedRecord.status === 'WATCH') {
+      // Signal is still pending confirmation - don't evaluate yet
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} still in WATCH status - deferring evaluation`);
+      
+      const pendingResult: EvaluationResult = {
+        status: 'PENDING',
+        completed: false,
+        firstTp1At: null,
+        tp2At: null,
+        stopAt: null,
+        timeToFirstHitSeconds: null,
+        timeToTp1Seconds: null,
+        timeToTp2Seconds: null,
+        timeToStopSeconds: null,
+        maxFavorableExcursionPct: 0,
+        maxAdverseExcursionPct: 0,
+        coveragePct: 0,
+        nCandlesEvaluated: 0,
+        nCandlesExpected: Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS),
+        debug: {
+          candlesProcessed: 0,
+          stopHitCandleIndex: null,
+          tp1HitCandleIndex: null,
+          tp2HitCandleIndex: null,
+          sameCandleConflicts: [],
+          coverageCalc: {
+            signalTime,
+            windowEnd: signalTime,
+            windowDurationMs: 0,
+            expectedCandles: Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS),
+            actualCandles: 0,
+            coveragePct: 0,
+            windowExpired: false,
+            completedEarly: false,
+            minCoverageRequired: 80,
+            coverageCheckPassed: false,
+          },
+        },
+        managedPnl: {
+          managedStatus: 'PENDING',
+          managedR: null,
+          managedPnlUsd: null,
+          realizedR: 0,
+          unrealizedRunnerR: null,
+          liveManagedR: 0,
+          tp1PartialAt: null,
+          runnerBeAt: null,
+          runnerExitAt: null,
+          runnerExitReason: null,
+          timeoutExitPrice: null,
+          riskUsdSnapshot: getRiskPerTradeUsd(),
+          debug: {
+            fullPositionStopHit: false,
+            fullPositionStopTime: null,
+            runnerActive: false,
+            runnerStopPrice: null,
+            lastEvaluatedPrice: null,
+            sameCandleConflicts: [],
+          },
+        },
+      };
+      
+      return pendingResult;
+    }
+    
+    // Status is 'ENTERED' - proceed with normal evaluation
+    console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} confirmed at ${delayedRecord.confirmedPrice} - proceeding with evaluation`);
+  }
 
   // Load candles if not provided
   let evaluationCandles: OHLCV[];

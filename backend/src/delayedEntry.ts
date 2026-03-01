@@ -244,6 +244,64 @@ export async function getActiveWatches(limit: number = 200): Promise<DelayedEntr
 }
 
 /**
+ * Get delayed entry record by signal ID
+ * Used by extended outcome evaluation to determine if signal confirmed
+ */
+export async function getDelayedEntryRecordBySignalId(
+  signalId: number
+): Promise<DelayedEntryRecord | null> {
+  const d = getDb();
+  
+  const row = await d.prepare(`
+    SELECT 
+      signal_id as signalId,
+      symbol,
+      direction,
+      reference_price as referencePrice,
+      target_confirm_price as targetConfirmPrice,
+      watch_started_at as watchStartedAt,
+      watch_expires_at as watchExpiresAt,
+      status,
+      confirmed_at as confirmedAt,
+      confirmed_price as confirmedPrice,
+      confirmed_stop_price as confirmedStopPrice,
+      confirmed_tp1_price as confirmedTp1Price,
+      confirmed_tp2_price as confirmedTp2Price,
+      reason,
+      original_stop as originalStop,
+      original_tp1 as originalTp1,
+      original_tp2 as originalTp2
+    FROM delayed_entry_records
+    WHERE signal_id = ?
+  `).get(signalId) as any | null;
+  
+  if (!row) return null;
+  
+  const record: DelayedEntryRecord = {
+    signalId: Number(row.signalId),
+    symbol: String(row.symbol),
+    direction: String(row.direction) as 'LONG' | 'SHORT',
+    referencePrice: Number(row.referencePrice),
+    targetConfirmPrice: Number(row.targetConfirmPrice),
+    watchStartedAt: Number(row.watchStartedAt),
+    watchExpiresAt: Number(row.watchExpiresAt),
+    status: String(row.status) as DelayedEntryStatus,
+    confirmedAt: row.confirmedAt ? Number(row.confirmedAt) : undefined,
+    confirmedPrice: row.confirmedPrice ? Number(row.confirmedPrice) : undefined,
+    confirmedStopPrice: row.confirmedStopPrice ? Number(row.confirmedStopPrice) : undefined,
+    confirmedTp1Price: row.confirmedTp1Price ? Number(row.confirmedTp1Price) : undefined,
+    confirmedTp2Price: row.confirmedTp2Price ? Number(row.confirmedTp2Price) : undefined,
+    reason: row.reason ? String(row.reason) : undefined,
+  };
+  // Store original TP/SL for recalculation
+  (record as any).originalStop = row.originalStop ? Number(row.originalStop) : null;
+  (record as any).originalTp1 = row.originalTp1 ? Number(row.originalTp1) : null;
+  (record as any).originalTp2 = row.originalTp2 ? Number(row.originalTp2) : null;
+  
+  return record;
+}
+
+/**
  * Main watcher loop - check all active watches
  */
 export async function runDelayedEntryWatcher(): Promise<{

@@ -245,6 +245,26 @@ export function evaluateManagedPnl(
     sameCandleConflicts: [],
   };
 
+  // Handle NO_TRADE status - signal never confirmed, no trade taken
+  if (status === 'NO_TRADE') {
+    console.log('[managed-pnl] NO_TRADE status - returning 0R');
+    return {
+      managedStatus: 'NO_TRADE',
+      managedR: 0,  // 0R - no loss, no gain
+      managedPnlUsd: 0,
+      realizedR: 0,
+      unrealizedRunnerR: null,
+      liveManagedR: 0,
+      tp1PartialAt: null,
+      runnerBeAt: null,
+      runnerExitAt: null,
+      runnerExitReason: null,
+      timeoutExitPrice: null,
+      riskUsdSnapshot: RISK_PER_TRADE_USD,
+      debug,
+    };
+  }
+
   // Validate required prices
   const hasStop = Number.isFinite(stopPrice) && stopPrice !== null && stopPrice > 0;
   const hasTp1 = Number.isFinite(tp1Price) && tp1Price !== null && tp1Price > 0;
