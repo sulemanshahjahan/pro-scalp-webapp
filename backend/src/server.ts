@@ -4734,6 +4734,59 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
 });
 
 /**
+ * Debug endpoint: Check delayed entry stats
+ */
+app.get('/api/debug/delayed-entry-stats', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const d = getDb();
+  
+  try {
+    // Count by status
+    const statusCounts = await d.prepare(`
+      SELECT status, COUNT(*) as count 
+      FROM delayed_entry_records 
+      GROUP BY status
+    `).all();
+    
+    // Get recent records
+    const recent = await d.prepare(`
+      SELECT 
+        signal_id,
+        symbol,
+        status,
+        watch_started_at,
+        watch_expires_at,
+        confirmed_at
+      FROM delayed_entry_records
+      ORDER BY watch_started_at DESC
+      LIMIT 20
+    `).all();
+    
+    // Check for signals with LOSS_STOP that have delayed entry records
+    const lossWithDelayed = await d.prepare(`
+      SELECT 
+        eo.signal_id,
+        eo.symbol,
+        eo.status as outcome_status,
+        der.status as delayed_status
+      FROM extended_outcomes eo
+      JOIN delayed_entry_records der ON der.signal_id = eo.signal_id
+      WHERE eo.status = 'LOSS_STOP'
+      LIMIT 10
+    `).all();
+    
+    res.json({
+      ok: true,
+      statusCounts,
+      recentRecords: recent,
+      lossWithDelayed: lossWithDelayed
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
  * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
  */
 app.post('/api/debug/reevaluate-signal', async (req, res) => {
