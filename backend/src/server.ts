@@ -4658,9 +4658,11 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
 app.post('/api/debug/backfill-no-trade', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
-  const { dryRun = true, includeWatch = false } = req.body || {};
+  const body = req.body || {};
+  // Force boolean - handle both boolean false and string "false"
+  const dryRun = body.dryRun === false || body.dryRun === 'false' ? false : (body.dryRun !== undefined ? body.dryRun : true);
   
-  console.log(`[debug/backfill-no-trade] dryRun=${dryRun}, type=${typeof dryRun}, body=`, req.body);
+  console.log(`[debug/backfill-no-trade] dryRun=${dryRun}, original=`, body.dryRun, 'type=', typeof body.dryRun);
   
   try {
     // Find all delayed entry records that expired without confirmation
