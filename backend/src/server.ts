@@ -4660,6 +4660,8 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
   const d = getDb();
   const { dryRun = true, includeWatch = false } = req.body || {};
   
+  console.log(`[debug/backfill-no-trade] dryRun=${dryRun}, type=${typeof dryRun}, body=`, req.body);
+  
   try {
     // Find all delayed entry records that expired without confirmation
     // OR are still in WATCH but have LOSS_STOP outcomes (never confirmed but marked as loss)
