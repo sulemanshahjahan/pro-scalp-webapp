@@ -3415,12 +3415,89 @@ app.get('/api/stats/verifiable', async (req, res) => {
         avgMaePct: stats.avg_mae_pct,
       },
       
-      // Verification checksum
+      // Outcome breakdown for full transparency (Step 4)
+      breakdown: {
+        // UI-ready list with counts, percentages, and denominators
+        bySignal: [
+          { 
+            key: "winTp2", 
+            label: "WIN TP2", 
+            count: winTp2, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((winTp2 / totalSignals) * 100).toFixed(1)) : 0,
+            category: "win" 
+          },
+          { 
+            key: "winTp1", 
+            label: "WIN TP1", 
+            count: winTp1, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((winTp1 / totalSignals) * 100).toFixed(1)) : 0,
+            category: "win" 
+          },
+          { 
+            key: "achievedTp1", 
+            label: "ACHIEVED TP1", 
+            count: Number(stats.achieved_tp1) || 0, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number((((Number(stats.achieved_tp1) || 0) / totalSignals) * 100).toFixed(1)) : 0,
+            category: "pending" 
+          },
+          { 
+            key: "lossStop", 
+            label: "LOSS STOP", 
+            count: lossStop, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((lossStop / totalSignals) * 100).toFixed(1)) : 0,
+            category: "loss" 
+          },
+          { 
+            key: "flatTimeout", 
+            label: "NO HIT (24h)", 
+            count: flatTimeout, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((flatTimeout / totalSignals) * 100).toFixed(1)) : 0,
+            category: "neutral" 
+          },
+          { 
+            key: "noTrade", 
+            label: "NO TRADE", 
+            count: noTrade, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((noTrade / totalSignals) * 100).toFixed(1)) : 0,
+            category: "neutral" 
+          },
+          { 
+            key: "pending", 
+            label: "PENDING", 
+            count: pending, 
+            den: totalSignals, 
+            pctOfTotal: totalSignals > 0 ? Number(((pending / totalSignals) * 100).toFixed(1)) : 0,
+            category: "pending" 
+          },
+        ],
+        // Denominators for reference
+        completedDen: completed,
+        totalDen: totalSignals,
+        // Win rate definition reference
+        winRateDefinition: "(WIN_TP1 + WIN_TP2) / completed",
+      },
+      
+      // Verification checksums (Step 4)
       verification: {
-        // These should match: completed = winTp1 + winTp2 + lossStop + flatTimeout + noTrade
+        // Check 1: completed = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1
         completedCheck: completed,
-        sumOfOutcomes: winTp1 + winTp2 + lossStop + flatTimeout + noTrade,
-        matches: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade),
+        sumOfOutcomes: winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0),
+        completedMatches: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0)),
+        
+        // Check 2: total = completed + pending
+        totalCheck: totalSignals,
+        sumOfCompletedAndPending: completed + pending,
+        totalMatches: totalSignals === (completed + pending + noTrade),
+        
+        // Overall verification status
+        allMatch: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0)) 
+                  && totalSignals === (completed + pending),
       }
     };
 

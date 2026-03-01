@@ -180,6 +180,16 @@ interface RateWithDenom {
   label: string;
 }
 
+// Outcome breakdown item for Step 4
+interface BreakdownItem {
+  key: string;
+  label: string;
+  count: number;
+  den: number;
+  pctOfTotal: number;
+  category: 'win' | 'loss' | 'neutral' | 'pending';
+}
+
 interface VerifiableStats {
   ok: boolean;
   totals: {
@@ -220,10 +230,22 @@ interface VerifiableStats {
     avgMfePct: number | null;
     avgMaePct: number | null;
   };
+  // Outcome breakdown (Step 4)
+  breakdown?: {
+    bySignal: BreakdownItem[];
+    completedDen: number;
+    totalDen: number;
+    winRateDefinition: string;
+  };
+  // Verification checksums (Step 4)
   verification: {
     completedCheck: number;
     sumOfOutcomes: number;
-    matches: boolean;
+    completedMatches: boolean;
+    totalCheck: number;
+    sumOfCompletedAndPending: number;
+    totalMatches: boolean;
+    allMatch: boolean;
   };
 }
 
@@ -553,6 +575,83 @@ export default function ExtendedOutcomePage() {
           loading={statsLoading}
         />
       </section>
+
+      {/* Outcome Breakdown (Step 4) - Full distribution with verification */}
+      {verifiableStats?.breakdown && (
+        <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs text-white/60 uppercase tracking-widest">Outcome Breakdown (24h)</div>
+            {/* Verification status badge */}
+            {verifiableStats.verification.allMatch ? (
+              <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px]">
+                ✓ Verified
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px]">
+                ✗ Verification Failed
+              </span>
+            )}
+          </div>
+          
+          {/* Stacked progress bar */}
+          <div className="h-4 bg-white/5 rounded-full overflow-hidden flex mb-3">
+            {verifiableStats.breakdown.bySignal
+              .filter(item => item.count > 0)
+              .map((item) => {
+                const width = (item.count / verifiableStats.breakdown!.totalDen) * 100;
+                const colors = {
+                  win: 'bg-emerald-500',
+                  loss: 'bg-rose-500', 
+                  neutral: 'bg-gray-500',
+                  pending: 'bg-amber-500'
+                };
+                return (
+                  <div
+                    key={item.key}
+                    className={`h-full ${colors[item.category]} transition-all`}
+                    style={{ width: `${width}%` }}
+                    title={`${item.label}: ${item.count} (${item.pctOfTotal}%)`}
+                  />
+                );
+              })}
+          </div>
+          
+          {/* Breakdown list */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            {verifiableStats.breakdown.bySignal
+              .filter(item => item.count > 0 || item.key === 'pending')
+              .map((item) => {
+                const colors = {
+                  win: 'text-emerald-300',
+                  loss: 'text-rose-300',
+                  neutral: 'text-gray-300',
+                  pending: 'text-amber-300'
+                };
+                return (
+                  <div key={item.key} className="flex items-center justify-between rounded bg-white/5 px-2 py-1.5">
+                    <span className="text-xs text-white/60">{item.label}</span>
+                    <div className="text-right">
+                      <span className={`text-sm font-medium ${colors[item.category]}`}>{item.count}</span>
+                      <span className="text-xs text-white/40 ml-1">({item.pctOfTotal}%)</span>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+          
+          {/* Verification details */}
+          <div className="text-[10px] text-white/40 border-t border-white/10 pt-2 flex flex-wrap gap-4">
+            <span>Completed denominator: <strong className="text-white/60">{verifiableStats.breakdown.completedDen}</strong></span>
+            <span>Win-rate: <strong className="text-white/60">{verifiableStats.breakdown.winRateDefinition}</strong></span>
+            {!verifiableStats.verification.completedMatches && (
+              <span className="text-rose-400">⚠ Completed check failed</span>
+            )}
+            {!verifiableStats.verification.totalMatches && (
+              <span className="text-rose-400">⚠ Total check failed</span>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* 240m vs 24h Comparison Stats */}
       <section className="rounded-2xl border border-accent/20 bg-accent/5 p-4">
