@@ -3291,6 +3291,12 @@ app.get('/api/stats/verifiable', async (req, res) => {
         SUM(CASE WHEN eo.status = 'FLAT_TIMEOUT_24H' THEN 1 ELSE 0 END) as flat_timeout,
         SUM(CASE WHEN eo.status = 'NO_TRADE' THEN 1 ELSE 0 END) as no_trade,
         SUM(CASE WHEN eo.status = 'ACHIEVED_TP1' THEN 1 ELSE 0 END) as achieved_tp1,
+        -- Strict pending (only PENDING status, not ACHIEVED_TP1)
+        SUM(CASE WHEN eo.status = 'PENDING' THEN 1 ELSE 0 END) as pending_strict,
+        
+        -- Debug: Check for mismatches between status and completed_at
+        SUM(CASE WHEN eo.completed_at IS NOT NULL AND eo.status IN ('PENDING', 'ACHIEVED_TP1') THEN 1 ELSE 0 END) as mismatch_active_with_completed_at,
+        SUM(CASE WHEN eo.completed_at IS NULL AND eo.status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP', 'FLAT_TIMEOUT_24H', 'NO_TRADE') THEN 1 ELSE 0 END) as mismatch_completed_without_completed_at,
         
         -- TP touch counts (for rates)
         SUM(CASE WHEN eo.first_tp1_at IS NOT NULL THEN 1 ELSE 0 END) as tp1_touched,
@@ -3324,6 +3330,10 @@ app.get('/api/stats/verifiable', async (req, res) => {
     const lossStop = Number(stats.loss_stop) || 0;
     const flatTimeout = Number(stats.flat_timeout) || 0;
     const noTrade = Number(stats.no_trade) || 0;
+    const achievedTp1 = Number(stats.achieved_tp1) || 0;
+    const pendingStrict = Number(stats.pending_strict) || 0;
+    const mismatchActiveWithCompleted = Number(stats.mismatch_active_with_completed_at) || 0;
+    const mismatchCompletedWithoutCompleted = Number(stats.mismatch_completed_without_completed_at) || 0;
     const tp1Touched = Number(stats.tp1_touched) || 0;
     const tp2Touched = Number(stats.tp2_touched) || 0;
     const managedClosed = Number(stats.managed_closed) || 0;
@@ -3339,10 +3349,12 @@ app.get('/api/stats/verifiable', async (req, res) => {
     
     // Verification calculations (Step 4)
     // Note: ACHIEVED_TP1 is NOT completed (still active, waiting for TP2/stop/timeout)
-    const achievedTp1 = Number(stats.achieved_tp1) || 0;
+    // pendingStrict = only PENDING status (not ACHIEVED_TP1)
+    // achievedTp1 = only ACHIEVED_TP1 status
+    // active = pendingStrict + achievedTp1 (all with completed_at IS NULL)
     const sumOfCompleted = winTp1 + winTp2 + lossStop + flatTimeout + noTrade;
-    const sumActive = pending + achievedTp1; // These have completed_at = NULL
-    const sumAllBuckets = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1 + pending;
+    const sumActive = pendingStrict + achievedTp1; // These have completed_at = NULL
+    const sumAllBuckets = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1 + pendingStrict;
     
     const response = {
       ok: true,
@@ -3351,7 +3363,7 @@ app.get('/api/stats/verifiable', async (req, res) => {
       totals: {
         totalSignals,
         completedSignals: completed,
-        pendingSignals: pending,
+        activeSignals: pendingStrict + achievedTp1, // pendingStrict + achievedTp1 (both have completed_at IS NULL)
       },
       
       // Signal outcome counts (the canonical buckets)
@@ -3477,9 +3489,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
           { 
             key: "pending", 
             label: "PENDING", 
-            count: pending, 
+            count: pendingStrict, 
             den: totalSignals, 
-            pctOfTotal: totalSignals > 0 ? Number(((pending / totalSignals) * 100).toFixed(1)) : 0,
+            pctOfTotal: totalSignals > 0 ? Number(((pendingStrict / totalSignals) * 100).toFixed(1)) : 0,
             category: "pending" 
           },
         ],
@@ -3508,6 +3520,24 @@ app.get('/api/stats/verifiable', async (req, res) => {
         
         // Overall verification status
         allMatch: completed === sumOfCompleted && totalSignals === (completed + sumActive),
+        
+        // Debug info to diagnose mismatches
+        debug: {
+          // Raw counts from SQL
+          sqlCompleted: completed,
+          sqlPending: pending,
+          sqlPendingStrict: pendingStrict,
+          sqlAchievedTp1: achievedTp1,
+          // Status bucket counts
+          winTp1, winTp2, lossStop, flatTimeout, noTrade,
+          // Calculated sums
+          sumOfCompleted,
+          sumActive,
+          sumAllBuckets,
+          // Mismatch detection (these should be 0)
+          mismatchActiveWithCompleted,
+          mismatchCompletedWithoutCompleted,
+        }
       }
     };
 

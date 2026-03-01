@@ -195,7 +195,7 @@ interface VerifiableStats {
   totals: {
     totalSignals: number;
     completedSignals: number;
-    pendingSignals: number;
+    activeSignals: number;
   };
   signalCounts: {
     winTp1: number;
@@ -556,7 +556,7 @@ export default function ExtendedOutcomePage() {
         />
         <KpiCard 
           label="Pending / Active" 
-          value={verifiableStats?.totals.pendingSignals ?? stats?.pending ?? '--'} 
+          value={verifiableStats?.totals.activeSignals ?? stats?.pending ?? '--'} 
           sub="Within 24h window"
           loading={statsLoading}
         />
