@@ -152,6 +152,20 @@ const isAllowedOrigin = (origin: string): boolean => {
   return false;
 };
 
+// Handle OPTIONS preflight for debug endpoints BEFORE cors middleware
+app.options('/api/debug/backfill-no-trade', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+app.options('/api/debug/reevaluate-signal', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+
 app.use(cors({
   origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
     if (!origin) return cb(null, true);
@@ -4641,12 +4655,6 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
  * Finds signals with EXPIRED_NO_ENTRY delayed entry status that are currently marked as LOSS_STOP
  * and updates them to NO_TRADE (0R instead of -1R)
  */
-app.options('/api/debug/backfill-no-trade', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.status(204).end();
-});
 app.post('/api/debug/backfill-no-trade', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const d = getDb();
@@ -4728,12 +4736,6 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
 /**
  * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
  */
-app.options('/api/debug/reevaluate-signal', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.status(204).end();
-});
 app.post('/api/debug/reevaluate-signal', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const { signalId } = req.body || {};
