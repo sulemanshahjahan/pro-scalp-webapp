@@ -4641,8 +4641,11 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
  * Finds signals with EXPIRED_NO_ENTRY delayed entry status that are currently marked as LOSS_STOP
  * and updates them to NO_TRADE (0R instead of -1R)
  */
+app.options('/api/debug/backfill-no-trade', cors());
 app.post('/api/debug/backfill-no-trade', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   const d = getDb();
   const { dryRun = true } = req.body || {};
   
@@ -4722,8 +4725,11 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
 /**
  * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
  */
+app.options('/api/debug/reevaluate-signal', cors());
 app.post('/api/debug/reevaluate-signal', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   const { signalId } = req.body || {};
   
   if (!signalId) {
