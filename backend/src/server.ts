@@ -3347,6 +3347,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
     // Calculate rates with explicit numerators/denominators
     const wins = winTp1 + winTp2;
     
+    // Trading win rate denominator (excludes NO_TRADE and FLAT_TIMEOUT - no actual P&L)
+    const actualTrades = wins + lossStop; // Only signals with actual P&L outcome
+    
     // Verification calculations (Step 4)
     // Note: ACHIEVED_TP1 is NOT completed (still active, waiting for TP2/stop/timeout)
     // pendingStrict = only PENDING status (not ACHIEVED_TP1)
@@ -3379,10 +3382,10 @@ app.get('/api/stats/verifiable', async (req, res) => {
       // Signal rates with num/den
       signalRates: {
         winRate: {
-          pct: completed > 0 ? Number(((wins / completed) * 100).toFixed(1)) : 0,
+          pct: actualTrades > 0 ? Number(((wins / actualTrades) * 100).toFixed(1)) : 0,
           num: wins,
-          den: completed,
-          label: `${wins} / ${completed} completed`
+          den: actualTrades,
+          label: `${wins} / ${actualTrades} with P&L`
         },
         tp1TouchRate: {
           pct: totalSignals > 0 ? Number(((tp1Touched / totalSignals) * 100).toFixed(1)) : 0,
@@ -3499,7 +3502,7 @@ app.get('/api/stats/verifiable', async (req, res) => {
         completedDen: completed,
         totalDen: totalSignals,
         // Win rate definition reference
-        winRateDefinition: "(WIN_TP1 + WIN_TP2) / completed",
+        winRateDefinition: "(WIN_TP1 + WIN_TP2) / (WIN_TP1 + WIN_TP2 + LOSS_STOP) - excludes NO_TRADE & FLAT_TIMEOUT",
       },
       
       // Verification checksums (Step 4)
