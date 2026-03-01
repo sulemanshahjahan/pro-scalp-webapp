@@ -3337,6 +3337,13 @@ app.get('/api/stats/verifiable', async (req, res) => {
     // Calculate rates with explicit numerators/denominators
     const wins = winTp1 + winTp2;
     
+    // Verification calculations (Step 4)
+    // Note: ACHIEVED_TP1 is NOT completed (still active, waiting for TP2/stop/timeout)
+    const achievedTp1 = Number(stats.achieved_tp1) || 0;
+    const sumOfCompleted = winTp1 + winTp2 + lossStop + flatTimeout + noTrade;
+    const sumActive = pending + achievedTp1; // These have completed_at = NULL
+    const sumAllBuckets = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1 + pending;
+    
     const response = {
       ok: true,
       
@@ -3354,7 +3361,7 @@ app.get('/api/stats/verifiable', async (req, res) => {
         lossStop,
         flatTimeout,
         noTrade,
-        achievedTp1: Number(stats.achieved_tp1) || 0,
+        achievedTp1: achievedTp1,
       },
       
       // Signal rates with num/den
@@ -3438,9 +3445,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
           { 
             key: "achievedTp1", 
             label: "ACHIEVED TP1", 
-            count: Number(stats.achieved_tp1) || 0, 
+            count: achievedTp1, 
             den: totalSignals, 
-            pctOfTotal: totalSignals > 0 ? Number((((Number(stats.achieved_tp1) || 0) / totalSignals) * 100).toFixed(1)) : 0,
+            pctOfTotal: totalSignals > 0 ? Number(((achievedTp1 / totalSignals) * 100).toFixed(1)) : 0,
             category: "pending" 
           },
           { 
@@ -3485,19 +3492,22 @@ app.get('/api/stats/verifiable', async (req, res) => {
       
       // Verification checksums (Step 4)
       verification: {
-        // Check 1: completed = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1
+        // Check 1: completed signals match sum of completed outcome buckets
         completedCheck: completed,
-        sumOfOutcomes: winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0),
-        completedMatches: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0)),
+        sumOfOutcomes: sumOfCompleted,
+        completedMatches: completed === sumOfCompleted,
         
-        // Check 2: total = completed + pending
+        // Check 2: total = completed + active (pending + achieved_tp1)
         totalCheck: totalSignals,
-        sumOfCompletedAndPending: completed + pending,
-        totalMatches: totalSignals === (completed + pending + noTrade),
+        sumCompletedAndActive: completed + sumActive,
+        totalMatches: totalSignals === (completed + sumActive),
+        
+        // Check 3: all outcome buckets sum to total
+        sumAllBuckets: sumAllBuckets,
+        allBucketsMatch: totalSignals === sumAllBuckets,
         
         // Overall verification status
-        allMatch: completed === (winTp1 + winTp2 + lossStop + flatTimeout + noTrade + (Number(stats.achieved_tp1) || 0)) 
-                  && totalSignals === (completed + pending),
+        allMatch: completed === sumOfCompleted && totalSignals === (completed + sumActive),
       }
     };
 

@@ -243,8 +243,10 @@ interface VerifiableStats {
     sumOfOutcomes: number;
     completedMatches: boolean;
     totalCheck: number;
-    sumOfCompletedAndPending: number;
+    sumCompletedAndActive: number;
     totalMatches: boolean;
+    sumAllBuckets?: number;
+    allBucketsMatch?: boolean;
     allMatch: boolean;
   };
 }
