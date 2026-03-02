@@ -5761,14 +5761,40 @@ app.post('/api/debug/reevaluate-signal', async (req, res) => {
       SELECT * FROM extended_outcomes WHERE signal_id = ?
     `).get(signalId);
     
-    // Force re-evaluation by clearing completed_at temporarily
+    // Force re-evaluation by clearing completed_at and all hit data
     await d.prepare(`
       UPDATE extended_outcomes 
-      SET completed_at = NULL, status = 'PENDING'
+      SET completed_at = NULL, 
+          status = 'PENDING',
+          max_favorable_excursion_pct = NULL,
+          max_adverse_excursion_pct = NULL,
+          first_tp1_at = NULL,
+          tp2_at = NULL,
+          stop_at = NULL,
+          ext24_managed_r = NULL,
+          ext24_managed_status = NULL
       WHERE signal_id = ?
     `).run(signalId);
     
-    // Re-evaluate
+    // Determine which prices to use
+    // If delayed entry confirmed, use confirmed prices; otherwise use original signal prices
+    const isDelayedEntryConfirmed = delayedRecord?.status === 'ENTERED' && delayedRecord?.confirmedPrice;
+    
+    const entryPrice = isDelayedEntryConfirmed ? delayedRecord.confirmedPrice : signal.price;
+    const stopPrice = isDelayedEntryConfirmed && delayedRecord.confirmedStopPrice 
+      ? delayedRecord.confirmedStopPrice 
+      : signal.stop_price;
+    const tp1Price = isDelayedEntryConfirmed && delayedRecord.confirmedTp1Price
+      ? delayedRecord.confirmedTp1Price
+      : signal.tp1_price;
+    const tp2Price = isDelayedEntryConfirmed && delayedRecord.confirmedTp2Price
+      ? delayedRecord.confirmedTp2Price
+      : signal.tp2_price;
+    
+    console.log(`[reevaluate-signal] Signal ${signalId}: Using ${isDelayedEntryConfirmed ? 'CONFIRMED' : 'ORIGINAL'} prices`);
+    console.log(`[reevaluate-signal] Entry: ${entryPrice}, Stop: ${stopPrice}, TP1: ${tp1Price}, TP2: ${tp2Price}`);
+    
+    // Re-evaluate with correct prices
     const { evaluateAndUpdateExtendedOutcome } = await import('./extendedOutcomeStore.js');
     
     const result = await evaluateAndUpdateExtendedOutcome({
@@ -5777,16 +5803,21 @@ app.post('/api/debug/reevaluate-signal', async (req, res) => {
       category: signal.category,
       direction: signal.category.includes('SHORT') ? 'SHORT' : 'LONG',
       signalTime: signal.time,
-      entryPrice: signal.price,
-      stopPrice: signal.stop_price,
-      tp1Price: signal.tp1_price,
-      tp2Price: signal.tp2_price,
+      entryPrice: entryPrice,
+      stopPrice: stopPrice,
+      tp1Price: tp1Price,
+      tp2Price: tp2Price,
     });
     
     res.json({
       ok: true,
       signalId,
       symbol: signal.symbol,
+      usedConfirmedPrices: isDelayedEntryConfirmed,
+      entryPrice,
+      stopPrice,
+      tp1Price,
+      tp2Price,
       delayedEntryStatus: delayedRecord?.status || 'NO_RECORD',
       previousStatus: currentOutcome?.status,
       newStatus: result.status,
