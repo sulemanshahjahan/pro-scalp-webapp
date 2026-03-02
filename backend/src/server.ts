@@ -5130,6 +5130,89 @@ app.get('/api/debug/delayed-entry-stats', async (req, res) => {
 });
 
 /**
+ * Debug endpoint: Check delayed entry status for a signal
+ */
+app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const signalId = Number(req.params.signalId);
+  
+  if (!Number.isFinite(signalId)) {
+    return res.status(400).json({ ok: false, error: 'signalId required' });
+  }
+  
+  try {
+    const { getDelayedEntryRecordBySignalId, getDelayedEntryConfig } = await import('./delayedEntry.js');
+    const { klinesRange } = await import('./binance.js');
+    
+    const record = await getDelayedEntryRecordBySignalId(signalId);
+    const signal = await getDb().prepare('SELECT * FROM signals WHERE id = ?').get(signalId) as any;
+    
+    if (!record) {
+      return res.json({ ok: true, found: false, signalId });
+    }
+    
+    // Calculate what price was needed for confirmation
+    const config = getDelayedEntryConfig();
+    const targetPrice = record.direction === 'LONG' 
+      ? record.referencePrice * (1 + config.confirmMovePct / 100)
+      : record.referencePrice * (1 - config.confirmMovePct / 100);
+    const maxPrice = record.direction === 'LONG'
+      ? record.referencePrice * (1 + (config.confirmMovePct + config.maxExtraMovePct) / 100)
+      : record.referencePrice * (1 - (config.confirmMovePct + config.maxExtraMovePct) / 100);
+    
+    // Fetch candles since signal to see what actually happened
+    const candles = await klinesRange(record.symbol, '5m', record.watchStartedAt, record.watchExpiresAt);
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    const maxHigh = highs.length > 0 ? Math.max(...highs) : null;
+    const minLow = lows.length > 0 ? Math.min(...lows) : null;
+    
+    // Check if it would have confirmed
+    let wouldHaveConfirmed = false;
+    let wouldHaveSpiked = false;
+    if (maxHigh && minLow) {
+      if (record.direction === 'LONG') {
+        wouldHaveConfirmed = maxHigh >= targetPrice;
+        wouldHaveSpiked = maxHigh > maxPrice;
+      } else {
+        wouldHaveConfirmed = minLow <= targetPrice;
+        wouldHaveSpiked = minLow < maxPrice;
+      }
+    }
+    
+    res.json({
+      ok: true,
+      found: true,
+      signalId,
+      symbol: record.symbol,
+      status: record.status,
+      direction: record.direction,
+      referencePrice: record.referencePrice,
+      targetConfirmPrice: record.targetConfirmPrice,
+      targetPriceCalculated: targetPrice,
+      maxAllowedPrice: maxPrice,
+      watchStartedAt: new Date(record.watchStartedAt).toISOString(),
+      watchExpiresAt: new Date(record.watchExpiresAt).toISOString(),
+      confirmedAt: record.confirmedAt ? new Date(record.confirmedAt).toISOString() : null,
+      confirmedPrice: record.confirmedPrice,
+      config,
+      priceAnalysis: {
+        candlesFetched: candles.length,
+        maxHigh,
+        minLow,
+        wouldHaveConfirmed,
+        wouldHaveSpiked,
+        actualTargetNeeded: record.targetConfirmPrice,
+      }
+    });
+    
+  } catch (error) {
+    console.error('[debug/delayed-entry] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
  * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
  */
 app.post('/api/debug/reevaluate-signal', async (req, res) => {
