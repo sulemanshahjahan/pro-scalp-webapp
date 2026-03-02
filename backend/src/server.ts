@@ -4432,6 +4432,117 @@ if (delayedConfig.enabled) {
 // DELAYED ENTRY ENDPOINTS
 // ============================================================================
 
+/**
+ * Manually trigger delayed entry check for a specific signal
+ * This allows instant confirmation without waiting for the watcher loop
+ */
+app.post('/api/debug/check-delayed-entry-now', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const { signalId } = req.body || {};
+  
+  if (!signalId) {
+    return res.status(400).json({ ok: false, error: 'signalId required' });
+  }
+  
+  try {
+    const { getDelayedEntryRecordBySignalId, checkDelayedEntryConfirmation, getDelayedEntryConfig } = await import('./delayedEntry.js');
+    const { klinesRange } = await import('./binance.js');
+    
+    const record = await getDelayedEntryRecordBySignalId(Number(signalId));
+    
+    if (!record) {
+      return res.status(404).json({ ok: false, error: 'Delayed entry record not found' });
+    }
+    
+    if (record.status !== 'WATCH') {
+      return res.json({ 
+        ok: true, 
+        signalId, 
+        status: record.status,
+        message: `Signal is already ${record.status}, not in WATCH state` 
+      });
+    }
+    
+    // Get current price
+    const now = Date.now();
+    const candles = await klinesRange(record.symbol, '1m', now - 60000, now, 1);
+    
+    if (!candles || candles.length === 0) {
+      return res.status(500).json({ ok: false, error: 'Could not fetch current price' });
+    }
+    
+    const currentPrice = candles[candles.length - 1].close;
+    const cfg = getDelayedEntryConfig();
+    
+    // Calculate metrics
+    const movePct = ((currentPrice - record.referencePrice) / record.referencePrice) * 100;
+    const targetMove = cfg.confirmMovePct;
+    const maxMove = cfg.confirmMovePct + cfg.maxExtraMovePct;
+    
+    // Check if confirmed
+    const isConfirmed = record.direction === 'LONG'
+      ? currentPrice >= record.targetConfirmPrice
+      : currentPrice <= record.targetConfirmPrice;
+    
+    const isSpike = Math.abs(movePct) > maxMove;
+    
+    // Actually run the check (this will update the database)
+    const result = await checkDelayedEntryConfirmation(record, currentPrice);
+    
+    res.json({
+      ok: true,
+      signalId,
+      symbol: record.symbol,
+      direction: record.direction,
+      currentPrice,
+      referencePrice: record.referencePrice,
+      targetConfirmPrice: record.targetConfirmPrice,
+      movePct: movePct.toFixed(2) + '%',
+      targetMove: targetMove + '%',
+      maxAllowedMove: maxMove + '%',
+      isConfirmed,
+      isSpike,
+      watcherResult: result,
+      config: cfg
+    });
+    
+  } catch (error) {
+    console.error('[debug/check-delayed-entry-now] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * Get delayed entry configuration
+ */
+app.get('/api/debug/delayed-entry-config', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  try {
+    const { getDelayedEntryConfig, getActiveWatches } = await import('./delayedEntry.js');
+    const cfg = getDelayedEntryConfig();
+    const active = await getActiveWatches();
+    
+    res.json({
+      ok: true,
+      config: cfg,
+      activeWatches: active.length,
+      watches: active.map(w => ({
+        signalId: w.signalId,
+        symbol: w.symbol,
+        direction: w.direction,
+        referencePrice: w.referencePrice,
+        targetConfirmPrice: w.targetConfirmPrice,
+        timeRemaining: Math.max(0, w.watchExpiresAt - Date.now())
+      }))
+    });
+    
+  } catch (error) {
+    console.error('[debug/delayed-entry-config] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
 // Config endpoint (no DB required)
 app.get('/api/delayed-entry/config', (_req, res) => {
   try {
