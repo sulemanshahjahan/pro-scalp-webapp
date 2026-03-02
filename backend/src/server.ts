@@ -5671,6 +5671,13 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
       SELECT * FROM delayed_entry_records WHERE signal_id = ?
     `).get(signalId);
     
+    // Get extended outcome to see actual trading levels
+    const extendedOutcome = await getDb().prepare(`
+      SELECT entry_price, stop_price, tp1_price, tp2_price, status 
+      FROM extended_outcomes 
+      WHERE signal_id = ?
+    `).get(signalId);
+    
     res.json({
       ok: true,
       found: true,
@@ -5685,7 +5692,17 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
         watchExpiresAt: formatDate(record.watchExpiresAt),
         confirmedAt: formatDate(record.confirmedAt),
         confirmedPrice: record.confirmedPrice,
+        confirmedStopPrice: record.confirmedStopPrice,
+        confirmedTp1Price: record.confirmedTp1Price,
+        confirmedTp2Price: record.confirmedTp2Price,
       },
+      extendedOutcome: extendedOutcome ? {
+        entryPrice: extendedOutcome.entry_price,
+        stopPrice: extendedOutcome.stop_price,
+        tp1Price: extendedOutcome.tp1_price,
+        tp2Price: extendedOutcome.tp2_price,
+        status: extendedOutcome.status
+      } : null,
       targetPriceCalculated: targetPrice,
       maxAllowedPrice: maxPrice,
       config,
