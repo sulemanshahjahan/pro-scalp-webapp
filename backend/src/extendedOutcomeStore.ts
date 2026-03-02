@@ -551,12 +551,11 @@ export async function evaluateExtended24hOutcome(
   const {
     signalId,
     signalTime,
-    entryPrice,
-    stopPrice,
-    tp1Price,
-    tp2Price,
     direction,
   } = signal;
+  
+  // Use let so we can override with delayed entry confirmed prices
+  let { entryPrice, stopPrice, tp1Price, tp2Price } = signal;
 
   const expiresAt = signalTime + EXTENDED_WINDOW_MS;
   const now = Date.now();
@@ -698,6 +697,22 @@ export async function evaluateExtended24hOutcome(
     
     // Status is 'ENTERED' - proceed with normal evaluation
     console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} confirmed at ${delayedRecord.confirmedPrice} - proceeding with evaluation`);
+    
+    // Use confirmed entry price and recalculated TP/SL from delayed entry
+    if (delayedRecord.confirmedPrice) {
+      entryPrice = delayedRecord.confirmedPrice;
+    }
+    if (delayedRecord.confirmedStopPrice) {
+      stopPrice = delayedRecord.confirmedStopPrice;
+    }
+    if (delayedRecord.confirmedTp1Price) {
+      tp1Price = delayedRecord.confirmedTp1Price;
+    }
+    if (delayedRecord.confirmedTp2Price) {
+      tp2Price = delayedRecord.confirmedTp2Price;
+    }
+    
+    console.log(`[extended-outcomes] Using confirmed levels: Entry=${entryPrice}, Stop=${stopPrice}, TP1=${tp1Price}, TP2=${tp2Price}`);
   }
 
   // Load candles if not provided

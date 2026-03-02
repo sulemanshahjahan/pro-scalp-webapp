@@ -500,6 +500,47 @@ async function executeDelayedEntry(
   if (recalculated.tp1) {
     console.log(`[delayed-entry] Recalculated: Stop=${recalculated.stop?.toFixed(4)}, TP1=${recalculated.tp1?.toFixed(4)}, TP2=${recalculated.tp2?.toFixed(4)}`);
   }
+  
+  // Trigger immediate re-evaluation with confirmed entry price
+  // This ensures MFE/MAE and outcomes are calculated from the actual entry, not signal price
+  try {
+    const { evaluateAndUpdateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+    const signal = await getDb().prepare('SELECT * FROM signals WHERE id = ?').get(record.signalId) as any;
+    
+    if (signal) {
+      // Reset the outcome and re-evaluate from confirmed entry
+      await getDb().prepare(`
+        UPDATE extended_outcomes 
+        SET status = 'PENDING',
+            completed_at = NULL,
+            max_favorable_excursion_pct = NULL,
+            max_adverse_excursion_pct = NULL,
+            first_tp1_at = NULL,
+            tp2_at = NULL,
+            stop_at = NULL,
+            ext24_managed_r = NULL,
+            ext24_managed_status = NULL
+        WHERE signal_id = ?
+      `).run(record.signalId);
+      
+      // Re-evaluate with confirmed entry price
+      await evaluateAndUpdateExtendedOutcome({
+        signalId: record.signalId,
+        symbol: signal.symbol,
+        category: signal.category,
+        direction: signal.category.includes('SHORT') ? 'SHORT' : 'LONG',
+        signalTime: signal.time,
+        entryPrice: entryPrice,  // Use CONFIRMED price
+        stopPrice: recalculated.stop,
+        tp1Price: recalculated.tp1,
+        tp2Price: recalculated.tp2,
+      });
+      
+      console.log(`[delayed-entry] Re-evaluated signal ${record.signalId} with confirmed entry ${entryPrice}`);
+    }
+  } catch (e) {
+    console.error(`[delayed-entry] Failed to re-evaluate signal ${record.signalId}:`, e);
+  }
 }
 
 // ============================================================================
