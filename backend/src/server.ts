@@ -5180,6 +5180,12 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
       }
     }
     
+    // Safely format dates
+    const formatDate = (ts: number | undefined | null) => {
+      if (!ts || !Number.isFinite(ts)) return null;
+      try { return new Date(ts).toISOString(); } catch { return String(ts); }
+    };
+    
     res.json({
       ok: true,
       found: true,
@@ -5191,9 +5197,9 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
       targetConfirmPrice: record.targetConfirmPrice,
       targetPriceCalculated: targetPrice,
       maxAllowedPrice: maxPrice,
-      watchStartedAt: new Date(record.watchStartedAt).toISOString(),
-      watchExpiresAt: new Date(record.watchExpiresAt).toISOString(),
-      confirmedAt: record.confirmedAt ? new Date(record.confirmedAt).toISOString() : null,
+      watchStartedAt: formatDate(record.watchStartedAt),
+      watchExpiresAt: formatDate(record.watchExpiresAt),
+      confirmedAt: formatDate(record.confirmedAt),
       confirmedPrice: record.confirmedPrice,
       config,
       priceAnalysis: {
