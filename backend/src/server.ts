@@ -5280,6 +5280,64 @@ app.get('/api/debug/delayed-entry-stats', async (req, res) => {
 });
 
 /**
+ * GET /api/delayed-entry/expired-list
+ * Get list of recently expired signals for reactivation
+ * No auth required for recovery operations
+ */
+app.get('/api/delayed-entry/expired-list', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  const days = Math.min(30, Math.max(1, Number(req.query.days) || 7));
+  const fromTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  try {
+    const d = getDb();
+    
+    const rows = await d.prepare(`
+      SELECT 
+        signal_id,
+        symbol,
+        status,
+        reference_price,
+        target_confirm_price,
+        watch_expires_at,
+        invalid_for_stats,
+        expired_reason
+      FROM delayed_entry_records
+      WHERE status = 'EXPIRED_NO_ENTRY'
+        AND watch_expires_at >= ?
+      ORDER BY watch_expires_at DESC
+    `).all(fromTime);
+    
+    // Helper to safely get number
+    const getNum = (val: any) => {
+      if (val == null) return null;
+      const n = Number(val);
+      return Number.isFinite(n) ? n : null;
+    };
+    
+    res.json({
+      ok: true,
+      count: rows.length,
+      days,
+      signals: rows.map(r => ({
+        signalId: getNum(r.signal_id),
+        symbol: r.symbol,
+        referencePrice: getNum(r.reference_price),
+        targetConfirmPrice: getNum(r.target_confirm_price),
+        expiredAt: getNum(r.watch_expires_at),
+        invalidForStats: r.invalid_for_stats,
+        expiredReason: r.expired_reason
+      }))
+    });
+    
+  } catch (error) {
+    console.error('[delayed-entry/expired-list] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
  * POST /api/delayed-entry/reactivate
  * Safely reactivate expired delayed entries with full audit trail
  */
