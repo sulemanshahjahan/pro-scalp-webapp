@@ -282,6 +282,17 @@ export default function ExtendedOutcomePage() {
   const [showImprovementsOnly, setShowImprovementsOnly] = useState(false);
   const [showComparison, setShowComparison] = useState(true);
   const [showManagedStats, setShowManagedStats] = useState(true);
+  
+  // Live pending data for real-time updates
+  const [livePendingData, setLivePendingData] = useState<Map<number, {
+    currentPrice: number;
+    currentMovePct: number;
+    liveMfe: number;
+    liveMae: number;
+    liveManagedR: number | null;
+    isConfirmed: boolean;
+    lastUpdated: string;
+  }>>(new Map());
 
   // Date range
   const range = useMemo(() => {
@@ -408,6 +419,42 @@ export default function ExtendedOutcomePage() {
   useEffect(() => { loadStats().catch(() => {}); }, [range.start, range.end, symbol, category, direction]);
   useEffect(() => { setPage(0); }, [range.start, range.end, symbol, category, status, direction, completed, showImprovementsOnly]);
   useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, symbol, category, status, direction, completed, page, limit, sort, showComparison, showImprovementsOnly]);
+  
+  // Live polling for pending signals - updates every 5 seconds automatically
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+    
+    async function pollLivePending() {
+      try {
+        const resp = await fetch(API('/api/extended-outcomes/live-pending')).then(r => r.json());
+        if (resp?.ok && resp.signals) {
+          const newMap = new Map();
+          resp.signals.forEach((s: any) => {
+            newMap.set(s.signalId, {
+              currentPrice: s.currentPrice,
+              currentMovePct: s.currentMovePct,
+              liveMfe: s.liveMfe,
+              liveMae: s.liveMae,
+              liveManagedR: s.liveManagedR,
+              isConfirmed: s.isConfirmed,
+              lastUpdated: s.lastUpdated
+            });
+          });
+          setLivePendingData(newMap);
+        }
+      } catch (e) {
+        // Silently fail - don't disrupt user experience
+      }
+    }
+    
+    // Initial poll
+    pollLivePending();
+    
+    // Poll every 5 seconds
+    intervalId = setInterval(pollLivePending, 5000);
+    
+    return () => clearInterval(intervalId);
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -902,7 +949,20 @@ export default function ExtendedOutcomePage() {
               </tr>
             </thead>
             <tbody>
-              {outcomes.map((o) => (
+              {outcomes.map((o) => {
+                // Merge live data for pending signals
+                const liveData = livePendingData.get(o.signalId);
+                const isPending = o.status === 'PENDING' || o.status === 'ACHIEVED_TP1' || !o.completedAt;
+                
+                // Use live values when available for pending signals
+                const displayMfe = isPending && liveData ? liveData.liveMfe : o.maxFavorableExcursionPct;
+                const displayMae = isPending && liveData ? liveData.liveMae : o.maxAdverseExcursionPct;
+                const displayManagedR = isPending && liveData?.liveManagedR !== null 
+                  ? liveData.liveManagedR 
+                  : o.ext24ManagedR;
+                const isLive = isPending && liveData;
+                
+                return (
                 <tr key={o.id} className={`border-b border-white/5 hover:bg-white/5 ${o.improved ? 'bg-emerald-500/5' : ''}`}>
                   <td className="px-3 py-2 text-white/70">{dt(o.signalTime)}</td>
                   <td className="px-3 py-2 font-semibold">{o.symbol}</td>
@@ -945,17 +1005,15 @@ export default function ExtendedOutcomePage() {
                   </td>
                   {showManagedStats && (
                     <td className="px-3 py-2">
-                      {o.ext24ManagedR !== null && o.ext24ManagedR !== undefined ? (
-                        <span className={`font-medium ${o.ext24ManagedR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {o.ext24ManagedR >= 0 ? '+' : ''}{fmt(o.ext24ManagedR, 2)}R
-                          {o.ext24ManagedPnlUsd !== null && (
+                      {displayManagedR !== null && displayManagedR !== undefined ? (
+                        <span className={`font-medium ${displayManagedR >= 0 ? 'text-emerald-400' : 'text-rose-400'} ${isLive ? 'animate-pulse' : ''}`}>
+                          {displayManagedR >= 0 ? '+' : ''}{fmt(displayManagedR, 2)}R
+                          {isLive && (
+                            <span className="text-[10px] text-cyan-400 ml-1">● LIVE</span>
+                          )}
+                          {!isLive && o.ext24ManagedPnlUsd !== null && (
                             <span className="text-white/50 ml-1">(${fmt(o.ext24ManagedPnlUsd, 0)})</span>
                           )}
-                        </span>
-                      ) : o.ext24LiveManagedR !== null && o.ext24LiveManagedR !== undefined ? (
-                        <span className="text-amber-400">
-                          {o.ext24LiveManagedR >= 0 ? '+' : ''}{fmt(o.ext24LiveManagedR, 2)}R
-                          <span className="text-white/40 ml-1">(live)</span>
                         </span>
                       ) : (
                         <span className="text-white/30">--</span>
@@ -987,13 +1045,20 @@ export default function ExtendedOutcomePage() {
                     {o.timeToFirstHitSeconds ? fmtDuration(o.timeToFirstHitSeconds) : '--'}
                   </td>
                   <td className="px-3 py-2 text-white/70">
-                    {fmt(o.maxFavorableExcursionPct, 2)}% / {fmt(o.maxAdverseExcursionPct, 2)}%
+                    {isLive ? (
+                      <span className="text-cyan-400">
+                        {fmt(displayMfe, 2)}% / {fmt(displayMae, 2)}%
+                        <span className="text-[10px] text-white/40 ml-1">●</span>
+                      </span>
+                    ) : (
+                      <span>{fmt(displayMfe, 2)}% / {fmt(displayMae, 2)}%</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-white/70">
                     {fmt(o.coveragePct, 0)}%
                   </td>
                 </tr>
-              ))}
+              )})}
               {!loading && outcomes.length === 0 && (
                 <tr>
                   <td colSpan={showComparison ? (showManagedStats ? 16 : 14) : (showManagedStats ? 15 : 13)} className="px-3 py-4 text-white/50">
