@@ -225,7 +225,10 @@ interface VerifiableStats {
   };
   performance: {
     totalManagedR: number;
-    avgManagedR: number;
+    avgManagedR: number;  // Average of all closed (includes BE at 0)
+    avgManagedRPnL: number;  // Average of trades with P&L only (excludes BE)
+    managedTradesWithPnL: number;
+    managedClosed: number;
     avgTimeToTp1Seconds: number | null;
     avgMfePct: number | null;
     avgMaePct: number | null;
@@ -547,11 +550,11 @@ export default function ExtendedOutcomePage() {
           loading={statsLoading}
         />
         <KpiCard 
-          label="Win Rate" 
+          label="Win Rate (P&L)" 
           value={verifiableStats 
             ? `${verifiableStats.signalRates.winRate.pct.toFixed(1)}%` 
             : stats ? fmtRate(stats.winRate, 1) : '--'} 
-          sub={verifiableStats?.signalRates.winRate.label ?? "TP1 + TP2 / completed"}
+          sub={verifiableStats?.signalRates.winRate.label ?? "Excludes NO_TRADE"}
           loading={statsLoading}
         />
         <KpiCard 
@@ -655,41 +658,43 @@ export default function ExtendedOutcomePage() {
         </section>
       )}
 
-      {/* 240m vs 24h Comparison Stats */}
-      <section className="rounded-2xl border border-accent/20 bg-accent/5 p-4">
-        <div className="text-xs text-accent/80 uppercase tracking-widest mb-3">240m Horizon vs 24h Extended Comparison</div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <div className="text-xs text-white/50">No Hit at 240m</div>
-            <div className="text-lg font-semibold">{improvementStats?.noHitAt240m ?? '--'}</div>
-            <div className="text-[10px] text-white/40">Timed out at 4h horizon</div>
+      {/* 240m vs 24h Comparison Stats - Only show if there's meaningful data */}
+      {improvementStats && (improvementStats.noHitAt240m > 0 || improvementStats.laterHitTp1 > 0 || improvementStats.laterHitTp2 > 0 || improvementStats.laterHitStop > 0) && (
+        <section className="rounded-2xl border border-accent/20 bg-accent/5 p-4">
+          <div className="text-xs text-accent/80 uppercase tracking-widest mb-3">240m Horizon vs 24h Extended Comparison</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-xs text-white/50">No Hit at 240m</div>
+              <div className="text-lg font-semibold">{improvementStats.noHitAt240m}</div>
+              <div className="text-[10px] text-white/40">Timed out at 4h horizon</div>
+            </div>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+              <div className="text-xs text-emerald-300">Later Hit TP1</div>
+              <div className="text-lg font-semibold text-emerald-200">{improvementStats.laterHitTp1}</div>
+              <div className="text-[10px] text-emerald-300/60">After 4h, within 24h</div>
+            </div>
+            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
+              <div className="text-xs text-emerald-300">Later Hit TP2</div>
+              <div className="text-lg font-semibold text-emerald-200">{improvementStats.laterHitTp2}</div>
+              <div className="text-[10px] text-emerald-300/60">Full target reached</div>
+            </div>
+            <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-3">
+              <div className="text-xs text-rose-300">Later Hit Stop</div>
+              <div className="text-lg font-semibold text-rose-200">{improvementStats.laterHitStop}</div>
+              <div className="text-[10px] text-rose-300/60">Stop after 4h window</div>
+            </div>
           </div>
-          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
-            <div className="text-xs text-emerald-300">Later Hit TP1</div>
-            <div className="text-lg font-semibold text-emerald-200">{improvementStats?.laterHitTp1 ?? '--'}</div>
-            <div className="text-[10px] text-emerald-300/60">After 4h, within 24h</div>
-          </div>
-          <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
-            <div className="text-xs text-emerald-300">Later Hit TP2</div>
-            <div className="text-lg font-semibold text-emerald-200">{improvementStats?.laterHitTp2 ?? '--'}</div>
-            <div className="text-[10px] text-emerald-300/60">Full target reached</div>
-          </div>
-          <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-3">
-            <div className="text-xs text-rose-300">Later Hit Stop</div>
-            <div className="text-lg font-semibold text-rose-200">{improvementStats?.laterHitStop ?? '--'}</div>
-            <div className="text-[10px] text-rose-300/60">Stop after 4h window</div>
-          </div>
-        </div>
-        {improvementStats && improvementStats.noHitAt240m > 0 && (
-          <div className="mt-3 text-xs">
-            <span className="text-white/60">Of signals that showed "no hit" at 240m:</span>
-            <span className="ml-2 text-emerald-300 font-semibold">
-              {fmtRate(improvementStats.improvedWinRate, 1)} later became wins within 24h
-            </span>
-            <span className="text-white/40"> (TP1 or TP2 hit after hour 4)</span>
-          </div>
-        )}
-      </section>
+          {improvementStats.noHitAt240m > 0 && (
+            <div className="mt-3 text-xs">
+              <span className="text-white/60">Of signals that showed "no hit" at 240m:</span>
+              <span className="ml-2 text-emerald-300 font-semibold">
+                {fmtRate(improvementStats.improvedWinRate, 1)} later became wins within 24h
+              </span>
+              <span className="text-white/40"> (TP1 or TP2 hit after hour 4)</span>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Managed Performance (Option B) */}
       <section className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-4">
@@ -739,10 +744,12 @@ export default function ExtendedOutcomePage() {
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/50">Avg R / Trade</div>
-                <div className={`text-lg font-semibold ${(managedStats?.avgManagedR ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
-                  {managedStats ? `${managedStats.avgManagedR >= 0 ? '+' : ''}${fmt(managedStats.avgManagedR, 2)}R` : '--'}
+                <div className={`text-lg font-semibold ${(verifiableStats?.performance.avgManagedRPnL ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
+                  {verifiableStats ? `${verifiableStats.performance.avgManagedRPnL >= 0 ? '+' : ''}${fmt(verifiableStats.performance.avgManagedRPnL, 2)}R` : '--'}
                 </div>
-                <div className="text-[10px] text-white/40">Mean per closed trade</div>
+                <div className="text-[10px] text-white/40">
+                  P&L trades only ({verifiableStats?.performance.managedTradesWithPnL ?? '--'})
+                </div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/50">BE Rate</div>
@@ -753,6 +760,15 @@ export default function ExtendedOutcomePage() {
                 </div>
                 <div className="text-[10px] text-white/40">
                   {verifiableStats?.managedRates.beRate.label ?? "managed_r = 0 / closed"}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs text-white/50">Avg R (All Closed)</div>
+                <div className={`text-lg font-semibold ${(verifiableStats?.performance.avgManagedR ?? 0) >= 0 ? 'text-emerald-200/70' : 'text-rose-200/70'}`}>
+                  {verifiableStats ? `${verifiableStats.performance.avgManagedR >= 0 ? '+' : ''}${fmt(verifiableStats.performance.avgManagedR, 2)}R` : '--'}
+                </div>
+                <div className="text-[10px] text-white/40">
+                  Includes BE ({verifiableStats?.performance.managedClosed ?? '--'} total)
                 </div>
               </div>
             </div>
@@ -842,31 +858,6 @@ export default function ExtendedOutcomePage() {
 
       {/* Gate Backtest Comparison */}
       <GateBacktestComparison />
-
-      {/* Delete EARLY_READY_SHORT */}
-      <DeleteEarlyReadyShort />
-
-      {/* Outcome Breakdown Chart */}
-      <section className="rounded-2xl border border-white/10 bg-white/5 p-4">
-        <div className="text-xs text-white/60 uppercase tracking-widest mb-3">Outcome Breakdown</div>
-        <div className="space-y-2">
-          {statsBreakdown.map((item) => (
-            <div key={item.label} className="flex items-center gap-3 text-xs">
-              <div className="w-24 text-white/60">{item.label}</div>
-              <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                <div className={`h-2 ${item.color}`} style={{ width: `${Math.min(100, (item.value / maxStatValue) * 100)}%` }} />
-              </div>
-              <div className="w-10 text-right text-white/70">{item.value}</div>
-              <div className="w-14 text-right text-white/50">
-                {stats?.totalSignals ? fmtRate(item.value / stats.totalSignals, 0) : '--'}
-              </div>
-            </div>
-          ))}
-          {!statsBreakdown.length && (
-            <div className="text-xs text-white/50">No data available.</div>
-          )}
-        </div>
-      </section>
 
       {/* Detailed Outcomes Table */}
       <section className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden">

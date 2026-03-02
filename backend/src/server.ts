@@ -3362,6 +3362,11 @@ app.get('/api/stats/verifiable', async (req, res) => {
     const sumActive = pendingStrict + achievedTp1; // These have completed_at = NULL
     const sumAllBuckets = winTp1 + winTp2 + lossStop + flatTimeout + noTrade + achievedTp1 + pendingStrict;
     
+    // Additional performance metric: avg R for trades with P&L only (excludes BE)
+    const avgManagedRPnL = managedTradesWithPnL > 0 
+      ? Number(((Number(stats.total_managed_r) || 0) / managedTradesWithPnL).toFixed(2))
+      : 0;
+    
     const response = {
       ok: true,
       
@@ -3432,9 +3437,14 @@ app.get('/api/stats/verifiable', async (req, res) => {
       },
       
       // Performance metrics
+      // avgManagedR is SQL average of all closed (includes BE at 0)
+      // avgManagedRPnL is average of only trades with actual P&L (excludes BE)
       performance: {
         totalManagedR: Number(stats.total_managed_r) || 0,
         avgManagedR: Number(stats.avg_managed_r) || 0,
+        avgManagedRPnL,
+        managedTradesWithPnL,
+        managedClosed,
         avgTimeToTp1Seconds: stats.avg_time_to_tp1,
         avgMfePct: stats.avg_mfe_pct,
         avgMaePct: stats.avg_mae_pct,
