@@ -5186,21 +5186,28 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
       try { return new Date(ts).toISOString(); } catch { return String(ts); }
     };
     
+    // Get raw row for debugging
+    const rawRow = await getDb().prepare(`
+      SELECT * FROM delayed_entry_records WHERE signal_id = ?
+    `).get(signalId);
+    
     res.json({
       ok: true,
       found: true,
       signalId,
-      symbol: record.symbol,
-      status: record.status,
-      direction: record.direction,
-      referencePrice: record.referencePrice,
-      targetConfirmPrice: record.targetConfirmPrice,
+      record: {
+        symbol: record.symbol,
+        status: record.status,
+        direction: record.direction,
+        referencePrice: record.referencePrice,
+        targetConfirmPrice: record.targetConfirmPrice,
+        watchStartedAt: formatDate(record.watchStartedAt),
+        watchExpiresAt: formatDate(record.watchExpiresAt),
+        confirmedAt: formatDate(record.confirmedAt),
+        confirmedPrice: record.confirmedPrice,
+      },
       targetPriceCalculated: targetPrice,
       maxAllowedPrice: maxPrice,
-      watchStartedAt: formatDate(record.watchStartedAt),
-      watchExpiresAt: formatDate(record.watchExpiresAt),
-      confirmedAt: formatDate(record.confirmedAt),
-      confirmedPrice: record.confirmedPrice,
       config,
       priceAnalysis: {
         candlesFetched: candles.length,
@@ -5209,6 +5216,13 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
         wouldHaveConfirmed,
         wouldHaveSpiked,
         actualTargetNeeded: record.targetConfirmPrice,
+      },
+      // Debug raw data
+      debug: {
+        rawRow,
+        hasReferencePrice: !!record.referencePrice,
+        hasTargetConfirmPrice: !!record.targetConfirmPrice,
+        hasWatchStartedAt: !!record.watchStartedAt,
       }
     });
     
