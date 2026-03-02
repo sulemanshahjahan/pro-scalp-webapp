@@ -289,7 +289,7 @@ export default function ExtendedOutcomePage() {
     currentMovePct: number;
     liveMfe: number;
     liveMae: number;
-    liveManagedR: number | null;
+    liveManagedR?: number | null;
     isConfirmed: boolean;
     lastUpdated: string;
   }>>(new Map());
@@ -430,15 +430,17 @@ export default function ExtendedOutcomePage() {
         if (resp?.ok && resp.signals) {
           const newMap = new Map();
           resp.signals.forEach((s: any) => {
-            newMap.set(s.signalId, {
-              currentPrice: s.currentPrice,
-              currentMovePct: s.currentMovePct,
-              liveMfe: s.liveMfe,
-              liveMae: s.liveMae,
-              liveManagedR: s.liveManagedR,
-              isConfirmed: s.isConfirmed,
-              lastUpdated: s.lastUpdated
-            });
+            if (s.signalId != null) {
+              newMap.set(s.signalId, {
+                currentPrice: s.currentPrice ?? 0,
+                currentMovePct: s.currentMovePct ?? 0,
+                liveMfe: s.liveMfe ?? 0,
+                liveMae: s.liveMae ?? 0,
+                liveManagedR: s.liveManagedR ?? null,
+                isConfirmed: s.isConfirmed ?? false,
+                lastUpdated: s.lastUpdated ?? new Date().toISOString()
+              });
+            }
           });
           setLivePendingData(newMap);
         }
@@ -957,10 +959,10 @@ export default function ExtendedOutcomePage() {
                 // Use live values when available for pending signals
                 const displayMfe = isPending && liveData ? liveData.liveMfe : o.maxFavorableExcursionPct;
                 const displayMae = isPending && liveData ? liveData.liveMae : o.maxAdverseExcursionPct;
-                const displayManagedR = isPending && liveData?.liveManagedR !== null 
+                const displayManagedR = isPending && liveData && liveData.liveManagedR != null 
                   ? liveData.liveManagedR 
                   : o.ext24ManagedR;
-                const isLive = isPending && liveData;
+                const isLive = isPending && !!liveData;
                 
                 return (
                 <tr key={o.id} className={`border-b border-white/5 hover:bg-white/5 ${o.improved ? 'bg-emerald-500/5' : ''}`}>
