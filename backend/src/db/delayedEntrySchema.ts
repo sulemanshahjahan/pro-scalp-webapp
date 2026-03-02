@@ -37,6 +37,11 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExists(d, 'delayed_entry_records', 'original_tp1', 'DOUBLE PRECISION');
     await addColumnIfNotExists(d, 'delayed_entry_records', 'original_tp2', 'DOUBLE PRECISION');
     
+    // Add confirmed_* columns if they don't exist (migration for existing tables)
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'confirmed_stop_price', 'DOUBLE PRECISION');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'confirmed_tp1_price', 'DOUBLE PRECISION');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'confirmed_tp2_price', 'DOUBLE PRECISION');
+    
     // Index for efficient WATCH queries
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)
@@ -78,6 +83,11 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_stop', 'REAL');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_tp1', 'REAL');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'original_tp2', 'REAL');
+    
+    // Add confirmed_* columns if they don't exist (SQLite migration)
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_stop_price', 'REAL');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_tp1_price', 'REAL');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_tp2_price', 'REAL');
     
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)
