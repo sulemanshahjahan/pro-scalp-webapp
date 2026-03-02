@@ -5280,6 +5280,146 @@ app.get('/api/debug/delayed-entry-stats', async (req, res) => {
 });
 
 /**
+ * GET /api/extended-outcomes/live-pending
+ * Calculate live MFE/MAE and Managed R for pending signals
+ * This computes current values based on real-time price
+ */
+app.get('/api/extended-outcomes/live-pending', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  try {
+    const d = getDb();
+    const { klinesRange } = await import('./binance.js');
+    
+    // Get all pending/active extended outcomes
+    const pending = await d.prepare(`
+      SELECT 
+        eo.signal_id,
+        eo.symbol,
+        eo.direction,
+        eo.entry_price,
+        eo.stop_price,
+        eo.tp1_price,
+        eo.tp2_price,
+        eo.signal_time,
+        eo.status,
+        eo.max_favorable_excursion_pct,
+        eo.max_adverse_excursion_pct,
+        eo.ext24_live_managed_r,
+        der.status as delayed_status,
+        der.reference_price,
+        der.target_confirm_price
+      FROM extended_outcomes eo
+      LEFT JOIN delayed_entry_records der ON der.signal_id = eo.signal_id
+      WHERE eo.status IN ('PENDING', 'ACHIEVED_TP1')
+         OR (eo.completed_at IS NULL)
+      ORDER BY eo.signal_time DESC
+      LIMIT 100
+    `).all() as any[];
+    
+    // Calculate live metrics for each
+    const liveData = [];
+    const now = Date.now();
+    
+    for (const row of pending) {
+      try {
+        // Get current price (latest 1m candle)
+        const candles = await klinesRange(row.symbol, '1m', now - 120000, now, 2);
+        if (!candles || candles.length === 0) continue;
+        
+        const currentPrice = candles[candles.length - 1].close;
+        const currentHigh = candles[candles.length - 1].high;
+        const currentLow = candles[candles.length - 1].low;
+        
+        const entryPrice = Number(row.entry_price);
+        const stopPrice = Number(row.stop_price);
+        const tp1Price = Number(row.tp1_price);
+        const direction = row.direction || 'LONG';
+        
+        // Calculate live MFE/MAE from stored values
+        const storedMfe = row.max_favorable_excursion_pct != null ? Number(row.max_favorable_excursion_pct) : 0;
+        const storedMae = row.max_adverse_excursion_pct != null ? Number(row.max_adverse_excursion_pct) : 0;
+        
+        // Calculate current move from entry
+        const currentMovePct = direction === 'LONG'
+          ? ((currentPrice - entryPrice) / entryPrice) * 100
+          : ((entryPrice - currentPrice) / entryPrice) * 100;
+        
+        // Live MFE is max of stored or current positive move
+        const liveMfe = Math.max(storedMfe, currentMovePct > 0 ? currentMovePct : 0);
+        
+        // Live MAE is max of stored or current negative move (absolute)
+        const liveMae = Math.max(storedMae, currentMovePct < 0 ? Math.abs(currentMovePct) : 0);
+        
+        // Calculate live managed R (simplified 50% TP1 + runner model)
+        let liveManagedR = row.ext24_live_managed_r != null ? Number(row.ext24_live_managed_r) : null;
+        
+        // If TP1 has been hit (ACHIEVED_TP1 status), calculate partial profit
+        if (row.status === 'ACHIEVED_TP1' && tp1Price) {
+          const tp1Distance = Math.abs((tp1Price - entryPrice) / entryPrice) * 100;
+          const riskDistance = Math.abs((stopPrice - entryPrice) / entryPrice) * 100;
+          
+          if (riskDistance > 0) {
+            // 50% position at TP1 = +0.5R realized
+            const tp1R = (tp1Distance / riskDistance) * 0.5;
+            
+            // Runner portion: current price vs entry, capped at TP2
+            const currentRunnerMove = direction === 'LONG'
+              ? ((currentPrice - entryPrice) / entryPrice) * 100
+              : ((entryPrice - currentPrice) / entryPrice) * 100;
+            
+            const runnerR = (currentRunnerMove / riskDistance) * 0.5;
+            
+            liveManagedR = tp1R + runnerR;
+          }
+        } else if (stopPrice) {
+          // Not yet hit TP1 - full position
+          const riskDistance = Math.abs((stopPrice - entryPrice) / entryPrice) * 100;
+          if (riskDistance > 0) {
+            liveManagedR = currentMovePct / riskDistance;
+          }
+        }
+        
+        // Determine if confirmed (for delayed entry)
+        const isConfirmed = row.delayed_status === 'ENTERED' || 
+          (direction === 'LONG' && currentPrice >= Number(row.target_confirm_price)) ||
+          (direction === 'SHORT' && currentPrice <= Number(row.target_confirm_price));
+        
+        liveData.push({
+          signalId: Number(row.signal_id),
+          symbol: row.symbol,
+          direction,
+          status: row.status,
+          delayedStatus: row.delayed_status,
+          entryPrice,
+          currentPrice,
+          currentMovePct: Number(currentMovePct.toFixed(2)),
+          liveMfe: Number(liveMfe.toFixed(2)),
+          liveMae: Number(liveMae.toFixed(2)),
+          liveManagedR: liveManagedR != null ? Number(liveManagedR.toFixed(2)) : null,
+          isConfirmed,
+          targetConfirmPrice: row.target_confirm_price != null ? Number(row.target_confirm_price) : null,
+          lastUpdated: new Date().toISOString()
+        });
+        
+      } catch (e) {
+        console.error(`[live-pending] Error for ${row.symbol}:`, e);
+      }
+    }
+    
+    res.json({
+      ok: true,
+      count: liveData.length,
+      signals: liveData
+    });
+    
+  } catch (error) {
+    console.error('[live-pending] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
  * GET /api/delayed-entry/expired-list
  * Get list of recently expired signals for reactivation
  * No auth required for recovery operations
