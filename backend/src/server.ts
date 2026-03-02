@@ -4513,7 +4513,7 @@ app.post('/api/debug/check-delayed-entry-now', async (req, res) => {
 });
 
 /**
- * Get delayed entry configuration
+ * Get delayed entry configuration and recent history
  */
 app.get('/api/debug/delayed-entry-config', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -4523,17 +4523,53 @@ app.get('/api/debug/delayed-entry-config', async (req, res) => {
     const cfg = getDelayedEntryConfig();
     const active = await getActiveWatches();
     
+    // Get recent processed entries (last 50)
+    const d = getDb();
+    const recent = await d.prepare(`
+      SELECT 
+        signal_id,
+        symbol,
+        status,
+        reference_price,
+        target_confirm_price,
+        confirmed_price,
+        reason,
+        watch_started_at,
+        watch_expires_at
+      FROM delayed_entry_records
+      WHERE status != 'WATCH'
+      ORDER BY watch_started_at DESC
+      LIMIT 50
+    `).all() as any[];
+    
+    // Helper to safely get number
+    const getNum = (val: any) => {
+      if (val == null) return null;
+      const n = Number(val);
+      return Number.isFinite(n) ? n : null;
+    };
+    
     res.json({
       ok: true,
       config: cfg,
       activeWatches: active.length,
-      watches: active.map(w => ({
+      active: active.map(w => ({
         signalId: w.signalId,
         symbol: w.symbol,
         direction: w.direction,
         referencePrice: w.referencePrice,
         targetConfirmPrice: w.targetConfirmPrice,
         timeRemaining: Math.max(0, w.watchExpiresAt - Date.now())
+      })),
+      recentProcessed: recent.map(r => ({
+        signalId: getNum(r.signal_id),
+        symbol: r.symbol,
+        status: r.status,
+        referencePrice: getNum(r.reference_price),
+        targetConfirmPrice: getNum(r.target_confirm_price),
+        confirmedPrice: getNum(r.confirmed_price),
+        reason: r.reason,
+        watchStartedAt: getNum(r.watch_started_at)
       }))
     });
     
