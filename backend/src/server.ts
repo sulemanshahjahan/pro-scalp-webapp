@@ -3350,6 +3350,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
     // Trading win rate denominator (excludes NO_TRADE and FLAT_TIMEOUT - no actual P&L)
     const actualTrades = wins + lossStop; // Only signals with actual P&L outcome
     
+    // Managed win rate denominator (wins + losses, excludes breakeven and NO_TRADE)
+    const managedTradesWithPnL = managedWins + managedLosses;
+    
     // Verification calculations (Step 4)
     // Note: ACHIEVED_TP1 is NOT completed (still active, waiting for TP2/stop/timeout)
     // pendingStrict = only PENDING status (not ACHIEVED_TP1)
@@ -3415,10 +3418,10 @@ app.get('/api/stats/verifiable', async (req, res) => {
       // Managed rates with num/den
       managedRates: {
         winRate: {
-          pct: managedClosed > 0 ? Number(((managedWins / managedClosed) * 100).toFixed(1)) : 0,
+          pct: managedTradesWithPnL > 0 ? Number(((managedWins / managedTradesWithPnL) * 100).toFixed(1)) : 0,
           num: managedWins,
-          den: managedClosed,
-          label: `${managedWins} / ${managedClosed} closed`
+          den: managedTradesWithPnL,
+          label: `${managedWins} / ${managedTradesWithPnL} with P&L`
         },
         beRate: {
           pct: managedClosed > 0 ? Number(((managedBE / managedClosed) * 100).toFixed(1)) : 0,
