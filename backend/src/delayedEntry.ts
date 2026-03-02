@@ -413,12 +413,19 @@ async function updateDelayedEntryStatus(
 ): Promise<void> {
   const d = getDb();
   
+  // Track expired reason for analytics
+  const expiredReason = status === 'EXPIRED_NO_ENTRY' ? (reason || 'UNKNOWN') : null;
+  
   // Atomic update - only change if still WATCH (prevents double-entry)
   const result = await d.prepare(`
     UPDATE delayed_entry_records
-    SET status = ?, reason = ?, confirmed_at = ?, confirmed_price = ?
+    SET status = ?, 
+        reason = ?, 
+        confirmed_at = ?, 
+        confirmed_price = ?,
+        expired_reason = COALESCE(?, expired_reason)
     WHERE signal_id = ? AND status = 'WATCH'
-  `).run(status, reason || null, confirmedAt || null, confirmedPrice || null, signalId);
+  `).run(status, reason || null, confirmedAt || null, confirmedPrice || null, expiredReason, signalId);
   
   if (result.changes === 0) {
     console.log(`[delayed-entry] Signal ${signalId} already processed (not in WATCH state)`);
@@ -569,6 +576,239 @@ export async function getDelayedEntryStats(): Promise<DelayedEntryStats> {
     confirmRate: watchCreated > 0 ? entered / watchCreated : 0,
     avgMoveToConfirm: result.avgMovePct ? Number(result.avgMovePct) : undefined,
   };
+}
+
+// ============================================================================
+// REACTIVATION & REPROCESSING (for fixing watcher bugs)
+// ============================================================================
+
+export interface ReactivationResult {
+  signalId: number;
+  success: boolean;
+  error?: string;
+  newStatus?: string;
+  newExpiresAt?: number;
+}
+
+/**
+ * Reactivate an expired delayed entry signal
+ * Creates full audit trail for transparency
+ */
+export async function reactivateDelayedEntry(
+  signalId: number,
+  options: {
+    extendMinutes?: number;
+    reactivatedBy?: string;
+    reactivationReason?: string;
+  } = {}
+): Promise<ReactivationResult> {
+  const d = getDb();
+  const {
+    extendMinutes = 1440, // Default 24 hours
+    reactivatedBy = 'SYSTEM',
+    reactivationReason = 'MANUAL_REACTIVATION'
+  } = options;
+  
+  try {
+    // Get current record
+    const record = await getDelayedEntryRecordBySignalId(signalId);
+    
+    if (!record) {
+      return { signalId, success: false, error: 'Record not found' };
+    }
+    
+    // Only allow reactivation of EXPIRED_NO_ENTRY
+    if (record.status !== 'EXPIRED_NO_ENTRY') {
+      return { 
+        signalId, 
+        success: false, 
+        error: `Cannot reactivate - status is ${record.status}, expected EXPIRED_NO_ENTRY` 
+      };
+    }
+    
+    // Check if within allowed window (7 days)
+    const now = Date.now();
+    const expiredAt = record.watchExpiresAt;
+    const daysSinceExpiry = (now - expiredAt) / (24 * 60 * 60 * 1000);
+    
+    if (daysSinceExpiry > 7) {
+      return { 
+        signalId, 
+        success: false, 
+        error: `Cannot reactivate - expired ${daysSinceExpiry.toFixed(1)} days ago (max 7 days)` 
+      };
+    }
+    
+    const newExpiresAt = now + (extendMinutes * 60 * 1000);
+    
+    // Update with audit trail
+    await d.prepare(`
+      UPDATE delayed_entry_records
+      SET status = 'WATCH',
+          watch_expires_at = ?,
+          prev_status = ?,
+          prev_expires_at = ?,
+          reactivated_at = ?,
+          reactivated_by = ?,
+          reactivation_reason = ?
+      WHERE signal_id = ?
+    `).run(
+      newExpiresAt,
+      record.status,
+      record.watchExpiresAt,
+      now,
+      reactivatedBy,
+      reactivationReason,
+      signalId
+    );
+    
+    console.log(`[delayed-entry] Reactivated signal ${signalId}: ${record.symbol} - expires at ${new Date(newExpiresAt).toISOString()}`);
+    
+    return {
+      signalId,
+      success: true,
+      newStatus: 'WATCH',
+      newExpiresAt
+    };
+    
+  } catch (error) {
+    console.error(`[delayed-entry] Reactivation error for ${signalId}:`, error);
+    return { signalId, success: false, error: String(error) };
+  }
+}
+
+/**
+ * Bulk reprocess expired entries from a date range
+ * Reactivates and triggers immediate evaluation
+ */
+export async function reprocessExpiredEntries(
+  fromTime: number,
+  toTime: number,
+  options: {
+    symbol?: string;
+    batchSize?: number;
+    extendMinutes?: number;
+    reactivationReason?: string;
+  } = {}
+): Promise<{
+  total: number;
+  reactivated: number;
+  failed: number;
+  results: ReactivationResult[];
+}> {
+  const d = getDb();
+  const { symbol, batchSize = 50, extendMinutes = 1440, reactivationReason = 'BULK_REPROCESS' } = options;
+  
+  // Build query
+  let query = `
+    SELECT signal_id
+    FROM delayed_entry_records
+    WHERE status = 'EXPIRED_NO_ENTRY'
+      AND watch_expires_at >= ?
+      AND watch_expires_at <= ?
+  `;
+  const params: any[] = [fromTime, toTime];
+  
+  if (symbol) {
+    query += ' AND symbol = ?';
+    params.push(symbol);
+  }
+  
+  query += ` ORDER BY watch_expires_at DESC LIMIT ?`;
+  params.push(batchSize);
+  
+  const rows = await d.prepare(query).all(...params) as any[];
+  
+  const results: ReactivationResult[] = [];
+  let reactivated = 0;
+  let failed = 0;
+  
+  // Rate limit: process one every 100ms to avoid hammering
+  for (const row of rows) {
+    const signalId = Number(row.signal_id);
+    
+    const result = await reactivateDelayedEntry(signalId, {
+      extendMinutes,
+      reactivatedBy: 'BULK_REPROCESS',
+      reactivationReason
+    });
+    
+    results.push(result);
+    
+    if (result.success) {
+      reactivated++;
+      
+      // Trigger immediate re-evaluation
+      try {
+        const { evaluateAndUpdateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+        const signal = await d.prepare('SELECT * FROM signals WHERE id = ?').get(signalId) as any;
+        
+        if (signal) {
+          await evaluateAndUpdateExtendedOutcome({
+            signalId,
+            symbol: signal.symbol,
+            category: signal.category,
+            direction: signal.category.includes('SHORT') ? 'SHORT' : 'LONG',
+            signalTime: signal.time,
+            entryPrice: signal.price,
+            stopPrice: signal.stop_price,
+            tp1Price: signal.tp1_price,
+            tp2Price: signal.tp2_price,
+          });
+        }
+      } catch (e) {
+        console.error(`[delayed-entry] Re-evaluation error for ${signalId}:`, e);
+      }
+    } else {
+      failed++;
+    }
+    
+    // Rate limiting
+    await new Promise(r => setTimeout(r, 100));
+  }
+  
+  return {
+    total: rows.length,
+    reactivated,
+    failed,
+    results
+  };
+}
+
+/**
+ * Mark expired entries as invalid for stats
+ * Used when watcher bugs cause false expiries
+ */
+export async function markExpiredAsInvalid(
+  signalIds: number[],
+  reason: string = 'WATCHER_BUG'
+): Promise<{ marked: number; failed: number }> {
+  const d = getDb();
+  let marked = 0;
+  let failed = 0;
+  
+  for (const signalId of signalIds) {
+    try {
+      const result = await d.prepare(`
+        UPDATE delayed_entry_records
+        SET invalid_for_stats = TRUE,
+            expired_reason = COALESCE(?, expired_reason)
+        WHERE signal_id = ? 
+          AND status = 'EXPIRED_NO_ENTRY'
+      `).run(reason, signalId);
+      
+      if (result.changes > 0) {
+        marked++;
+      } else {
+        failed++;
+      }
+    } catch (e) {
+      console.error(`[delayed-entry] Mark invalid error for ${signalId}:`, e);
+      failed++;
+    }
+  }
+  
+  return { marked, failed };
 }
 
 // ============================================================================

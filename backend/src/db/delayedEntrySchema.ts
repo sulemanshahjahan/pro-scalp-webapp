@@ -42,6 +42,15 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExists(d, 'delayed_entry_records', 'confirmed_tp1_price', 'DOUBLE PRECISION');
     await addColumnIfNotExists(d, 'delayed_entry_records', 'confirmed_tp2_price', 'DOUBLE PRECISION');
     
+    // Add audit columns for reactivation tracking
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'invalid_for_stats', 'BOOLEAN DEFAULT FALSE');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'expired_reason', 'VARCHAR(50)');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'reactivated_at', 'BIGINT');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'reactivated_by', 'VARCHAR(100)');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'reactivation_reason', 'VARCHAR(100)');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'prev_status', 'VARCHAR(20)');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'prev_expires_at', 'BIGINT');
+    
     // Index for efficient WATCH queries
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)
@@ -88,6 +97,15 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_stop_price', 'REAL');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_tp1_price', 'REAL');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirmed_tp2_price', 'REAL');
+    
+    // Add audit columns for reactivation tracking (SQLite)
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'invalid_for_stats', 'INTEGER DEFAULT 0');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'expired_reason', 'TEXT');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'reactivated_at', 'INTEGER');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'reactivated_by', 'TEXT');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'reactivation_reason', 'TEXT');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'prev_status', 'TEXT');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'prev_expires_at', 'INTEGER');
     
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)

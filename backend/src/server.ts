@@ -3277,6 +3277,7 @@ app.get('/api/stats/verifiable', async (req, res) => {
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Get all counts in a single query
+    // Exclude signals marked as invalid_for_stats in delayed_entry_records
     const stats = await d.prepare(`
       SELECT
         -- Totals
@@ -3318,7 +3319,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
         AVG(eo.ext24_managed_r) as avg_managed_r,
         SUM(eo.ext24_managed_r) as total_managed_r
       FROM extended_outcomes eo
+      LEFT JOIN delayed_entry_records der ON der.signal_id = eo.signal_id
       ${whereClause}
+      AND (der.invalid_for_stats IS NULL OR der.invalid_for_stats = FALSE)
     `).get(...values) as any;
 
     // Parse counts
@@ -5272,6 +5275,138 @@ app.get('/api/debug/delayed-entry-stats', async (req, res) => {
       lossWithDelayed: lossWithDelayed
     });
   } catch (error) {
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * POST /api/delayed-entry/reactivate
+ * Safely reactivate expired delayed entries with full audit trail
+ */
+app.post('/api/delayed-entry/reactivate', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  const { signalIds, extendMinutes = 1440, reactivationReason = 'MANUAL_REACTIVATION' } = req.body || {};
+  
+  if (!Array.isArray(signalIds) || signalIds.length === 0) {
+    return res.status(400).json({ ok: false, error: 'signalIds array required' });
+  }
+  
+  // Limit batch size
+  if (signalIds.length > 50) {
+    return res.status(400).json({ ok: false, error: 'Max 50 signals per batch' });
+  }
+  
+  try {
+    const { reactivateDelayedEntry } = await import('./delayedEntry.js');
+    
+    const results = [];
+    for (const signalId of signalIds) {
+      const result = await reactivateDelayedEntry(Number(signalId), {
+        extendMinutes,
+        reactivatedBy: String(req.headers['x-user'] || 'API_USER'),
+        reactivationReason
+      });
+      results.push(result);
+      
+      // Small delay between each to avoid hammering
+      await new Promise(r => setTimeout(r, 50));
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    
+    res.json({
+      ok: true,
+      total: signalIds.length,
+      success: successCount,
+      failed: signalIds.length - successCount,
+      results
+    });
+    
+  } catch (error) {
+    console.error('[delayed-entry/reactivate] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * POST /api/delayed-entry/reprocess-expired
+ * Bulk reprocess expired entries from a date range
+ * Admin only - requires x-admin-token
+ */
+app.post('/api/delayed-entry/reprocess-expired', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  if (!requireAdmin(req, res)) return;
+  
+  const { 
+    from, 
+    to, 
+    symbol, 
+    batchSize = 50,
+    extendMinutes = 1440,
+    reactivationReason = 'BULK_REPROCESS_WATCHER_BUG'
+  } = req.body || {};
+  
+  // Parse dates
+  const fromTime = from ? new Date(from).getTime() : Date.now() - (7 * 24 * 60 * 60 * 1000); // Default: last 7 days
+  const toTime = to ? new Date(to).getTime() : Date.now();
+  
+  if (!Number.isFinite(fromTime) || !Number.isFinite(toTime)) {
+    return res.status(400).json({ ok: false, error: 'Invalid from/to dates' });
+  }
+  
+  try {
+    const { reprocessExpiredEntries } = await import('./delayedEntry.js');
+    
+    const result = await reprocessExpiredEntries(fromTime, toTime, {
+      symbol,
+      batchSize,
+      extendMinutes,
+      reactivationReason
+    });
+    
+    res.json({
+      ok: true,
+      params: { from: new Date(fromTime).toISOString(), to: new Date(toTime).toISOString(), symbol },
+      ...result
+    });
+    
+  } catch (error) {
+    console.error('[delayed-entry/reprocess-expired] Error:', error);
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+/**
+ * POST /api/delayed-entry/mark-invalid
+ * Mark expired entries as invalid for stats (e.g., due to watcher bugs)
+ * Admin only
+ */
+app.post('/api/delayed-entry/mark-invalid', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  if (!requireAdmin(req, res)) return;
+  
+  const { signalIds, reason = 'WATCHER_BUG' } = req.body || {};
+  
+  if (!Array.isArray(signalIds) || signalIds.length === 0) {
+    return res.status(400).json({ ok: false, error: 'signalIds array required' });
+  }
+  
+  try {
+    const { markExpiredAsInvalid } = await import('./delayedEntry.js');
+    
+    const result = await markExpiredAsInvalid(signalIds, reason);
+    
+    res.json({
+      ok: true,
+      reason,
+      ...result
+    });
+    
+  } catch (error) {
+    console.error('[delayed-entry/mark-invalid] Error:', error);
     res.status(500).json({ ok: false, error: String(error) });
   }
 });
