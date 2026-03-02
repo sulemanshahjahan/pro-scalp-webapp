@@ -201,44 +201,51 @@ export async function getActiveWatches(limit: number = 200): Promise<DelayedEntr
   
   const rows = await d.prepare(`
     SELECT 
-      signal_id as signalId,
+      signal_id,
       symbol,
       direction,
-      reference_price as referencePrice,
-      target_confirm_price as targetConfirmPrice,
-      watch_started_at as watchStartedAt,
-      watch_expires_at as watchExpiresAt,
+      reference_price,
+      target_confirm_price,
+      watch_started_at,
+      watch_expires_at,
       status,
-      confirmed_at as confirmedAt,
-      confirmed_price as confirmedPrice,
+      confirmed_at,
+      confirmed_price,
       reason,
-      original_stop as originalStop,
-      original_tp1 as originalTp1,
-      original_tp2 as originalTp2
+      original_stop,
+      original_tp1,
+      original_tp2
     FROM delayed_entry_records
     WHERE status = 'WATCH'
     ORDER BY watch_started_at ASC
-    LIMIT @limit
-  `).all({ limit }) as any[];
+    LIMIT ?
+  `).all(limit) as any[];
+  
+  // Helper to safely get number
+  const getNum = (val: any) => {
+    if (val == null) return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  };
   
   return rows.map(row => {
     const record: DelayedEntryRecord = {
-      signalId: Number(row.signalId),
-      symbol: String(row.symbol),
-      direction: String(row.direction) as 'LONG' | 'SHORT',
-      referencePrice: Number(row.referencePrice),
-      targetConfirmPrice: Number(row.targetConfirmPrice),
-      watchStartedAt: Number(row.watchStartedAt),
-      watchExpiresAt: Number(row.watchExpiresAt),
-      status: String(row.status) as DelayedEntryStatus,
-      confirmedAt: row.confirmedAt ? Number(row.confirmedAt) : undefined,
-      confirmedPrice: row.confirmedPrice ? Number(row.confirmedPrice) : undefined,
+      signalId: getNum(row.signal_id ?? row.signalId) ?? 0,
+      symbol: String(row.symbol ?? ''),
+      direction: String(row.direction ?? 'LONG') as 'LONG' | 'SHORT',
+      referencePrice: getNum(row.reference_price ?? row.referencePrice) ?? 0,
+      targetConfirmPrice: getNum(row.target_confirm_price ?? row.targetConfirmPrice) ?? 0,
+      watchStartedAt: getNum(row.watch_started_at ?? row.watchStartedAt) ?? 0,
+      watchExpiresAt: getNum(row.watch_expires_at ?? row.watchExpiresAt) ?? 0,
+      status: String(row.status ?? 'WATCH') as DelayedEntryStatus,
+      confirmedAt: getNum(row.confirmed_at ?? row.confirmedAt) || undefined,
+      confirmedPrice: getNum(row.confirmed_price ?? row.confirmedPrice) || undefined,
       reason: row.reason ? String(row.reason) : undefined,
     };
     // Store original TP/SL for recalculation
-    (record as any).originalStop = row.originalStop ? Number(row.originalStop) : null;
-    (record as any).originalTp1 = row.originalTp1 ? Number(row.originalTp1) : null;
-    (record as any).originalTp2 = row.originalTp2 ? Number(row.originalTp2) : null;
+    (record as any).originalStop = getNum(row.original_stop ?? row.originalStop);
+    (record as any).originalTp1 = getNum(row.original_tp1 ?? row.originalTp1);
+    (record as any).originalTp2 = getNum(row.original_tp2 ?? row.originalTp2);
     return record;
   });
 }
