@@ -138,12 +138,23 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
 
 // Update status constraint to include SKIPPED_SPIKE
 async function updateStatusConstraint(d: any): Promise<void> {
+  const isPg = String(process.env.DB_DRIVER).toLowerCase() === 'postgres';
+  
+  // Only needed for PostgreSQL (SQLite has inline CHECK constraint in CREATE TABLE)
+  if (!isPg) {
+    console.log('[delayed-entry] Constraint update skipped for SQLite');
+    return;
+  }
+  
   try {
+    console.log('[delayed-entry] Updating status constraint to include SKIPPED_SPIKE...');
+    
     // For PostgreSQL, we need to drop and recreate the constraint
     await d.prepare(`
       ALTER TABLE delayed_entry_records 
       DROP CONSTRAINT IF EXISTS delayed_entry_records_status_check
     `).run();
+    console.log('[delayed-entry] Dropped old status constraint');
     
     await d.prepare(`
       ALTER TABLE delayed_entry_records 
@@ -151,10 +162,11 @@ async function updateStatusConstraint(d: any): Promise<void> {
       CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED', 'SKIPPED_SPIKE'))
     `).run();
     
-    console.log('[delayed-entry] Updated status constraint to include SKIPPED_SPIKE');
+    console.log('[delayed-entry] Successfully updated status constraint to include SKIPPED_SPIKE');
   } catch (e: any) {
-    // Constraint might already be correct, ignore errors
-    console.log('[delayed-entry] Status constraint update (may already be correct):', e?.message);
+    console.error('[delayed-entry] FAILED to update status constraint:', e?.message);
+    // Don't swallow errors - let them propagate so we can see the real issue
+    throw e;
   }
 }
 
