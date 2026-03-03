@@ -376,6 +376,24 @@ async function ensureSchema(): Promise<void> {
   const isSQLite = d.driver === 'sqlite';
 
   try {
+    // CRITICAL: Always ensure mode column exists first (for existing tables without it)
+    console.log('[extended-outcomes] ensureSchema: ensuring mode column exists...');
+    try {
+      if (isSQLite) {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
+      } else {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
+      }
+      console.log('[extended-outcomes] ensureSchema: mode column added or already exists');
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      if (msg.includes('already exists') || msg.includes('duplicate column') || msg.includes('already exist') || msg.includes('does not exist')) {
+        console.log('[extended-outcomes] ensureSchema: mode column check passed (may not exist yet)');
+      } else {
+        console.warn('[extended-outcomes] ensureSchema: mode column error:', e?.message);
+      }
+    }
+
     if (isSQLite) {
       await d.exec(`
         CREATE TABLE IF NOT EXISTS extended_outcomes (
