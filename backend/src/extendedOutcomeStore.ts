@@ -275,33 +275,28 @@ async function migrateDualModeOutcomes(): Promise<void> {
     // Ensure meta table exists first
     await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
     
-    // Check if migration already completed
-    const metaKey = 'dual_mode_migration_v1';
-    let metaRow: { value?: string } | undefined;
-    try {
-      if (isSQLite) {
-        metaRow = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(metaKey) as { value?: string } | undefined;
-      } else {
-        metaRow = await d.prepare(`SELECT value FROM meta WHERE key = $1`).get(metaKey) as { value?: string } | undefined;
-      }
-    } catch (e) {
-      // Meta table might not exist yet, continue with migration
-      console.log('[extended-outcomes] Could not read meta table, continuing with migration');
-    }
-    if (metaRow?.value) {
-      console.log('[extended-outcomes] Dual-mode migration already completed');
-      return;
-    }
-    
-    // Check if mode column exists
+    // Check if mode column exists by querying information_schema (PostgreSQL) or pragma (SQLite)
     let modeColumnExists = false;
     try {
-      await d.prepare(`SELECT mode FROM extended_outcomes LIMIT 1`).get();
-      modeColumnExists = true;
-      console.log('[extended-outcomes] mode column already exists');
-    } catch (e) {
-      // Column doesn't exist, will add it below
-      console.log('[extended-outcomes] mode column does not exist, adding...');
+      if (isSQLite) {
+        const colInfo = await d.prepare(`PRAGMA table_info(extended_outcomes)`).all() as Array<{name: string}>;
+        modeColumnExists = colInfo.some(col => col.name === 'mode');
+      } else {
+        // PostgreSQL - query information_schema
+        const colRow = await d.prepare(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'extended_outcomes' AND column_name = 'mode'
+        `).get() as {column_name?: string} | undefined;
+        modeColumnExists = !!colRow?.column_name;
+      }
+      if (modeColumnExists) {
+        console.log('[extended-outcomes] mode column already exists');
+      } else {
+        console.log('[extended-outcomes] mode column does not exist, will add it');
+      }
+    } catch (e: any) {
+      console.log('[extended-outcomes] Could not check for mode column:', e?.message);
     }
     
     // Add mode column if it doesn't exist
@@ -315,7 +310,16 @@ async function migrateDualModeOutcomes(): Promise<void> {
         console.log('[extended-outcomes] Added mode column');
       } catch (e: any) {
         console.warn('[extended-outcomes] Error adding mode column:', e?.message);
+        // Continue anyway - column might already exist
       }
+    }
+    
+    // Update existing rows to have mode='EXECUTED' where null
+    try {
+      await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
+      console.log('[extended-outcomes] Set mode=EXECUTED for existing rows');
+    } catch (e: any) {
+      console.warn('[extended-outcomes] Error updating existing rows:', e?.message);
     }
     
     // Update existing rows to have mode='EXECUTED'
@@ -352,16 +356,21 @@ async function migrateDualModeOutcomes(): Promise<void> {
     }
     
     // Mark migration as complete
-    if (isSQLite) {
-      await d.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`).run(metaKey, String(Date.now()));
-    } else {
-      // PostgreSQL: use ON CONFLICT
-      await d.prepare(`
-        INSERT INTO meta(key, value) VALUES($1, $2)
-        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-      `).run(metaKey, String(Date.now()));
+    const metaKey = 'dual_mode_migration_v1';
+    try {
+      if (isSQLite) {
+        await d.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`).run(metaKey, String(Date.now()));
+      } else {
+        // PostgreSQL: use ON CONFLICT
+        await d.prepare(`
+          INSERT INTO meta(key, value) VALUES($1, $2)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `).run(metaKey, String(Date.now()));
+      }
+      console.log('[extended-outcomes] Dual-mode migration completed successfully');
+    } catch (e: any) {
+      console.warn('[extended-outcomes] Could not mark migration complete:', e?.message);
     }
-    console.log('[extended-outcomes] Dual-mode migration completed successfully');
     
   } catch (e) {
     console.error('[extended-outcomes] Dual-mode migration failed:', e);
