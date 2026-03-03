@@ -3717,8 +3717,9 @@ app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
   
   try {
     // Find signals with EXECUTED outcomes but no PAPER outcomes
+    // Note: signals table doesn't have direction column, we get it from category
     const signalsNeedingPaper = await d.prepare(`
-      SELECT DISTINCT eo.signal_id, s.symbol, s.category, s.direction, s.time, 
+      SELECT DISTINCT eo.signal_id, s.symbol, s.category, eo.direction, s.time, 
              s.price, s.stop, s.tp1, s.tp2
       FROM extended_outcomes eo
       JOIN signals s ON s.id = eo.signal_id
