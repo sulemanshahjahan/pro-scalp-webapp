@@ -3757,6 +3757,7 @@ app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
     // Process each signal
     let created = 0;
     let errors = 0;
+    const errorDetails: Array<{signalId: number; error: string}> = [];
     
     for (const signal of signalsNeedingPaper) {
       try {
@@ -3791,7 +3792,9 @@ app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
           created++;
         }
       } catch (e: any) {
-        console.error(`[backfill-paper] Error for signal ${signal.signal_id}:`, e?.message);
+        const errorMsg = e?.message || String(e);
+        console.error(`[backfill-paper] Error for signal ${signal.signal_id}:`, errorMsg);
+        errorDetails.push({ signalId: signal.signal_id, error: errorMsg });
         errors++;
       }
       
@@ -3804,7 +3807,8 @@ app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
       processed: signalsNeedingPaper.length,
       created,
       errors,
-      message: `Backfilled ${created} PAPER outcomes (${errors} errors)`
+      message: `Backfilled ${created} PAPER outcomes (${errors} errors)`,
+      errorDetails: errorDetails.slice(0, 10) // Include first 10 errors for debugging
     });
     
   } catch (e: any) {
