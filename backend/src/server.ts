@@ -3851,6 +3851,85 @@ app.post('/api/extended-outcomes/evaluate/:signalId', async (req, res) => {
   }
 });
 
+// Force evaluation of unevaluated PAPER outcomes (public for initial backfill)
+app.post('/api/admin/evaluate-paper-outcomes', async (req, res) => {
+  const d = getDb();
+  const limit = Number((req.query as any)?.limit) || 50;
+  const dryRun = (req.query as any)?.dryRun === 'true';
+  
+  try {
+    // Find PAPER outcomes that have never been evaluated (coverage_pct = 0)
+    const unevaluated = await d.prepare(`
+      SELECT 
+        eo.signal_id, eo.symbol, eo.category, eo.direction, 
+        eo.signal_time, eo.entry_price, eo.stop_price, eo.tp1_price, eo.tp2_price
+      FROM extended_outcomes eo
+      WHERE eo.mode = 'PAPER'
+        AND eo.coverage_pct = 0
+        AND eo.last_evaluated_at = 0
+      ORDER BY eo.signal_id DESC
+      LIMIT ?
+    `).all(limit) as any[];
+    
+    if (unevaluated.length === 0) {
+      return res.json({ ok: true, message: 'No unevaluated PAPER outcomes found', processed: 0, evaluated: 0 });
+    }
+    
+    if (dryRun) {
+      return res.json({ 
+        ok: true, 
+        dryRun: true, 
+        wouldProcess: unevaluated.length,
+        sample: unevaluated.slice(0, 5).map((s: any) => ({ signalId: s.signal_id, symbol: s.symbol }))
+      });
+    }
+    
+    // Evaluate each
+    let evaluated = 0;
+    let errors = 0;
+    
+    for (const row of unevaluated) {
+      try {
+        const input: ExtendedOutcomeInput = {
+          signalId: row.signal_id,
+          symbol: row.symbol,
+          category: row.category,
+          direction: row.direction,
+          signalTime: row.signal_time,
+          entryPrice: row.entry_price,
+          stopPrice: row.stop_price,
+          tp1Price: row.tp1_price,
+          tp2Price: row.tp2_price,
+          mode: 'PAPER'
+        };
+        
+        // Evaluate (fetches candles automatically)
+        const { evaluateExtended24hOutcome, updateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+        const result = await evaluateExtended24hOutcome(input, undefined, null, 'PAPER');
+        await updateExtendedOutcome(row.signal_id, result, 'PAPER');
+        
+        evaluated++;
+        await new Promise(r => setTimeout(r, 200)); // Rate limit to avoid Binance limits
+      } catch (e: any) {
+        console.error(`[eval-paper] Error for signal ${row.signal_id}:`, e?.message);
+        errors++;
+      }
+    }
+    
+    res.json({ 
+      ok: true, 
+      processed: unevaluated.length,
+      evaluated,
+      errors,
+      message: `Evaluated ${evaluated} PAPER outcomes (${errors} errors)`
+    });
+    
+  } catch (e: any) {
+    console.error('[eval-paper] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Get extended outcomes with 240m horizon comparison
 app.get('/api/extended-outcomes/comparison', async (req, res) => {
   try {
