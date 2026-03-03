@@ -130,7 +130,32 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     `).run();
   }
   
+  // Fix: Update status check constraint to include SKIPPED_SPIKE (migration for existing tables)
+  await updateStatusConstraint(d);
+  
   console.log('[delayed-entry] Schema ensured');
+}
+
+// Update status constraint to include SKIPPED_SPIKE
+async function updateStatusConstraint(d: any): Promise<void> {
+  try {
+    // For PostgreSQL, we need to drop and recreate the constraint
+    await d.prepare(`
+      ALTER TABLE delayed_entry_records 
+      DROP CONSTRAINT IF EXISTS delayed_entry_records_status_check
+    `).run();
+    
+    await d.prepare(`
+      ALTER TABLE delayed_entry_records 
+      ADD CONSTRAINT delayed_entry_records_status_check 
+      CHECK (status IN ('WATCH', 'ENTERED', 'EXPIRED_NO_ENTRY', 'CANCELLED', 'SKIPPED_SPIKE'))
+    `).run();
+    
+    console.log('[delayed-entry] Updated status constraint to include SKIPPED_SPIKE');
+  } catch (e: any) {
+    // Constraint might already be correct, ignore errors
+    console.log('[delayed-entry] Status constraint update (may already be correct):', e?.message);
+  }
 }
 
 // PostgreSQL: Add column if not exists

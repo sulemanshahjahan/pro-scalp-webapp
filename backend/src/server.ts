@@ -3918,16 +3918,16 @@ app.get('/api/extended-outcomes/flip-stats', async (req, res) => {
     const LOSS_STATUSES = ['LOSS_STOP'];
     const NO_TRADE_STATUSES = ['NO_TRADE'];
     
-    // Build time filter if provided
+    // Build time filter if provided - applied to paper CTE only
     let timeFilter = '';
     const params: any[] = [];
     
     if (fromMs !== null) {
-      timeFilter += ' AND p.started_at >= ?';
+      timeFilter += ' AND started_at >= ?';
       params.push(fromMs);
     }
     if (toMs !== null) {
-      timeFilter += ' AND p.started_at <= ?';
+      timeFilter += ' AND started_at <= ?';
       params.push(toMs);
     }
     
@@ -3937,7 +3937,7 @@ app.get('/api/extended-outcomes/flip-stats', async (req, res) => {
       WITH paper AS (
         SELECT signal_id, status, started_at
         FROM extended_outcomes
-        WHERE mode = 'PAPER'
+        WHERE mode = 'PAPER' ${timeFilter}
       ),
       exec AS (
         SELECT signal_id, status
@@ -3973,7 +3973,6 @@ app.get('/api/extended-outcomes/flip-stats', async (req, res) => {
             ELSE 'OTHER'
           END AS exec_bucket
         FROM pairs
-        WHERE 1=1 ${timeFilter}
       )
       SELECT
         COUNT(*) FILTER (WHERE paper_status IS NOT NULL) AS total_paper,
@@ -3991,10 +3990,11 @@ app.get('/api/extended-outcomes/flip-stats', async (req, res) => {
     `;
     
     // Add status params for both paper and exec buckets
+    // Order: time params first (for paper CTE), then status params for CASE statements
     const queryParams = [
-      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES,
-      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES,
-      ...params
+      ...params,  // time filter params (used in paper CTE)
+      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES,  // For paper_bucket CASE
+      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES   // For exec_bucket CASE
     ];
     
     const row = await d.prepare(query).get(...queryParams) as any;
