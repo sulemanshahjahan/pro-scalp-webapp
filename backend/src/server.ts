@@ -66,6 +66,7 @@ import {
   getImprovementStats,
   getManagedPnlStats,
   backfillEarlyWindowMetrics,
+  evaluateExtended24hOutcome,
   type ExtendedOutcomeInput,
 } from './extendedOutcomeStore.js';
 import {
@@ -3703,6 +3704,111 @@ app.post('/api/extended-outcomes/backfill-managed', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Backfill PAPER mode outcomes for existing signals (admin only)
+app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  
+  const d = getDb();
+  const limit = Number((req.query as any)?.limit) || 100;
+  const dryRun = (req.query as any)?.dryRun === 'true';
+  
+  try {
+    // Find signals with EXECUTED outcomes but no PAPER outcomes
+    const signalsNeedingPaper = await d.prepare(`
+      SELECT DISTINCT eo.signal_id, s.symbol, s.category, s.direction, s.time, 
+             s.price, s.stop, s.tp1, s.tp2
+      FROM extended_outcomes eo
+      JOIN signals s ON s.id = eo.signal_id
+      WHERE eo.mode = 'EXECUTED'
+        AND eo.signal_id NOT IN (
+          SELECT signal_id FROM extended_outcomes WHERE mode = 'PAPER'
+        )
+      ORDER BY eo.signal_id DESC
+      LIMIT ?
+    `).all(limit) as Array<{
+      signal_id: number;
+      symbol: string;
+      category: string;
+      direction: string;
+      time: number;
+      price: number;
+      stop: number;
+      tp1: number;
+      tp2: number;
+    }>;
+    
+    if (signalsNeedingPaper.length === 0) {
+      return res.json({ ok: true, message: 'No signals need PAPER backfill', processed: 0, created: 0 });
+    }
+    
+    if (dryRun) {
+      return res.json({ 
+        ok: true, 
+        dryRun: true, 
+        wouldProcess: signalsNeedingPaper.length,
+        sampleSignals: signalsNeedingPaper.slice(0, 5).map(s => ({ signalId: s.signal_id, symbol: s.symbol }))
+      });
+    }
+    
+    // Process each signal
+    let created = 0;
+    let errors = 0;
+    
+    for (const signal of signalsNeedingPaper) {
+      try {
+        // Create PAPER outcome input
+        const input: ExtendedOutcomeInput = {
+          signalId: signal.signal_id,
+          symbol: signal.symbol,
+          category: signal.category,
+          direction: signal.direction as any,
+          signalTime: signal.time,
+          entryPrice: signal.price,
+          stopPrice: signal.stop,
+          tp1Price: signal.tp1,
+          tp2Price: signal.tp2,
+          mode: 'PAPER'
+        };
+        
+        // Get or create the PAPER outcome record
+        const { getOrCreateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+        const { outcome, created: wasCreated } = await getOrCreateExtendedOutcome(input);
+        
+        if (outcome && wasCreated) {
+          // Evaluate the PAPER outcome
+          const { evaluateExtended24hOutcome } = await import('./extendedOutcomeStore.js');
+          const candles = undefined; // Will fetch automatically
+          const result = await evaluateExtended24hOutcome(input, candles, null, 'PAPER');
+          
+          // Update the record with result
+          const { updateExtendedOutcome } = await import('./extendedOutcomeStore.js');
+          await updateExtendedOutcome(signal.signal_id, result, 'PAPER');
+          
+          created++;
+        }
+      } catch (e: any) {
+        console.error(`[backfill-paper] Error for signal ${signal.signal_id}:`, e?.message);
+        errors++;
+      }
+      
+      // Small delay to avoid overwhelming the DB
+      await new Promise(r => setTimeout(r, 50));
+    }
+    
+    res.json({ 
+      ok: true, 
+      processed: signalsNeedingPaper.length,
+      created,
+      errors,
+      message: `Backfilled ${created} PAPER outcomes (${errors} errors)`
+    });
+    
+  } catch (e: any) {
+    console.error('[backfill-paper] Error:', e);
+    res.status(500).json({ ok: false, error: String(e), message: e?.message });
   }
 });
 
