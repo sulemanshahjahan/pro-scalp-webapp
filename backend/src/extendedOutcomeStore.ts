@@ -34,6 +34,9 @@ export type ExtendedOutcomeStatus =
   | 'FLAT_TIMEOUT_24H'
   | 'NO_TRADE';  // Signal never confirmed in delayed entry
 
+// Mode enum for outcome variants
+export type OutcomeMode = 'PAPER' | 'EXECUTED';
+
 // Direction type
 export type SignalDirection = 'LONG' | 'SHORT';
 
@@ -44,6 +47,9 @@ export interface ExtendedOutcome {
   symbol: string;
   category: string;
   direction: SignalDirection;
+  
+  // Mode: PAPER (original signal levels) vs EXECUTED (confirmed entry levels)
+  mode: OutcomeMode;
   
   // Time tracking
   signalTime: number;
@@ -120,6 +126,7 @@ export interface ExtendedOutcomeInput {
   stopPrice: number | null;
   tp1Price: number | null;
   tp2Price: number | null;
+  mode?: OutcomeMode;  // 'PAPER' or 'EXECUTED', defaults to 'EXECUTED'
 }
 
 // Evaluation result
@@ -257,6 +264,81 @@ async function migrateEarlyWindowColumns(): Promise<void> {
 }
 
 /**
+ * Migration for dual-mode outcomes (PAPER vs EXECUTED)
+ * Adds mode column and updates unique constraint
+ */
+async function migrateDualModeOutcomes(): Promise<void> {
+  const d = getDb();
+  const isSQLite = d.driver === 'sqlite';
+  
+  try {
+    // Check if migration already completed
+    const metaKey = 'dual_mode_migration_v1';
+    const metaRow = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(metaKey) as { value?: string } | undefined;
+    if (metaRow?.value) {
+      console.log('[extended-outcomes] Dual-mode migration already completed');
+      return;
+    }
+    
+    // Add mode column
+    try {
+      if (isSQLite) {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
+      } else {
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
+      }
+      console.log('[extended-outcomes] Added mode column');
+    } catch (e: any) {
+      if (!String(e?.message).includes('duplicate column') && 
+          !String(e?.message).includes('already exists')) {
+        console.warn('[extended-outcomes] Mode column may already exist:', e?.message);
+      }
+    }
+    
+    // Update existing rows to have mode='EXECUTED'
+    await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
+    console.log('[extended-outcomes] Set mode=EXECUTED for existing rows');
+    
+    // For PostgreSQL: update unique constraint
+    if (!isSQLite) {
+      try {
+        // Drop old unique constraint and create new composite one
+        await d.exec(`
+          ALTER TABLE extended_outcomes 
+          DROP CONSTRAINT IF EXISTS extended_outcomes_signal_id_key
+        `);
+        await d.exec(`
+          ALTER TABLE extended_outcomes 
+          ADD CONSTRAINT extended_outcomes_signal_mode_unique 
+          UNIQUE (signal_id, mode)
+        `);
+        console.log('[extended-outcomes] Updated unique constraint to (signal_id, mode)');
+      } catch (e: any) {
+        console.warn('[extended-outcomes] Could not update unique constraint:', e?.message);
+      }
+      
+      // Add index for mode-based queries
+      try {
+        await d.exec(`CREATE INDEX IF NOT EXISTS idx_extended_outcomes_mode ON extended_outcomes(mode)`);
+      } catch (e) { /* ignore */ }
+    } else {
+      // SQLite: create index for mode
+      try {
+        await d.exec(`CREATE INDEX IF NOT EXISTS idx_extended_outcomes_mode ON extended_outcomes(mode)`);
+      } catch (e) { /* ignore */ }
+    }
+    
+    // Mark migration as complete
+    await d.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`).run(metaKey, String(Date.now()));
+    console.log('[extended-outcomes] Dual-mode migration completed successfully');
+    
+  } catch (e) {
+    console.error('[extended-outcomes] Dual-mode migration failed:', e);
+    // Don't throw - allow startup to continue
+  }
+}
+
+/**
  * Ensure extended outcomes table exists
  * Supports both SQLite and PostgreSQL
  */
@@ -271,7 +353,8 @@ async function ensureSchema(): Promise<void> {
       await d.exec(`
         CREATE TABLE IF NOT EXISTS extended_outcomes (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          signal_id INTEGER NOT NULL UNIQUE,
+          signal_id INTEGER NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'EXECUTED',
           symbol TEXT NOT NULL,
           category TEXT NOT NULL,
           direction TEXT NOT NULL DEFAULT 'LONG',
@@ -342,7 +425,9 @@ async function ensureSchema(): Promise<void> {
           FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
         );
 
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_extended_outcomes_signal_mode ON extended_outcomes(signal_id, mode);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_id ON extended_outcomes(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_mode ON extended_outcomes(mode);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_status ON extended_outcomes(status);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_symbol ON extended_outcomes(symbol);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_category ON extended_outcomes(category);
@@ -354,7 +439,8 @@ async function ensureSchema(): Promise<void> {
       await d.exec(`
         CREATE TABLE IF NOT EXISTS extended_outcomes (
           id SERIAL PRIMARY KEY,
-          signal_id BIGINT NOT NULL UNIQUE,
+          signal_id BIGINT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'EXECUTED',
           symbol TEXT NOT NULL,
           category TEXT NOT NULL,
           direction TEXT NOT NULL DEFAULT 'LONG',
@@ -425,7 +511,9 @@ async function ensureSchema(): Promise<void> {
           FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
         );
 
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_extended_outcomes_signal_mode ON extended_outcomes(signal_id, mode);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_signal_id ON extended_outcomes(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_extended_outcomes_mode ON extended_outcomes(mode);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_status ON extended_outcomes(status);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_symbol ON extended_outcomes(symbol);
         CREATE INDEX IF NOT EXISTS idx_extended_outcomes_category ON extended_outcomes(category);
@@ -439,6 +527,9 @@ async function ensureSchema(): Promise<void> {
     
     // Run migration for early window columns
     await migrateEarlyWindowColumns();
+    
+    // Run migration for dual-mode outcomes (PAPER + EXECUTED)
+    await migrateDualModeOutcomes();
 
     schemaReady = true;
     console.log('[extended-outcomes] Schema ensured successfully');
@@ -546,13 +637,18 @@ function calculateExcursions(
  */
 export async function evaluateExtended24hOutcome(
   signal: ExtendedOutcomeInput,
-  candles?: OHLCV[]
+  candles?: OHLCV[],
+  delayedRecordParam?: DelayedEntryRecord | null,
+  modeParam?: OutcomeMode
 ): Promise<EvaluationResult> {
   const {
     signalId,
     signalTime,
     direction,
+    mode: inputMode,
   } = signal;
+  
+  const mode = modeParam || inputMode || 'EXECUTED';
   
   // Use let so we can override with delayed entry confirmed prices
   let { entryPrice, stopPrice, tp1Price, tp2Price } = signal;
@@ -562,12 +658,12 @@ export async function evaluateExtended24hOutcome(
 
   // Check delayed entry status to determine if this signal should be evaluated
   // If signal never confirmed (EXPIRED_NO_ENTRY or CANCELLED), mark as NO_TRADE (0R)
-  const delayedRecord = await getDelayedEntryRecordBySignalId(signalId);
+  const delayedRecord = delayedRecordParam !== undefined ? delayedRecordParam : await getDelayedEntryRecordBySignalId(signalId);
   
-  if (delayedRecord) {
+  if (delayedRecord && mode === 'EXECUTED') {
     if (delayedRecord.status === 'EXPIRED_NO_ENTRY' || delayedRecord.status === 'CANCELLED') {
-      // Signal never confirmed - this is a NO_TRADE (0R, not a loss)
-      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} never confirmed (${delayedRecord.status}) - marking as NO_TRADE`);
+      // Signal never confirmed - this is a NO_TRADE (0R, not a loss) for EXECUTED mode
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} never confirmed (${delayedRecord.status}) - marking as NO_TRADE (EXECUTED mode)`);
       
       const noTradeResult: EvaluationResult = {
         status: 'NO_TRADE',
@@ -630,9 +726,9 @@ export async function evaluateExtended24hOutcome(
       return noTradeResult;
     }
     
-    if (delayedRecord.status === 'WATCH') {
-      // Signal is still pending confirmation - don't evaluate yet
-      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} still in WATCH status - deferring evaluation`);
+    if (delayedRecord.status === 'WATCH' && mode === 'EXECUTED') {
+      // Signal is still pending confirmation - don't evaluate yet (only for EXECUTED mode)
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} still in WATCH status - deferring evaluation (EXECUTED mode)`);
       
       const pendingResult: EvaluationResult = {
         status: 'PENDING',
@@ -695,24 +791,29 @@ export async function evaluateExtended24hOutcome(
       return pendingResult;
     }
     
-    // Status is 'ENTERED' - proceed with normal evaluation
-    console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} confirmed at ${delayedRecord.confirmedPrice} - proceeding with evaluation`);
-    
-    // Use confirmed entry price and recalculated TP/SL from delayed entry
-    if (delayedRecord.confirmedPrice) {
-      entryPrice = delayedRecord.confirmedPrice;
+    // Status is 'ENTERED' - use confirmed prices only for EXECUTED mode
+    if (mode === 'EXECUTED') {
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} confirmed at ${delayedRecord.confirmedPrice} - proceeding with evaluation (EXECUTED mode)`);
+      
+      // Use confirmed entry price and recalculated TP/SL from delayed entry
+      if (delayedRecord.confirmedPrice) {
+        entryPrice = delayedRecord.confirmedPrice;
+      }
+      if (delayedRecord.confirmedStopPrice) {
+        stopPrice = delayedRecord.confirmedStopPrice;
+      }
+      if (delayedRecord.confirmedTp1Price) {
+        tp1Price = delayedRecord.confirmedTp1Price;
+      }
+      if (delayedRecord.confirmedTp2Price) {
+        tp2Price = delayedRecord.confirmedTp2Price;
+      }
+      
+      console.log(`[extended-outcomes] Using confirmed levels: Entry=${entryPrice}, Stop=${stopPrice}, TP1=${tp1Price}, TP2=${tp2Price}`);
+    } else {
+      // PAPER mode - use original signal prices
+      console.log(`[extended-outcomes] Signal ${signalId} ${signal.symbol} evaluating with ORIGINAL levels (PAPER mode): Entry=${entryPrice}, Stop=${stopPrice}, TP1=${tp1Price}, TP2=${tp2Price}`);
     }
-    if (delayedRecord.confirmedStopPrice) {
-      stopPrice = delayedRecord.confirmedStopPrice;
-    }
-    if (delayedRecord.confirmedTp1Price) {
-      tp1Price = delayedRecord.confirmedTp1Price;
-    }
-    if (delayedRecord.confirmedTp2Price) {
-      tp2Price = delayedRecord.confirmedTp2Price;
-    }
-    
-    console.log(`[extended-outcomes] Using confirmed levels: Entry=${entryPrice}, Stop=${stopPrice}, TP1=${tp1Price}, TP2=${tp2Price}`);
   }
 
   // Load candles if not provided
@@ -983,6 +1084,68 @@ export async function evaluateExtended24hOutcome(
 }
 
 /**
+ * Evaluate BOTH PAPER and EXECUTED outcome modes for a signal
+ * This is the main entry point for dual-mode outcome tracking
+ */
+export async function evaluateBothOutcomeModes(
+  signal: ExtendedOutcomeInput,
+  candles?: OHLCV[]
+): Promise<{
+  paper: EvaluationResult;
+  executed: EvaluationResult;
+}> {
+  const { signalId, signalTime, symbol, category, direction } = signal;
+  
+  // Get delayed entry record (needed for both modes)
+  const delayedRecord = await getDelayedEntryRecordBySignalId(signalId);
+  
+  // ========== PAPER MODE (Original Signal Levels) ==========
+  // Uses: Original signal entry/stop/TP, starts at signalTime
+  const paperInput: ExtendedOutcomeInput = {
+    ...signal,
+    mode: 'PAPER',
+  };
+  const paper = await evaluateExtended24hOutcome(paperInput, candles, delayedRecord, 'PAPER');
+  
+  // ========== EXECUTED MODE (Confirmed Entry Levels) ==========
+  // Uses: Confirmed entry price (if available) or original, starts at confirmedAt (or signalTime if not confirmed)
+  // If delayed entry never confirmed, result is NO_TRADE
+  let executedInput: ExtendedOutcomeInput;
+  
+  if (delayedRecord?.status === 'ENTERED' && delayedRecord.confirmedPrice) {
+    // Use confirmed prices
+    executedInput = {
+      ...signal,
+      entryPrice: delayedRecord.confirmedPrice,
+      stopPrice: delayedRecord.confirmedStopPrice ?? signal.stopPrice,
+      tp1Price: delayedRecord.confirmedTp1Price ?? signal.tp1Price,
+      tp2Price: delayedRecord.confirmedTp2Price ?? signal.tp2Price,
+      mode: 'EXECUTED',
+    };
+  } else if (delayedRecord?.status === 'EXPIRED_NO_ENTRY' || delayedRecord?.status === 'CANCELLED') {
+    // Never confirmed - will result in NO_TRADE
+    executedInput = {
+      ...signal,
+      mode: 'EXECUTED',
+    };
+  } else {
+    // Still pending or no delayed entry record - use original prices for now
+    executedInput = {
+      ...signal,
+      mode: 'EXECUTED',
+    };
+  }
+  
+  const executed = await evaluateExtended24hOutcome(executedInput, candles, delayedRecord, 'EXECUTED');
+  
+  console.log(`[extended-outcomes] Dual-mode evaluation complete for ${symbol} ${category}:`);
+  console.log(`  PAPER:    ${paper.status} (entry=${signal.entryPrice})`);
+  console.log(`  EXECUTED: ${executed.status} (entry=${executedInput.entryPrice})`);
+  
+  return { paper, executed };
+}
+
+/**
  * Get or create extended outcome record for a signal
  */
 export async function getOrCreateExtendedOutcome(
@@ -997,17 +1160,20 @@ export async function getOrCreateExtendedOutcome(
     console.error('[extended-outcomes] Invalid signalId:', signal.signalId, 'Input:', signal);
     throw new Error(`Invalid signalId: ${signal.signalId}`);
   }
+  
+  const mode = signal.mode || 'EXECUTED';
 
-  // Check if exists
+  // Check if exists (by signal_id and mode)
   const existing = await d.prepare(
-    `SELECT * FROM extended_outcomes WHERE signal_id = ?`
-  ).get(signalIdNum) as ExtendedOutcome | undefined;
+    `SELECT * FROM extended_outcomes WHERE signal_id = ? AND mode = ?`
+  ).get(signalIdNum, mode) as ExtendedOutcome | undefined;
 
   if (existing) {
     // Map snake_case columns to camelCase
     const mapped: ExtendedOutcome = {
       id: Number((existing as any).id),
       signalId: Number((existing as any).signal_id),
+      mode: String((existing as any).mode || 'EXECUTED') as OutcomeMode,
       symbol: String((existing as any).symbol),
       category: String((existing as any).category),
       direction: String((existing as any).direction) as SignalDirection,
@@ -1073,14 +1239,15 @@ export async function getOrCreateExtendedOutcome(
 
   const result = await d.prepare(`
     INSERT INTO extended_outcomes (
-      signal_id, symbol, category, direction,
+      signal_id, mode, symbol, category, direction,
       signal_time, started_at, expires_at,
       entry_price, stop_price, tp1_price, tp2_price,
       status, coverage_pct, n_candles_expected,
       resolve_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
   `).run(
     signalIdNum,
+    mode,
     signal.symbol,
     signal.category,
     direction,
@@ -1103,6 +1270,7 @@ export async function getOrCreateExtendedOutcome(
   const newOutcome: ExtendedOutcome = {
     id: Number(newOutcomeRaw.id),
     signalId: Number(newOutcomeRaw.signal_id),
+    mode: String(newOutcomeRaw.mode || 'EXECUTED') as OutcomeMode,
     symbol: String(newOutcomeRaw.symbol),
     category: String(newOutcomeRaw.category),
     direction: String(newOutcomeRaw.direction) as SignalDirection,
@@ -1160,7 +1328,8 @@ export async function getOrCreateExtendedOutcome(
  */
 export async function updateExtendedOutcome(
   signalId: number,
-  result: EvaluationResult
+  result: EvaluationResult,
+  mode: OutcomeMode = 'EXECUTED'
 ): Promise<void> {
   await ensureSchema();
   const d = getDb();
@@ -1241,7 +1410,7 @@ export async function updateExtendedOutcome(
       ext24_timeout_exit_price = ?,
       ext24_risk_usd_snapshot = ?,
       managed_debug_json = ?
-    WHERE signal_id = ?
+    WHERE signal_id = ? AND mode = ?
   `).run(
     result.status,
     completedAt,
@@ -1272,7 +1441,8 @@ export async function updateExtendedOutcome(
     ext24TimeoutExitPrice,
     ext24RiskUsdSnapshot,
     JSON.stringify(managed.debug),
-    signalIdNum
+    signalIdNum,
+    mode
   );
 }
 
@@ -1349,10 +1519,11 @@ export async function evaluateAndUpdateExtendedOutcome(
   }
 
   // Evaluate
+  const mode = signal.mode || 'EXECUTED';
   const result = await evaluateExtended24hOutcome(signal, candles);
 
   // Update record
-  await updateExtendedOutcome(signal.signalId, result);
+  await updateExtendedOutcome(signal.signalId, result, mode);
 
   return result;
 }
@@ -1367,6 +1538,7 @@ export async function listExtendedOutcomes(params: {
   category?: string;
   status?: ExtendedOutcomeStatus;
   direction?: SignalDirection;
+  mode?: OutcomeMode;  // Filter by mode (PAPER or EXECUTED)
   completed?: boolean;
   limit?: number;
   offset?: number;
@@ -1382,6 +1554,7 @@ export async function listExtendedOutcomes(params: {
     category,
     status,
     direction,
+    mode,
     completed,
     limit = 100,
     offset = 0,
@@ -1416,6 +1589,14 @@ export async function listExtendedOutcomes(params: {
     conditions.push('eo.direction = ?');
     values.push(direction);
   }
+  if (mode) {
+    conditions.push('eo.mode = ?');
+    values.push(mode);
+  } else {
+    // Default to EXECUTED for backward compatibility
+    conditions.push('eo.mode = ?');
+    values.push('EXECUTED');
+  }
   if (completed !== undefined) {
     conditions.push(completed ? 'eo.completed_at IS NOT NULL' : 'eo.completed_at IS NULL');
   }
@@ -1439,6 +1620,7 @@ export async function listExtendedOutcomes(params: {
     SELECT 
       eo.id,
       eo.signal_id,
+      eo.mode,
       eo.symbol,
       eo.category,
       eo.direction,
@@ -1497,6 +1679,7 @@ export async function listExtendedOutcomes(params: {
   const rows: ExtendedOutcome[] = rowsRaw.map(row => ({
     id: Number(row.id),
     signalId: Number(row.signal_id),
+    mode: String(row.mode || 'EXECUTED') as OutcomeMode,
     symbol: String(row.symbol),
     category: String(row.category),
     direction: String(row.direction) as SignalDirection,
@@ -1558,6 +1741,7 @@ export async function getExtendedOutcomeStats(params: {
   symbol?: string;
   category?: string;
   direction?: SignalDirection;
+  mode?: OutcomeMode;
 }): Promise<{
   totalSignals: number;
   completed: number;
@@ -1577,7 +1761,10 @@ export async function getExtendedOutcomeStats(params: {
   await ensureSchema();
   const d = getDb();
 
-  const { start, end, symbol, category, direction } = params;
+  const { start, end, symbol, category, direction, mode } = params;
+
+  // Default to EXECUTED mode if not specified (for backward compatibility)
+  const effectiveMode = mode || 'EXECUTED';
 
   // Build WHERE clause
   const conditions: string[] = [];
@@ -1603,6 +1790,9 @@ export async function getExtendedOutcomeStats(params: {
     conditions.push('eo.direction = ?');
     values.push(direction);
   }
+  // Filter by mode - default to EXECUTED for backward compatibility
+  conditions.push('eo.mode = ?');
+  values.push(effectiveMode);
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -1672,6 +1862,7 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
     SELECT 
       eo.id,
       eo.signal_id,
+      eo.mode,
       eo.symbol,
       eo.category,
       eo.direction,
@@ -1727,6 +1918,7 @@ export async function getPendingExtendedOutcomes(limit = 50): Promise<ExtendedOu
   const rows: ExtendedOutcome[] = rowsRaw.map(row => ({
     id: Number(row.id),
     signalId: Number(row.signal_id),
+    mode: String(row.mode || 'EXECUTED') as OutcomeMode,
     symbol: String(row.symbol),
     category: String(row.category),
     direction: String(row.direction) as SignalDirection,
@@ -1848,6 +2040,7 @@ export async function reevaluatePendingExtendedOutcomes(
     SELECT 
       eo.id,
       eo.signal_id,
+      eo.mode,
       eo.symbol,
       eo.category,
       eo.direction,
@@ -1866,6 +2059,7 @@ export async function reevaluatePendingExtendedOutcomes(
   const mappedPending: ExtendedOutcome[] = pending.map(row => ({
     id: Number(row.id),
     signalId: Number(row.signal_id),
+    mode: String(row.mode || 'EXECUTED') as OutcomeMode,
     symbol: String(row.symbol),
     category: String(row.category),
     direction: String(row.direction) as SignalDirection,
@@ -2024,6 +2218,7 @@ export async function backfillManagedPnlForCompleted(
     SELECT 
       eo.id,
       eo.signal_id,
+      eo.mode,
       eo.symbol,
       eo.category,
       eo.direction,
@@ -2275,6 +2470,7 @@ export async function listExtendedOutcomesWithComparison(params: {
   category?: string;
   status?: ExtendedOutcomeStatus;
   direction?: SignalDirection;
+  mode?: OutcomeMode;
   showImprovementsOnly?: boolean;
   limit?: number;
   offset?: number;
@@ -2289,10 +2485,14 @@ export async function listExtendedOutcomesWithComparison(params: {
     category,
     status,
     direction,
+    mode,
     showImprovementsOnly,
     limit = 100,
     offset = 0,
   } = params;
+
+  // Default to EXECUTED mode if not specified (for backward compatibility)
+  const effectiveMode = mode || 'EXECUTED';
 
   // Build WHERE clause
   const conditions: string[] = [];
@@ -2322,6 +2522,9 @@ export async function listExtendedOutcomesWithComparison(params: {
     conditions.push('eo.direction = ?');
     values.push(direction);
   }
+  // Always filter by mode - default to EXECUTED for backward compatibility
+  conditions.push('eo.mode = ?');
+  values.push(effectiveMode);
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -2335,6 +2538,7 @@ export async function listExtendedOutcomesWithComparison(params: {
     SELECT 
       eo.id,
       eo.signal_id,
+      eo.mode,
       eo.symbol,
       eo.category,
       eo.direction,
@@ -2399,6 +2603,7 @@ export async function listExtendedOutcomesWithComparison(params: {
   const mappedRows = rowsRaw.map(row => ({
     id: Number(row.id),
     signalId: Number(row.signal_id),
+    mode: String(row.mode || 'EXECUTED') as OutcomeMode,
     symbol: String(row.symbol),
     category: String(row.category),
     direction: String(row.direction) as SignalDirection,
@@ -2530,6 +2735,7 @@ export async function getManagedPnlStats(params: {
   symbol?: string;
   category?: string;
   direction?: SignalDirection;
+  mode?: OutcomeMode;
 }): Promise<{
   // Trade counts
   totalClosed: number;
@@ -2560,7 +2766,10 @@ export async function getManagedPnlStats(params: {
 }> {
   await ensureSchema();
   const d = getDb();
-  const { start, end, symbol, category, direction } = params;
+  const { start, end, symbol, category, direction, mode } = params;
+
+  // Default to EXECUTED mode if not specified (for backward compatibility)
+  const effectiveMode = mode || 'EXECUTED';
 
   // Build WHERE clause
   const conditions: string[] = [];

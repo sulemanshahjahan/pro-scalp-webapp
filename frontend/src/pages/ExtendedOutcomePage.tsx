@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiUrl as API } from '../config/apiBase';
 
+// Mode toggle and flip stats
+import { ModeToggle, useOutcomeModeFromURL } from '../components/ModeToggle';
+import { FlipStatsPanel } from '../components/FlipStatsPanel';
+
 // New analysis components
 import {
   BucketAnalysisSection,
@@ -255,6 +259,9 @@ interface VerifiableStats {
 }
 
 export default function ExtendedOutcomePage() {
+  // Mode toggle with URL persistence
+  const [mode, setMode] = useOutcomeModeFromURL();
+
   // Filters
   const [datePreset, setDatePreset] = useState<'today' | '24h' | '7d' | '30d' | 'custom'>('7d');
   const [customStart, setCustomStart] = useState(toDateInputValue(new Date()));
@@ -293,6 +300,10 @@ export default function ExtendedOutcomePage() {
     isConfirmed: boolean;
     lastUpdated: string;
   }>>(new Map());
+  
+  // Auto-processing state
+  const [lastAutoReevaluate, setLastAutoReevaluate] = useState<Date | null>(null);
+  const [lastAutoBackfill, setLastAutoBackfill] = useState<Date | null>(null);
 
   // Date range
   const range = useMemo(() => {
@@ -316,7 +327,7 @@ export default function ExtendedOutcomePage() {
     return { start: start.getTime(), end: end.getTime() };
   }, [datePreset, customStart, customEnd]);
 
-  function buildParams(includePagination = false, options?: { improvementsOnly?: boolean }) {
+  function buildParams(includePagination = false, options?: { improvementsOnly?: boolean; forStats?: boolean }) {
     const qs = new URLSearchParams();
     qs.set('start', String(range.start));
     qs.set('end', String(range.end));
@@ -326,6 +337,12 @@ export default function ExtendedOutcomePage() {
     if (direction) qs.set('direction', direction);
     if (completed) qs.set('completed', completed);
     if (options?.improvementsOnly) qs.set('improvementsOnly', 'true');
+    // Pass mode to backend for filtering
+    // For stats endpoints, always pass a specific mode (EXECUTED or PAPER)
+    // For list endpoints, 'both' means don't filter by mode
+    if (mode !== 'both' || options?.forStats) {
+      qs.set('mode', mode === 'executed' ? 'EXECUTED' : 'PAPER');
+    }
     if (includePagination) {
       qs.set('limit', String(limit));
       qs.set('offset', String(page * limit));
@@ -337,7 +354,8 @@ export default function ExtendedOutcomePage() {
   async function loadStats() {
     setStatsLoading(true);
     try {
-      const qs = buildParams(false);
+      // For stats endpoints, always pass a specific mode (not 'both')
+      const qs = buildParams(false, { forStats: true });
       const [resp, improvResp, managedResp, verifiableResp] = await Promise.all([
         fetch(API(`/api/extended-outcomes/stats?${qs}`)).then(r => r.json()),
         fetch(API(`/api/extended-outcomes/improvements?${qs}`)).then(r => r.json()),
@@ -416,9 +434,9 @@ export default function ExtendedOutcomePage() {
     }
   }
 
-  useEffect(() => { loadStats().catch(() => {}); }, [range.start, range.end, symbol, category, direction]);
-  useEffect(() => { setPage(0); }, [range.start, range.end, symbol, category, status, direction, completed, showImprovementsOnly]);
-  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, symbol, category, status, direction, completed, page, limit, sort, showComparison, showImprovementsOnly]);
+  useEffect(() => { loadStats().catch(() => {}); }, [range.start, range.end, symbol, category, direction, mode]);
+  useEffect(() => { setPage(0); }, [range.start, range.end, symbol, category, status, direction, completed, showImprovementsOnly, mode]);
+  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, symbol, category, status, direction, completed, page, limit, sort, showComparison, showImprovementsOnly, mode]);
   
   // Live polling for pending signals - updates every 5 seconds automatically
   useEffect(() => {
@@ -457,6 +475,82 @@ export default function ExtendedOutcomePage() {
     
     return () => clearInterval(intervalId);
   }, []);
+  
+  // Auto re-evaluate pending signals every 30 seconds
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+    
+    async function autoReevaluate() {
+      try {
+        // Only re-evaluate if not already loading
+        if (!actionLoading) {
+          const resp = await fetch(API('/api/extended-outcomes/reevaluate?limit=25'), { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          }).then(r => r.json());
+          
+          setLastAutoReevaluate(new Date());
+          if (resp?.ok && (resp.evaluated > 0 || resp.completed > 0)) {
+            console.log(`[auto] Re-evaluated: ${resp.evaluated}, Completed: ${resp.completed}`);
+            // Refresh data if something changed
+            loadStats().catch(() => {});
+            loadOutcomes().catch(() => {});
+          }
+        }
+      } catch (e) {
+        // Silently fail
+      }
+    }
+    
+    // Initial run after 10 seconds
+    const initialTimeout = setTimeout(autoReevaluate, 10000);
+    
+    // Then every 30 seconds
+    intervalId = setInterval(autoReevaluate, 30000);
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(intervalId);
+    };
+  }, [actionLoading]);
+  
+  // Auto backfill signals every 60 seconds
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+    
+    async function autoBackfill() {
+      try {
+        // Only backfill if not already loading
+        if (!actionLoading) {
+          const resp = await fetch(API('/api/extended-outcomes/backfill?days=7&batchSize=10'), { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          }).then(r => r.json());
+          
+          setLastAutoBackfill(new Date());
+          if (resp?.ok && resp.processed > 0) {
+            console.log(`[auto] Backfilled: ${resp.processed} signals`);
+            // Refresh data if something changed
+            loadStats().catch(() => {});
+            loadOutcomes().catch(() => {});
+          }
+        }
+      } catch (e) {
+        // Silently fail
+      }
+    }
+    
+    // Initial run after 20 seconds
+    const initialTimeout = setTimeout(autoBackfill, 20000);
+    
+    // Then every 60 seconds
+    intervalId = setInterval(autoBackfill, 60000);
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(intervalId);
+    };
+  }, [actionLoading]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -489,7 +583,8 @@ export default function ExtendedOutcomePage() {
                 Track signal performance over 24h: TP1, TP2, and Stop Loss hits
               </div>
             </div>
-            <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex flex-wrap gap-3 items-center">
+              <ModeToggle value={mode} onChange={setMode} />
               <div className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1">
                 <span className="text-white/60">Date</span>
                 <select className="bg-transparent text-white/90" value={datePreset} onChange={(e) => setDatePreset(e.target.value as any)}>
@@ -578,6 +673,14 @@ export default function ExtendedOutcomePage() {
               Improvements Only
             </label>
             {actionMsg ? <span className="text-xs text-white/50">{actionMsg}</span> : null}
+            
+            {/* Auto-processing status indicator */}
+            {(lastAutoReevaluate || lastAutoBackfill) && (
+              <div className="flex items-center gap-2 text-[10px] bg-green-500/10 border border-green-500/20 rounded-xl px-2 py-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-green-300/80">Auto-processing active</span>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -629,6 +732,9 @@ export default function ExtendedOutcomePage() {
           loading={statsLoading}
         />
       </section>
+
+      {/* Flip Stats - Execution vs Signal Impact */}
+      <FlipStatsPanel fromMs={range.start} toMs={range.end} />
 
       {/* Outcome Breakdown (Step 4) - Full distribution with verification */}
       {verifiableStats?.breakdown && (

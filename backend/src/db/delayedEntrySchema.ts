@@ -51,6 +51,11 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExists(d, 'delayed_entry_records', 'prev_status', 'VARCHAR(20)');
     await addColumnIfNotExists(d, 'delayed_entry_records', 'prev_expires_at', 'BIGINT');
     
+    // Add ATR-based confirmation tracking columns
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'confirm_move_pct_used', 'DOUBLE PRECISION');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'used_atr_based', 'BOOLEAN DEFAULT FALSE');
+    await addColumnIfNotExists(d, 'delayed_entry_records', 'atr_pct_at_signal', 'DOUBLE PRECISION');
+    
     // Index for efficient WATCH queries
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)
@@ -106,6 +111,11 @@ export async function ensureDelayedEntrySchema(): Promise<void> {
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'reactivation_reason', 'TEXT');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'prev_status', 'TEXT');
     await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'prev_expires_at', 'INTEGER');
+    
+    // Add ATR-based confirmation tracking columns (SQLite)
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'confirm_move_pct_used', 'REAL');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'used_atr_based', 'INTEGER DEFAULT 0');
+    await addColumnIfNotExistsSQLite(d, 'delayed_entry_records', 'atr_pct_at_signal', 'REAL');
     
     await d.prepare(`
       CREATE INDEX IF NOT EXISTS idx_delayed_entry_status ON delayed_entry_records(status)

@@ -20,30 +20,48 @@ import type { Signal } from './types.js';
 
 export interface DelayedEntryConfig {
   enabled: boolean;
-  confirmMovePct: number;        // % move required to confirm (e.g., 0.3 = 0.3%)
+  confirmMovePct: number;        // % move required (base or fallback)
   maxWaitMinutes: number;        // How long to wait for confirmation
   pollIntervalSeconds: number;   // How often to check price
-  maxExtraMovePct: number;       // Spike protection - skip if moved beyond this
+  maxExtraMovePct: number;       // Spike protection
   maxSpreadPct: number;          // Max spread to allow entry
+  
+  // ATR-based confirmation
+  useAtrBasedConfirm: boolean;   // Use ATR% instead of fixed confirmMovePct
+  atrConfirmMultiplier: number;  // Multiplier for ATR% (e.g., 0.45 * ATR5m%)
+  minConfirmMovePct: number;     // Floor for confirmation %
+  maxConfirmMovePct: number;     // Cap for confirmation %
 }
 
 export const DEFAULT_DELAYED_ENTRY_CONFIG: DelayedEntryConfig = {
   enabled: true,
-  confirmMovePct: 0.50,          // 0.5% move required (optimal from validation)
+  confirmMovePct: 0.50,          // Base % move required (used if ATR-based is disabled)
   maxWaitMinutes: 45,            // Wait up to 45 minutes
   pollIntervalSeconds: 30,       // Check every 30 seconds
-  maxExtraMovePct: 0.10,         // Skip if moved > 0.6% (0.5 + 0.1)
+  maxExtraMovePct: 0.10,         // Skip if moved beyond (confirm + extra)
   maxSpreadPct: 0.15,            // 0.15% max spread
+  
+  // ATR-based confirmation (GPT recommendation)
+  useAtrBasedConfirm: true,      // Use ATR% instead of fixed confirmMovePct
+  atrConfirmMultiplier: 0.45,    // confirm = ATR5m% * 0.45
+  minConfirmMovePct: 0.12,       // Floor: minimum 0.12% confirmation
+  maxConfirmMovePct: 0.35,       // Cap: maximum 0.35% confirmation
 };
 
 export function getDelayedEntryConfig(): DelayedEntryConfig {
   return {
     enabled: (process.env.DELAYED_ENTRY_ENABLED || 'true').toLowerCase() === 'true',
-    confirmMovePct: parseFloat(process.env.DELAYED_ENTRY_CONFIRM_MOVE_PCT || '0.50'),  // Default: 0.5%
+    confirmMovePct: parseFloat(process.env.DELAYED_ENTRY_CONFIRM_MOVE_PCT || '0.50'),
     maxWaitMinutes: parseInt(process.env.DELAYED_ENTRY_MAX_WAIT_MINUTES || '45', 10),
     pollIntervalSeconds: parseInt(process.env.DELAYED_ENTRY_POLL_SECONDS || '30', 10),
     maxExtraMovePct: parseFloat(process.env.DELAYED_ENTRY_MAX_EXTRA_MOVE_PCT || '0.10'),
     maxSpreadPct: parseFloat(process.env.DELAYED_ENTRY_MAX_SPREAD_PCT || '0.15'),
+    
+    // ATR-based confirmation
+    useAtrBasedConfirm: (process.env.DELAYED_ENTRY_USE_ATR || 'true').toLowerCase() === 'true',
+    atrConfirmMultiplier: parseFloat(process.env.DELAYED_ENTRY_ATR_MULT || '0.45'),
+    minConfirmMovePct: parseFloat(process.env.DELAYED_ENTRY_MIN_CONFIRM_PCT || '0.12'),
+    maxConfirmMovePct: parseFloat(process.env.DELAYED_ENTRY_MAX_CONFIRM_PCT || '0.35'),
   };
 }
 
@@ -110,8 +128,23 @@ export async function initDelayedEntry(
   const direction = getDirectionFromCategory(signal.category);
   const referencePrice = signal.price;
   
+  // Calculate confirmation threshold
+  // ATR-based: clamp(min, ATR% * multiplier, max)
+  // Fallback to fixed confirmMovePct if ATR not available or disabled
+  let confirmMovePct = cfg.confirmMovePct;
+  let usedAtrBased = false;
+  
+  if (cfg.useAtrBasedConfirm && signal.atrPct && signal.atrPct > 0) {
+    const atrBasedConfirm = signal.atrPct * cfg.atrConfirmMultiplier;
+    confirmMovePct = Math.max(
+      cfg.minConfirmMovePct,
+      Math.min(cfg.maxConfirmMovePct, atrBasedConfirm)
+    );
+    usedAtrBased = true;
+  }
+  
   // Calculate target confirmation price
-  const moveMult = cfg.confirmMovePct / 100;
+  const moveMult = confirmMovePct / 100;
   const targetConfirmPrice = direction === 'LONG' 
     ? referencePrice * (1 + moveMult)
     : referencePrice * (1 - moveMult);
@@ -130,6 +163,11 @@ export async function initDelayedEntry(
     status: 'WATCH',
   };
   
+  // Store calculated confirm % for reference
+  (record as any).confirmMovePctUsed = confirmMovePct;
+  (record as any).usedAtrBased = usedAtrBased;
+  (record as any).atrPctAtSignal = signal.atrPct;
+  
   // Store original TP/SL for later recalculation
   if (originalStop) {
     (record as any).originalStop = originalStop;
@@ -140,7 +178,8 @@ export async function initDelayedEntry(
   // Store in database
   await storeDelayedEntryRecord(record, originalStop, originalTp1, originalTp2);
   
-  console.log(`[delayed-entry] WATCH: ${signal.symbol} ${signal.category} - waiting for ${direction === 'LONG' ? '+' : '-'}${cfg.confirmMovePct}% move (target: ${targetConfirmPrice.toFixed(4)})`);
+  const atrInfo = usedAtrBased ? ` (ATR-based: ${confirmMovePct.toFixed(2)}%, ATR5m=${signal.atrPct?.toFixed(3)}%)` : '';
+  console.log(`[delayed-entry] WATCH: ${signal.symbol} ${signal.category} - waiting for ${direction === 'LONG' ? '+' : '-'}${confirmMovePct.toFixed(2)}% move${atrInfo} (target: ${targetConfirmPrice.toFixed(6)})`);
   
   return { shouldProceed: false, record };
 }
@@ -174,7 +213,9 @@ export async function checkDelayedEntryConfirmation(
   
   // CONFIRMED - Now apply spike protection
   const actualMovePct = Math.abs((currentPrice - record.referencePrice) / record.referencePrice) * 100;
-  const maxAllowedMove = cfg.confirmMovePct + cfg.maxExtraMovePct;
+  // Use stored confirm % if available (ATR-based), otherwise use config
+  const confirmMovePctUsed = (record as any).confirmMovePctUsed || cfg.confirmMovePct;
+  const maxAllowedMove = confirmMovePctUsed + cfg.maxExtraMovePct;
   
   if (actualMovePct > maxAllowedMove) {
     // Spike too big - skip this entry
@@ -183,7 +224,7 @@ export async function checkDelayedEntryConfirmation(
       'SKIPPED_SPIKE', 
       `MOVE_TOO_LARGE: ${actualMovePct.toFixed(2)}% > ${maxAllowedMove.toFixed(2)}% allowed`
     );
-    console.log(`[delayed-entry] SKIPPED_SPIKE: ${record.symbol} moved ${actualMovePct.toFixed(2)}% (max ${maxAllowedMove}%)`);
+    console.log(`[delayed-entry] SKIPPED_SPIKE: ${record.symbol} moved ${actualMovePct.toFixed(2)}% (max ${maxAllowedMove.toFixed(2)}%, confirm=${confirmMovePctUsed.toFixed(2)}%)`);
     return { confirmed: false, skipped: true, reason: 'SPIKE_TOO_LARGE' };
   }
   
@@ -214,7 +255,10 @@ export async function getActiveWatches(limit: number = 200): Promise<DelayedEntr
       reason,
       original_stop,
       original_tp1,
-      original_tp2
+      original_tp2,
+      confirm_move_pct_used,
+      used_atr_based,
+      atr_pct_at_signal
     FROM delayed_entry_records
     WHERE status = 'WATCH'
     ORDER BY watch_started_at ASC
@@ -246,6 +290,10 @@ export async function getActiveWatches(limit: number = 200): Promise<DelayedEntr
     (record as any).originalStop = getNum(row.original_stop ?? row.originalStop);
     (record as any).originalTp1 = getNum(row.original_tp1 ?? row.originalTp1);
     (record as any).originalTp2 = getNum(row.original_tp2 ?? row.originalTp2);
+    // Store ATR-based confirmation info
+    (record as any).confirmMovePctUsed = getNum(row.confirm_move_pct_used ?? row.confirmMovePctUsed);
+    (record as any).usedAtrBased = Boolean(row.used_atr_based ?? row.usedAtrBased);
+    (record as any).atrPctAtSignal = getNum(row.atr_pct_at_signal ?? row.atrPctAtSignal);
     return record;
   });
 }
@@ -277,7 +325,10 @@ export async function getDelayedEntryRecordBySignalId(
       reason,
       original_stop,
       original_tp1,
-      original_tp2
+      original_tp2,
+      confirm_move_pct_used,
+      used_atr_based,
+      atr_pct_at_signal
     FROM delayed_entry_records
     WHERE signal_id = ?
   `).get(signalId) as any | null;
@@ -311,6 +362,10 @@ export async function getDelayedEntryRecordBySignalId(
   (record as any).originalStop = getNum(row.original_stop ?? row.originalStop);
   (record as any).originalTp1 = getNum(row.original_tp1 ?? row.originalTp1);
   (record as any).originalTp2 = getNum(row.original_tp2 ?? row.originalTp2);
+  // Store ATR-based confirmation info
+  (record as any).confirmMovePctUsed = getNum(row.confirm_move_pct_used ?? row.confirmMovePctUsed);
+  (record as any).usedAtrBased = Boolean(row.used_atr_based ?? row.usedAtrBased);
+  (record as any).atrPctAtSignal = getNum(row.atr_pct_at_signal ?? row.atrPctAtSignal);
   
   return record;
 }
@@ -382,13 +437,17 @@ async function storeDelayedEntryRecord(
   await d.prepare(`
     INSERT INTO delayed_entry_records (
       signal_id, symbol, direction, reference_price, target_confirm_price,
-      watch_started_at, watch_expires_at, status, original_stop, original_tp1, original_tp2
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      watch_started_at, watch_expires_at, status, original_stop, original_tp1, original_tp2,
+      confirm_move_pct_used, used_atr_based, atr_pct_at_signal
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(signal_id) DO UPDATE SET
       status = excluded.status,
       watch_started_at = excluded.watch_started_at,
       watch_expires_at = excluded.watch_expires_at,
-      target_confirm_price = excluded.target_confirm_price
+      target_confirm_price = excluded.target_confirm_price,
+      confirm_move_pct_used = excluded.confirm_move_pct_used,
+      used_atr_based = excluded.used_atr_based,
+      atr_pct_at_signal = excluded.atr_pct_at_signal
   `).run(
     record.signalId,
     record.symbol,
@@ -400,7 +459,10 @@ async function storeDelayedEntryRecord(
     record.status,
     originalStop ?? null,
     originalTp1 ?? null,
-    originalTp2 ?? null
+    originalTp2 ?? null,
+    (record as any).confirmMovePctUsed ?? null,
+    (record as any).usedAtrBased ?? false,
+    (record as any).atrPctAtSignal ?? null
   );
 }
 

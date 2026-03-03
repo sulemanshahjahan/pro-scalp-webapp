@@ -3170,6 +3170,7 @@ app.get('/api/extended-outcomes', async (req, res) => {
     const limit = Number((req.query as any)?.limit);
     const offset = Number((req.query as any)?.offset);
     const sort = String((req.query as any)?.sort || '').trim() || undefined;
+    const mode = String((req.query as any)?.mode || '').trim() || undefined;
 
     const out = await listExtendedOutcomes({
       start: Number.isFinite(start) ? start : undefined,
@@ -3178,6 +3179,7 @@ app.get('/api/extended-outcomes', async (req, res) => {
       category,
       status: status as any,
       direction: direction as any,
+      mode: (mode === 'PAPER' || mode === 'EXECUTED') ? mode : undefined,
       completed,
       limit: Number.isFinite(limit) ? limit : undefined,
       offset: Number.isFinite(offset) ? offset : undefined,
@@ -3197,6 +3199,7 @@ app.get('/api/extended-outcomes/stats', async (req, res) => {
     const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
     const category = String((req.query as any)?.category || '').trim() || undefined;
     const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const mode = String((req.query as any)?.mode || '').trim() || undefined;
 
     const out = await getExtendedOutcomeStats({
       start: Number.isFinite(start) ? start : undefined,
@@ -3204,6 +3207,7 @@ app.get('/api/extended-outcomes/stats', async (req, res) => {
       symbol,
       category,
       direction: direction as any,
+      mode: (mode === 'PAPER' || mode === 'EXECUTED') ? mode : undefined,
     });
     res.json({ ok: true, ...out });
   } catch (e: any) {
@@ -3220,6 +3224,7 @@ app.get('/api/extended-outcomes/managed-stats', async (req, res) => {
     const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
     const category = String((req.query as any)?.category || '').trim() || undefined;
     const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const mode = String((req.query as any)?.mode || '').trim() || undefined;
 
     const out = await getManagedPnlStats({
       start: Number.isFinite(start) ? start : undefined,
@@ -3227,6 +3232,7 @@ app.get('/api/extended-outcomes/managed-stats', async (req, res) => {
       symbol,
       category,
       direction: direction as any,
+      mode: (mode === 'PAPER' || mode === 'EXECUTED') ? mode : undefined,
     });
     res.json({ ok: true, ...out });
   } catch (e: any) {
@@ -3246,6 +3252,7 @@ app.get('/api/stats/verifiable', async (req, res) => {
     const symbol = String((req.query as any)?.symbol || '').trim() || undefined;
     const category = String((req.query as any)?.category || '').trim() || undefined;
     const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const mode = String((req.query as any)?.mode || '').trim() || undefined;
 
     const d = getDb();
     
@@ -3273,6 +3280,9 @@ app.get('/api/stats/verifiable', async (req, res) => {
       conditions.push('eo.direction = ?');
       values.push(direction);
     }
+    // Default to EXECUTED mode for backward compatibility
+    conditions.push('eo.mode = ?');
+    values.push((mode === 'PAPER' || mode === 'EXECUTED') ? mode : 'EXECUTED');
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -3739,6 +3749,7 @@ app.get('/api/extended-outcomes/comparison', async (req, res) => {
     const category = String((req.query as any)?.category || '').trim() || undefined;
     const status = String((req.query as any)?.status || '').trim() || undefined;
     const direction = String((req.query as any)?.direction || '').trim() || undefined;
+    const mode = String((req.query as any)?.mode || '').trim() || undefined;
     const improvementsOnlyRaw = String((req.query as any)?.improvementsOnly || '').toLowerCase();
     const improvementsOnly = ['1', 'true', 'yes'].includes(improvementsOnlyRaw);
     const limit = Number((req.query as any)?.limit);
@@ -3751,6 +3762,7 @@ app.get('/api/extended-outcomes/comparison', async (req, res) => {
       category,
       status: status as any,
       direction: direction as any,
+      mode: (mode === 'PAPER' || mode === 'EXECUTED') ? mode : undefined,
       showImprovementsOnly: improvementsOnly,
       limit: Number.isFinite(limit) ? limit : undefined,
       offset: Number.isFinite(offset) ? offset : undefined,
@@ -3879,6 +3891,161 @@ app.post('/api/extended-outcomes/backfill-early-window', async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) {
     console.error('[api/extended-outcomes/backfill-early-window] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+/**
+ * GET /api/extended-outcomes/flip-stats
+ * 
+ * Returns flip rate metrics comparing PAPER vs EXECUTED outcomes.
+ * Shows whether delayed entry confirmation helps or hurts performance.
+ * 
+ * Query params:
+ * - fromMs: start timestamp (optional)
+ * - toMs: end timestamp (optional)
+ */
+app.get('/api/extended-outcomes/flip-stats', async (req, res) => {
+  try {
+    const d = getDb();
+    
+    // Optional date filtering
+    const fromMs = req.query.fromMs ? Number(req.query.fromMs) : null;
+    const toMs = req.query.toMs ? Number(req.query.toMs) : null;
+    
+    // Status bucket definitions
+    const WIN_STATUSES = ['WIN_TP2', 'WIN_TP1', 'ACHIEVED_TP1'];
+    const LOSS_STATUSES = ['LOSS_STOP'];
+    const NO_TRADE_STATUSES = ['NO_TRADE'];
+    
+    // Build time filter if provided
+    let timeFilter = '';
+    const params: any[] = [];
+    
+    if (fromMs !== null) {
+      timeFilter += ' AND p.started_at >= ?';
+      params.push(fromMs);
+    }
+    if (toMs !== null) {
+      timeFilter += ' AND p.started_at <= ?';
+      params.push(toMs);
+    }
+    
+    // SQL query for flip stats
+    // Uses CTEs to classify PAPER vs EXECUTED outcomes into buckets
+    const query = `
+      WITH paper AS (
+        SELECT signal_id, status, started_at
+        FROM extended_outcomes
+        WHERE mode = 'PAPER'
+      ),
+      exec AS (
+        SELECT signal_id, status
+        FROM extended_outcomes
+        WHERE mode = 'EXECUTED'
+      ),
+      pairs AS (
+        SELECT
+          COALESCE(p.signal_id, e.signal_id) AS signal_id,
+          p.status AS paper_status,
+          e.status AS exec_status,
+          p.started_at AS paper_started_at
+        FROM paper p
+        LEFT JOIN exec e ON e.signal_id = p.signal_id
+      ),
+      classified AS (
+        SELECT
+          signal_id,
+          paper_status,
+          exec_status,
+          CASE
+            WHEN paper_status IS NULL THEN 'MISSING'
+            WHEN paper_status IN (${WIN_STATUSES.map(() => '?').join(',')}) THEN 'WIN'
+            WHEN paper_status IN (${LOSS_STATUSES.map(() => '?').join(',')}) THEN 'LOSS'
+            WHEN paper_status IN (${NO_TRADE_STATUSES.map(() => '?').join(',')}) THEN 'NO_TRADE'
+            ELSE 'OTHER'
+          END AS paper_bucket,
+          CASE
+            WHEN exec_status IS NULL THEN 'MISSING'
+            WHEN exec_status IN (${WIN_STATUSES.map(() => '?').join(',')}) THEN 'WIN'
+            WHEN exec_status IN (${LOSS_STATUSES.map(() => '?').join(',')}) THEN 'LOSS'
+            WHEN exec_status IN (${NO_TRADE_STATUSES.map(() => '?').join(',')}) THEN 'NO_TRADE'
+            ELSE 'OTHER'
+          END AS exec_bucket
+        FROM pairs
+        WHERE 1=1 ${timeFilter}
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE paper_status IS NOT NULL) AS total_paper,
+        COUNT(*) FILTER (WHERE exec_status IS NOT NULL) AS total_executed,
+        COUNT(*) FILTER (WHERE paper_status IS NULL) AS missing_paper,
+        COUNT(*) FILTER (WHERE exec_status IS NULL) AS missing_executed,
+        COUNT(*) FILTER (WHERE paper_status IS NOT NULL AND exec_status IS NOT NULL) AS total_paired,
+        
+        -- Flip metrics (only where both sides exist)
+        COUNT(*) FILTER (WHERE paper_bucket='WIN' AND exec_bucket='LOSS') AS flip_win_to_loss,
+        COUNT(*) FILTER (WHERE paper_bucket='WIN' AND exec_bucket='NO_TRADE') AS missed_winners,
+        COUNT(*) FILTER (WHERE paper_bucket='LOSS' AND exec_bucket='NO_TRADE') AS saved_losses,
+        COUNT(*) FILTER (WHERE paper_bucket='LOSS' AND exec_bucket='WIN') AS flip_loss_to_win
+      FROM classified
+    `;
+    
+    // Add status params for both paper and exec buckets
+    const queryParams = [
+      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES,
+      ...WIN_STATUSES, ...LOSS_STATUSES, ...NO_TRADE_STATUSES,
+      ...params
+    ];
+    
+    const row = await d.prepare(query).get(...queryParams) as any;
+    
+    if (!row) {
+      return res.json({
+        ok: true,
+        window: { fromMs, toMs },
+        totals: { totalPaper: 0, totalExecuted: 0, totalPaired: 0, missingPaper: 0, missingExecuted: 0 },
+        flips: { flipWinToLoss: 0, missedWinners: 0, savedLosses: 0, flipLossToWin: 0 },
+        rates: { flipWinToLossPct: 0, missedWinnersPct: 0, savedLossesPct: 0, flipLossToWinPct: 0 },
+      });
+    }
+    
+    const totalPaired = Number(row.total_paired || 0);
+    const flipWinToLoss = Number(row.flip_win_to_loss || 0);
+    const missedWinners = Number(row.missed_winners || 0);
+    const savedLosses = Number(row.saved_losses || 0);
+    const flipLossToWin = Number(row.flip_loss_to_win || 0);
+    
+    res.json({
+      ok: true,
+      window: { fromMs, toMs },
+      totals: {
+        totalPaper: Number(row.total_paper || 0),
+        totalExecuted: Number(row.total_executed || 0),
+        totalPaired,
+        missingPaper: Number(row.missing_paper || 0),
+        missingExecuted: Number(row.missing_executed || 0),
+      },
+      flips: {
+        flipWinToLoss,
+        missedWinners,
+        savedLosses,
+        flipLossToWin,
+      },
+      rates: {
+        flipWinToLossPct: totalPaired ? flipWinToLoss / totalPaired : 0,
+        missedWinnersPct: totalPaired ? missedWinners / totalPaired : 0,
+        savedLossesPct: totalPaired ? savedLosses / totalPaired : 0,
+        flipLossToWinPct: totalPaired ? flipLossToWin / totalPaired : 0,
+      },
+      summary: {
+        // Net effect of delayed entry confirmation
+        netWinnersAvoided: flipWinToLoss + missedWinners,
+        netLossesAvoided: savedLosses,
+        executionCost: totalPaired ? ((flipWinToLoss + missedWinners - savedLosses - flipLossToWin) / totalPaired) : 0,
+      }
+    });
+  } catch (e) {
+    console.error('[api/extended-outcomes/flip-stats] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
