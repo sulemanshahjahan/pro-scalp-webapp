@@ -339,9 +339,13 @@ export default function ExtendedOutcomePage() {
     if (options?.improvementsOnly) qs.set('improvementsOnly', 'true');
     // Pass mode to backend for filtering
     // For stats endpoints, always pass a specific mode (EXECUTED or PAPER)
-    // For list endpoints, 'both' means don't filter by mode
-    if (mode !== 'both' || options?.forStats) {
+    // For list endpoints, 'both' passes BOTH to get all modes
+    if (options?.forStats) {
       qs.set('mode', mode === 'executed' ? 'EXECUTED' : 'PAPER');
+    } else {
+      // For list endpoints: executed, paper, or BOTH
+      const modeParam = mode === 'executed' ? 'EXECUTED' : mode === 'paper' ? 'PAPER' : 'BOTH';
+      qs.set('mode', modeParam);
     }
     if (includePagination) {
       qs.set('limit', String(limit));
@@ -482,8 +486,9 @@ export default function ExtendedOutcomePage() {
     
     async function autoReevaluate() {
       try {
-        // Only re-evaluate if not already loading
-        if (!actionLoading) {
+        // Only re-evaluate if not already loading and user is on EXECUTED mode
+        // PAPER mode should not auto-refresh as it disrupts the view
+        if (!actionLoading && mode === 'executed') {
           const resp = await fetch(API('/api/extended-outcomes/reevaluate?limit=25'), { 
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
@@ -492,9 +497,12 @@ export default function ExtendedOutcomePage() {
           setLastAutoReevaluate(new Date());
           if (resp?.ok && (resp.evaluated > 0 || resp.completed > 0)) {
             console.log(`[auto] Re-evaluated: ${resp.evaluated}, Completed: ${resp.completed}`);
-            // Refresh data if something changed
+            // Only refresh stats, not outcomes (to avoid disrupting the user's view)
             loadStats().catch(() => {});
-            loadOutcomes().catch(() => {});
+            // Only refresh outcomes if on EXECUTED mode
+            if (mode === 'executed') {
+              loadOutcomes().catch(() => {});
+            }
           }
         }
       } catch (e) {
@@ -512,7 +520,7 @@ export default function ExtendedOutcomePage() {
       clearTimeout(initialTimeout);
       clearInterval(intervalId);
     };
-  }, [actionLoading]);
+  }, [actionLoading, mode]);
   
   // Auto backfill signals every 60 seconds
   useEffect(() => {

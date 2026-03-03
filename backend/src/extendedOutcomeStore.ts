@@ -35,7 +35,7 @@ export type ExtendedOutcomeStatus =
   | 'NO_TRADE';  // Signal never confirmed in delayed entry
 
 // Mode enum for outcome variants
-export type OutcomeMode = 'PAPER' | 'EXECUTED';
+export type OutcomeMode = 'PAPER' | 'EXECUTED' | 'BOTH';
 
 // Direction type
 export type SignalDirection = 'LONG' | 'SHORT';
@@ -1699,14 +1699,12 @@ export async function listExtendedOutcomes(params: {
     conditions.push('eo.direction = ?');
     values.push(direction);
   }
-  if (mode) {
+  if (mode && mode !== 'BOTH') {
     conditions.push('eo.mode = ?');
     values.push(mode);
-  } else {
-    // Default to EXECUTED for backward compatibility
-    conditions.push('eo.mode = ?');
-    values.push('EXECUTED');
   }
+  // If mode is 'BOTH' or undefined, don't filter by mode (return all)
+  // This allows viewing PAPER and EXECUTED together
   if (completed !== undefined) {
     conditions.push(completed ? 'eo.completed_at IS NOT NULL' : 'eo.completed_at IS NULL');
   }
@@ -2632,9 +2630,11 @@ export async function listExtendedOutcomesWithComparison(params: {
     conditions.push('eo.direction = ?');
     values.push(direction);
   }
-  // Always filter by mode - default to EXECUTED for backward compatibility
-  conditions.push('eo.mode = ?');
-  values.push(effectiveMode);
+  // Filter by mode unless BOTH is specified
+  if (effectiveMode !== 'BOTH') {
+    conditions.push('eo.mode = ?');
+    values.push(effectiveMode);
+  }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
