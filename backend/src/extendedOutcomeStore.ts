@@ -285,8 +285,8 @@ async function migrateDualModeOutcomes(): Promise<void> {
     } catch (e: any) {
       // If error is "column already exists", that's fine
       const msg = String(e?.message || '');
-      if (msg.includes('already exists') || msg.includes('duplicate column')) {
-        console.log('[extended-outcomes] mode column already exists');
+      if (msg.includes('already exists') || msg.includes('duplicate column') || msg.includes('already exist')) {
+        console.log('[extended-outcomes] mode column already exists (confirmed by error)');
       } else {
         console.error('[extended-outcomes] Error adding mode column:', e);
       }
