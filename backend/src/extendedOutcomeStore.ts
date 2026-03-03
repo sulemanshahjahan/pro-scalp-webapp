@@ -272,59 +272,39 @@ async function migrateDualModeOutcomes(): Promise<void> {
   const isSQLite = d.driver === 'sqlite';
   
   try {
-    // Ensure meta table exists first
-    await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
-    
-    // Check if mode column exists by querying information_schema (PostgreSQL) or pragma (SQLite)
-    let modeColumnExists = false;
+    // Step 1: ALWAYS try to add mode column (idempotent)
+    console.log('[extended-outcomes] Ensuring mode column exists...');
     try {
       if (isSQLite) {
-        const colInfo = await d.prepare(`PRAGMA table_info(extended_outcomes)`).all() as Array<{name: string}>;
-        modeColumnExists = colInfo.some(col => col.name === 'mode');
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
       } else {
-        // PostgreSQL - query information_schema
-        const colRow = await d.prepare(`
-          SELECT column_name 
-          FROM information_schema.columns 
-          WHERE table_name = 'extended_outcomes' AND column_name = 'mode'
-        `).get() as {column_name?: string} | undefined;
-        modeColumnExists = !!colRow?.column_name;
+        // PostgreSQL: IF NOT EXISTS is supported
+        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
       }
-      if (modeColumnExists) {
+      console.log('[extended-outcomes] mode column added or already exists');
+    } catch (e: any) {
+      // If error is "column already exists", that's fine
+      const msg = String(e?.message || '');
+      if (msg.includes('already exists') || msg.includes('duplicate column')) {
         console.log('[extended-outcomes] mode column already exists');
       } else {
-        console.log('[extended-outcomes] mode column does not exist, will add it');
-      }
-    } catch (e: any) {
-      console.log('[extended-outcomes] Could not check for mode column:', e?.message);
-    }
-    
-    // Add mode column if it doesn't exist
-    if (!modeColumnExists) {
-      try {
-        if (isSQLite) {
-          await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
-        } else {
-          await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
-        }
-        console.log('[extended-outcomes] Added mode column');
-      } catch (e: any) {
-        console.warn('[extended-outcomes] Error adding mode column:', e?.message);
-        // Continue anyway - column might already exist
+        console.error('[extended-outcomes] Error adding mode column:', e);
       }
     }
     
-    // Update existing rows to have mode='EXECUTED' where null
+    // Step 2: Ensure meta table exists
     try {
-      await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
-      console.log('[extended-outcomes] Set mode=EXECUTED for existing rows');
-    } catch (e: any) {
-      console.warn('[extended-outcomes] Error updating existing rows:', e?.message);
-    }
+      await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+    } catch (e) { /* ignore */ }
     
-    // Update existing rows to have mode='EXECUTED'
-    await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
-    console.log('[extended-outcomes] Set mode=EXECUTED for existing rows');
+    // Step 3: Update existing rows without mode
+    console.log('[extended-outcomes] Setting mode=EXECUTED for existing rows...');
+    try {
+      const result = await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
+      console.log('[extended-outcomes] Updated existing rows to mode=EXECUTED');
+    } catch (e: any) {
+      console.warn('[extended-outcomes] Could not update existing rows:', e?.message);
+    }
     
     // For PostgreSQL: update unique constraint
     if (!isSQLite) {
