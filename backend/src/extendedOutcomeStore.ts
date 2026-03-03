@@ -272,6 +272,13 @@ async function migrateDualModeOutcomes(): Promise<void> {
   const isSQLite = d.driver === 'sqlite';
   
   try {
+    // Ensure meta table exists first
+    if (isSQLite) {
+      await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+    } else {
+      await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+    }
+    
     // Check if migration already completed
     const metaKey = 'dual_mode_migration_v1';
     const metaRow = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(metaKey) as { value?: string } | undefined;
@@ -329,7 +336,15 @@ async function migrateDualModeOutcomes(): Promise<void> {
     }
     
     // Mark migration as complete
-    await d.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`).run(metaKey, String(Date.now()));
+    if (isSQLite) {
+      await d.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)`).run(metaKey, String(Date.now()));
+    } else {
+      // PostgreSQL: use ON CONFLICT
+      await d.prepare(`
+        INSERT INTO meta(key, value) VALUES($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+      `).run(metaKey, String(Date.now()));
+    }
     console.log('[extended-outcomes] Dual-mode migration completed successfully');
     
   } catch (e) {
