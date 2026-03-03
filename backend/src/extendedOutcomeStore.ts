@@ -271,9 +271,11 @@ async function migrateDualModeOutcomes(): Promise<void> {
   const d = getDb();
   const isSQLite = d.driver === 'sqlite';
   
+  console.log(`[extended-outcomes] Running dual-mode migration (driver: ${d.driver})...`);
+  
   try {
     // Step 1: ALWAYS try to add mode column (idempotent)
-    console.log('[extended-outcomes] Ensuring mode column exists...');
+    console.log('[extended-outcomes] Step 1: Adding mode column if needed...');
     try {
       if (isSQLite) {
         await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
@@ -281,29 +283,34 @@ async function migrateDualModeOutcomes(): Promise<void> {
         // PostgreSQL: IF NOT EXISTS is supported
         await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
       }
-      console.log('[extended-outcomes] mode column added or already exists');
+      console.log('[extended-outcomes] Step 1 complete: mode column added or already exists');
     } catch (e: any) {
       // If error is "column already exists", that's fine
       const msg = String(e?.message || '');
       if (msg.includes('already exists') || msg.includes('duplicate column') || msg.includes('already exist')) {
-        console.log('[extended-outcomes] mode column already exists (confirmed by error)');
+        console.log('[extended-outcomes] Step 1: mode column already exists (confirmed by error)');
       } else {
-        console.error('[extended-outcomes] Error adding mode column:', e);
+        console.error('[extended-outcomes] Step 1 FAILED to add mode column:', e);
+        throw e; // Re-throw to see the real error
       }
     }
     
     // Step 2: Ensure meta table exists
+    console.log('[extended-outcomes] Step 2: Ensuring meta table exists...');
     try {
       await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
-    } catch (e) { /* ignore */ }
+      console.log('[extended-outcomes] Step 2 complete');
+    } catch (e: any) {
+      console.warn('[extended-outcomes] Step 2 could not create meta table:', e?.message);
+    }
     
     // Step 3: Update existing rows without mode
-    console.log('[extended-outcomes] Setting mode=EXECUTED for existing rows...');
+    console.log('[extended-outcomes] Step 3: Updating existing rows...');
     try {
-      const result = await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
-      console.log('[extended-outcomes] Updated existing rows to mode=EXECUTED');
+      await d.exec(`UPDATE extended_outcomes SET mode = 'EXECUTED' WHERE mode IS NULL`);
+      console.log('[extended-outcomes] Step 3 complete: Updated existing rows to mode=EXECUTED');
     } catch (e: any) {
-      console.warn('[extended-outcomes] Could not update existing rows:', e?.message);
+      console.warn('[extended-outcomes] Step 3 could not update rows:', e?.message);
     }
     
     // For PostgreSQL: update unique constraint
