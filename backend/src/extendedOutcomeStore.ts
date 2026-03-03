@@ -1192,6 +1192,7 @@ export async function evaluateBothOutcomeModes(
 
 /**
  * Get or create extended outcome record for a signal
+ * Automatically creates BOTH PAPER and EXECUTED modes for new signals
  */
 export async function getOrCreateExtendedOutcome(
   signal: ExtendedOutcomeInput
@@ -1207,6 +1208,24 @@ export async function getOrCreateExtendedOutcome(
   }
   
   const mode = signal.mode || 'EXECUTED';
+  
+  // If creating a new EXECUTED record, also ensure PAPER record exists
+  if (mode === 'EXECUTED') {
+    try {
+      // Check if PAPER record exists
+      const paperExists = await d.prepare(
+        `SELECT id FROM extended_outcomes WHERE signal_id = ? AND mode = 'PAPER'`
+      ).get(signalIdNum);
+      
+      if (!paperExists) {
+        // Create PAPER record first (using original signal prices)
+        console.log(`[extended-outcomes] Auto-creating PAPER record for signal ${signalIdNum}`);
+        await getOrCreateOutcomeRecord(signal, 'PAPER');
+      }
+    } catch (e: any) {
+      console.warn('[extended-outcomes] Could not auto-create PAPER record:', e?.message);
+    }
+  }
 
   // Check if exists (by signal_id and mode)
   const existing = await d.prepare(
@@ -1366,6 +1385,52 @@ export async function getOrCreateExtendedOutcome(
   };
 
   return { outcome: newOutcome, created: true };
+}
+
+/**
+ * Helper to get or create an outcome record with a specific mode
+ * Used internally to create both PAPER and EXECUTED records
+ */
+async function getOrCreateOutcomeRecord(
+  signal: ExtendedOutcomeInput,
+  mode: OutcomeMode
+): Promise<void> {
+  const d = getDb();
+  const signalIdNum = Math.floor(Number(signal.signalId));
+  
+  // Check if exists
+  const existing = await d.prepare(
+    `SELECT id FROM extended_outcomes WHERE signal_id = ? AND mode = ?`
+  ).get(signalIdNum, mode);
+  
+  if (existing) return;
+  
+  // Create new record
+  const direction = getSignalDirection(signal.category);
+  const expiresAt = Math.floor(Number(signal.signalTime)) + EXTENDED_WINDOW_MS;
+  const signalTimeNum = Math.floor(Number(signal.signalTime));
+  const entryPriceNum = Number(signal.entryPrice);
+  const stopPriceNum = signal.stopPrice != null ? Number(signal.stopPrice) : null;
+  const tp1PriceNum = signal.tp1Price != null ? Number(signal.tp1Price) : null;
+  const tp2PriceNum = signal.tp2Price != null ? Number(signal.tp2Price) : null;
+  const candlesExpected = Math.floor(EXTENDED_WINDOW_MS / EVALUATION_INTERVAL_MS);
+  
+  await d.prepare(`
+    INSERT INTO extended_outcomes (
+      signal_id, mode, symbol, category, direction,
+      signal_time, started_at, expires_at,
+      entry_price, stop_price, tp1_price, tp2_price,
+      status, coverage_pct, n_candles_expected,
+      resolve_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
+  `).run(
+    signalIdNum, mode, signal.symbol, signal.category, direction,
+    signalTimeNum, signalTimeNum, expiresAt,
+    entryPriceNum, stopPriceNum, tp1PriceNum, tp2PriceNum,
+    candlesExpected, RESOLVE_VERSION
+  );
+  
+  console.log(`[extended-outcomes] Created ${mode} record for signal ${signalIdNum}`);
 }
 
 /**
