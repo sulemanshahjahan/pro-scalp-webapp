@@ -3707,9 +3707,9 @@ app.post('/api/extended-outcomes/backfill-managed', async (req, res) => {
   }
 });
 
-// Backfill PAPER mode outcomes for existing signals (admin only)
+// Backfill PAPER mode outcomes for existing signals
+// NOTE: Temporary public endpoint for initial backfill
 app.post('/api/admin/backfill-paper-outcomes', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
   
   const d = getDb();
   const limit = Number((req.query as any)?.limit) || 100;
