@@ -273,32 +273,48 @@ async function migrateDualModeOutcomes(): Promise<void> {
   
   try {
     // Ensure meta table exists first
-    if (isSQLite) {
-      await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
-    } else {
-      await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
-    }
+    await d.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
     
     // Check if migration already completed
     const metaKey = 'dual_mode_migration_v1';
-    const metaRow = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(metaKey) as { value?: string } | undefined;
+    let metaRow: { value?: string } | undefined;
+    try {
+      if (isSQLite) {
+        metaRow = await d.prepare(`SELECT value FROM meta WHERE key = ?`).get(metaKey) as { value?: string } | undefined;
+      } else {
+        metaRow = await d.prepare(`SELECT value FROM meta WHERE key = $1`).get(metaKey) as { value?: string } | undefined;
+      }
+    } catch (e) {
+      // Meta table might not exist yet, continue with migration
+      console.log('[extended-outcomes] Could not read meta table, continuing with migration');
+    }
     if (metaRow?.value) {
       console.log('[extended-outcomes] Dual-mode migration already completed');
       return;
     }
     
-    // Add mode column
+    // Check if mode column exists
+    let modeColumnExists = false;
     try {
-      if (isSQLite) {
-        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
-      } else {
-        await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
-      }
-      console.log('[extended-outcomes] Added mode column');
-    } catch (e: any) {
-      if (!String(e?.message).includes('duplicate column') && 
-          !String(e?.message).includes('already exists')) {
-        console.warn('[extended-outcomes] Mode column may already exist:', e?.message);
+      await d.prepare(`SELECT mode FROM extended_outcomes LIMIT 1`).get();
+      modeColumnExists = true;
+      console.log('[extended-outcomes] mode column already exists');
+    } catch (e) {
+      // Column doesn't exist, will add it below
+      console.log('[extended-outcomes] mode column does not exist, adding...');
+    }
+    
+    // Add mode column if it doesn't exist
+    if (!modeColumnExists) {
+      try {
+        if (isSQLite) {
+          await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN mode TEXT DEFAULT 'EXECUTED'`);
+        } else {
+          await d.exec(`ALTER TABLE extended_outcomes ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'EXECUTED'`);
+        }
+        console.log('[extended-outcomes] Added mode column');
+      } catch (e: any) {
+        console.warn('[extended-outcomes] Error adding mode column:', e?.message);
       }
     }
     
