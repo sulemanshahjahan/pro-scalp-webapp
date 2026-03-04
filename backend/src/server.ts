@@ -3851,45 +3851,73 @@ app.post('/api/extended-outcomes/evaluate/:signalId', async (req, res) => {
   }
 });
 
-// Force evaluation of unevaluated PAPER outcomes (public for initial backfill)
-app.post('/api/admin/evaluate-paper-outcomes', async (req, res) => {
+// Force evaluation of ALL unevaluated outcomes (EXECUTED and PAPER)
+app.post('/api/admin/evaluate-all-outcomes', async (req, res) => {
   const d = getDb();
-  const limit = Number((req.query as any)?.limit) || 50;
+  const limit = Number((req.query as any)?.limit) || 100;
   const dryRun = (req.query as any)?.dryRun === 'true';
+  const modeFilter = String((req.query as any)?.mode || '').toUpperCase(); // 'EXECUTED', 'PAPER', or empty for both
   
   try {
-    // Find PAPER outcomes that have never been evaluated (coverage_pct = 0)
+    // Build mode filter
+    let modeCondition = '';
+    if (modeFilter === 'EXECUTED' || modeFilter === 'PAPER') {
+      modeCondition = `AND eo.mode = '${modeFilter}'`;
+    }
+    
+    // Find outcomes that need evaluation (coverage_pct = 0 or status = PENDING but window expired)
     const unevaluated = await d.prepare(`
       SELECT 
-        eo.signal_id, eo.symbol, eo.category, eo.direction, 
-        eo.signal_time, eo.entry_price, eo.stop_price, eo.tp1_price, eo.tp2_price
+        eo.signal_id, eo.symbol, eo.category, eo.direction, eo.mode,
+        eo.signal_time, eo.entry_price, eo.stop_price, eo.tp1_price, eo.tp2_price,
+        der.confirmed_price, der.confirmed_stop_price, der.confirmed_tp1_price, der.confirmed_tp2_price,
+        der.status as delayed_status
       FROM extended_outcomes eo
-      WHERE eo.mode = 'PAPER'
-        AND eo.coverage_pct = 0
-        AND eo.last_evaluated_at = 0
+      LEFT JOIN delayed_entry_records der ON der.signal_id = eo.signal_id
+      WHERE (eo.coverage_pct = 0 OR eo.status = 'PENDING')
+        AND eo.last_evaluated_at < eo.signal_time + 90000000  -- Don't re-evaluate recently checked
+        ${modeCondition}
       ORDER BY eo.signal_id DESC
       LIMIT ?
     `).all(limit) as any[];
     
     if (unevaluated.length === 0) {
-      return res.json({ ok: true, message: 'No unevaluated PAPER outcomes found', processed: 0, evaluated: 0 });
+      return res.json({ ok: true, message: 'No unevaluated outcomes found', processed: 0, evaluated: 0, byMode: {} });
     }
+    
+    // Group by mode for reporting
+    const byMode: { EXECUTED: number; PAPER: number } = { EXECUTED: 0, PAPER: 0 };
+    unevaluated.forEach((r: any) => {
+      const m = r.mode === 'EXECUTED' ? 'EXECUTED' : 'PAPER';
+      byMode[m] = (byMode[m] || 0) + 1;
+    });
     
     if (dryRun) {
       return res.json({ 
         ok: true, 
         dryRun: true, 
         wouldProcess: unevaluated.length,
-        sample: unevaluated.slice(0, 5).map((s: any) => ({ signalId: s.signal_id, symbol: s.symbol }))
+        byMode,
+        sample: unevaluated.slice(0, 5).map((s: any) => ({ 
+          signalId: s.signal_id, 
+          symbol: s.symbol, 
+          mode: s.mode,
+          delayedStatus: s.delayed_status 
+        }))
       });
     }
     
     // Evaluate each
     let evaluated = 0;
     let errors = 0;
+    const results = { EXECUTED: { success: 0, errors: 0 }, PAPER: { success: 0, errors: 0 } };
     
     for (const row of unevaluated) {
       try {
+        const mode = row.mode || 'EXECUTED';
+        const isExecuted = mode === 'EXECUTED';
+        
+        // Build input with correct prices
         const input: ExtendedOutcomeInput = {
           signalId: row.signal_id,
           symbol: row.symbol,
@@ -3900,19 +3928,38 @@ app.post('/api/admin/evaluate-paper-outcomes', async (req, res) => {
           stopPrice: row.stop_price,
           tp1Price: row.tp1_price,
           tp2Price: row.tp2_price,
-          mode: 'PAPER'
+          mode: mode as any
         };
+        
+        // For EXECUTED mode with delayed entry, use confirmed prices
+        let delayedRecord = null;
+        if (isExecuted && row.delayed_status) {
+          delayedRecord = {
+            signalId: row.signal_id,
+            status: row.delayed_status,
+            confirmedPrice: row.confirmed_price,
+            confirmedStopPrice: row.confirmed_stop_price,
+            confirmedTp1Price: row.confirmed_tp1_price,
+            confirmedTp2Price: row.confirmed_tp2_price,
+          } as any;
+        }
         
         // Evaluate (fetches candles automatically)
         const { evaluateExtended24hOutcome, updateExtendedOutcome } = await import('./extendedOutcomeStore.js');
-        const result = await evaluateExtended24hOutcome(input, undefined, null, 'PAPER');
-        await updateExtendedOutcome(row.signal_id, result, 'PAPER');
+        const result = await evaluateExtended24hOutcome(input, undefined, delayedRecord, mode as any);
+        await updateExtendedOutcome(row.signal_id, result, mode as any);
         
         evaluated++;
-        await new Promise(r => setTimeout(r, 200)); // Rate limit to avoid Binance limits
+        const modeKey = (mode === 'EXECUTED' ? 'EXECUTED' : 'PAPER') as keyof typeof results;
+        results[modeKey].success++;
+        
+        console.log(`[eval-all] ${mode} ${row.symbol} (${row.signal_id}): ${result.status}`);
+        await new Promise(r => setTimeout(r, 150)); // Rate limit
       } catch (e: any) {
-        console.error(`[eval-paper] Error for signal ${row.signal_id}:`, e?.message);
+        console.error(`[eval-all] Error for signal ${row.signal_id}:`, e?.message);
         errors++;
+        const errorModeKey = (row.mode === 'EXECUTED' ? 'EXECUTED' : 'PAPER') as keyof typeof results;
+        results[errorModeKey].errors++;
       }
     }
     
@@ -3921,11 +3968,12 @@ app.post('/api/admin/evaluate-paper-outcomes', async (req, res) => {
       processed: unevaluated.length,
       evaluated,
       errors,
-      message: `Evaluated ${evaluated} PAPER outcomes (${errors} errors)`
+      byMode: results,
+      message: `Evaluated ${evaluated} outcomes (${errors} errors)`
     });
     
   } catch (e: any) {
-    console.error('[eval-paper] Error:', e);
+    console.error('[eval-all] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
