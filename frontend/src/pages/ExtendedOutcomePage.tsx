@@ -277,7 +277,6 @@ export default function ExtendedOutcomePage() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [managedStats, setManagedStats] = useState<ManagedPnlStats | null>(null);
   const [verifiableStats, setVerifiableStats] = useState<VerifiableStats | null>(null);
-  const [improvementStats, setImprovementStats] = useState<{ noHitAt240m: number; laterHitTp1: number; laterHitTp2: number; laterHitStop: number; improvedWinRate: number } | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -286,9 +285,9 @@ export default function ExtendedOutcomePage() {
   const [sort, setSort] = useState<'time_desc' | 'time_asc' | 'completed_desc'>('time_desc');
   const [actionMsg, setActionMsg] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-  const [showImprovementsOnly, setShowImprovementsOnly] = useState(false);
-  const [showComparison, setShowComparison] = useState(true);
   const [showManagedStats, setShowManagedStats] = useState(true);
+  const [showDecisionEngine, setShowDecisionEngine] = useState(false);
+  const [showDebugInfo, setShowDebugInfo] = useState(false);
   
   // Live pending data for real-time updates
   const [livePendingData, setLivePendingData] = useState<Map<number, {
@@ -300,10 +299,6 @@ export default function ExtendedOutcomePage() {
     isConfirmed: boolean;
     lastUpdated: string;
   }>>(new Map());
-  
-  // Auto-processing state
-  const [lastAutoReevaluate, setLastAutoReevaluate] = useState<Date | null>(null);
-  const [lastAutoBackfill, setLastAutoBackfill] = useState<Date | null>(null);
 
   // Date range
   const range = useMemo(() => {
@@ -327,7 +322,7 @@ export default function ExtendedOutcomePage() {
     return { start: start.getTime(), end: end.getTime() };
   }, [datePreset, customStart, customEnd]);
 
-  function buildParams(includePagination = false, options?: { improvementsOnly?: boolean; forStats?: boolean }) {
+  function buildParams(includePagination = false, options?: { forStats?: boolean }) {
     const qs = new URLSearchParams();
     qs.set('start', String(range.start));
     qs.set('end', String(range.end));
@@ -336,7 +331,6 @@ export default function ExtendedOutcomePage() {
     if (status) qs.set('status', status);
     if (direction) qs.set('direction', direction);
     if (completed) qs.set('completed', completed);
-    if (options?.improvementsOnly) qs.set('improvementsOnly', 'true');
     // Pass mode to backend for filtering
     // For stats endpoints, always pass a specific mode (EXECUTED or PAPER)
     // For list endpoints, 'both' passes BOTH to get all modes
@@ -360,17 +354,13 @@ export default function ExtendedOutcomePage() {
     try {
       // For stats endpoints, always pass a specific mode (not 'both')
       const qs = buildParams(false, { forStats: true });
-      const [resp, improvResp, managedResp, verifiableResp] = await Promise.all([
+      const [resp, managedResp, verifiableResp] = await Promise.all([
         fetch(API(`/api/extended-outcomes/stats?${qs}`)).then(r => r.json()),
-        fetch(API(`/api/extended-outcomes/improvements?${qs}`)).then(r => r.json()),
         fetch(API(`/api/extended-outcomes/managed-stats?${qs}`)).then(r => r.json()),
         fetch(API(`/api/stats/verifiable?${qs}`)).then(r => r.json()),
       ]);
       if (resp?.ok) {
         setStats(resp);
-      }
-      if (improvResp?.ok) {
-        setImprovementStats(improvResp);
       }
       if (managedResp?.ok) {
         setManagedStats(managedResp);
@@ -386,13 +376,8 @@ export default function ExtendedOutcomePage() {
   async function loadOutcomes() {
     setLoading(true);
     try {
-      // Use comparison endpoint if showing comparison or improvements only
-      const useComparison = showComparison || showImprovementsOnly;
-      const qs = buildParams(true, { improvementsOnly: showImprovementsOnly });
-      const endpoint = useComparison
-        ? '/api/extended-outcomes/comparison'
-        : '/api/extended-outcomes';
-      const resp = await fetch(API(`${endpoint}?${qs}`)).then(r => r.json());
+      const qs = buildParams(true);
+      const resp = await fetch(API(`/api/extended-outcomes?${qs}`)).then(r => r.json());
       if (resp?.ok) {
         setOutcomes(resp.rows || []);
         setTotal(resp.total || 0);
@@ -439,8 +424,8 @@ export default function ExtendedOutcomePage() {
   }
 
   useEffect(() => { loadStats().catch(() => {}); }, [range.start, range.end, symbol, category, direction, mode]);
-  useEffect(() => { setPage(0); }, [range.start, range.end, symbol, category, status, direction, completed, showImprovementsOnly, mode]);
-  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, symbol, category, status, direction, completed, page, limit, sort, showComparison, showImprovementsOnly, mode]);
+  useEffect(() => { setPage(0); }, [range.start, range.end, symbol, category, status, direction, completed, mode]);
+  useEffect(() => { loadOutcomes().catch(() => {}); }, [range.start, range.end, symbol, category, status, direction, completed, page, limit, sort, mode]);
   
   // Live polling for pending signals - updates every 5 seconds automatically
   useEffect(() => {
@@ -664,31 +649,7 @@ export default function ExtendedOutcomePage() {
             >
               {actionLoading ? 'Processing...' : 'Re-evaluate Pending'}
             </button>
-            <label className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={showComparison} 
-                onChange={(e) => setShowComparison(e.target.checked)} 
-              />
-              Show 240m Comparison
-            </label>
-            <label className="flex items-center gap-2 text-xs bg-accent/10 border border-accent/20 rounded-xl px-2 py-1 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={showImprovementsOnly} 
-                onChange={(e) => setShowImprovementsOnly(e.target.checked)} 
-              />
-              Improvements Only
-            </label>
             {actionMsg ? <span className="text-xs text-white/50">{actionMsg}</span> : null}
-            
-            {/* Auto-processing status indicator */}
-            {(lastAutoReevaluate || lastAutoBackfill) && (
-              <div className="flex items-center gap-2 text-[10px] bg-green-500/10 border border-green-500/20 rounded-xl px-2 py-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                <span className="text-green-300/80">Auto-processing active</span>
-              </div>
-            )}
           </div>
         </div>
       </section>
@@ -784,10 +745,10 @@ export default function ExtendedOutcomePage() {
               })}
           </div>
           
-          {/* Breakdown list */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+          {/* Legend */}
+          <div className="flex flex-wrap gap-3 text-[10px]">
             {verifiableStats.breakdown.bySignal
-              .filter(item => item.count > 0 || item.key === 'pending')
+              .filter(item => item.count > 0)
               .map((item) => {
                 const colors = {
                   win: 'text-emerald-300',
@@ -796,113 +757,59 @@ export default function ExtendedOutcomePage() {
                   pending: 'text-amber-300'
                 };
                 return (
-                  <div key={item.key} className="flex items-center justify-between rounded bg-white/5 px-2 py-1.5">
-                    <span className="text-xs text-white/60">{item.label}</span>
-                    <div className="text-right">
-                      <span className={`text-sm font-medium ${colors[item.category]}`}>{item.count}</span>
-                      <span className="text-xs text-white/40 ml-1">({item.pctOfTotal}%)</span>
-                    </div>
-                  </div>
+                  <span key={item.key} className="flex items-center gap-1">
+                    <span className={`w-2 h-2 rounded-full ${
+                      item.category === 'win' ? 'bg-emerald-500' : 
+                      item.category === 'loss' ? 'bg-rose-500' :
+                      item.category === 'pending' ? 'bg-amber-500' : 'bg-gray-500'
+                    }`} />
+                    <span className="text-white/50">{item.label}:</span>
+                    <span className={colors[item.category]}>{item.count}</span>
+                  </span>
                 );
               })}
           </div>
-          
-          {/* Verification details */}
-          <div className="text-[10px] text-white/40 border-t border-white/10 pt-2 flex flex-wrap gap-4">
-            <span>Completed denominator: <strong className="text-white/60">{verifiableStats.breakdown.completedDen}</strong></span>
-            <span>Win-rate: <strong className="text-white/60">{verifiableStats.breakdown.winRateDefinition}</strong></span>
-            {!verifiableStats.verification.completedMatches && (
-              <span className="text-rose-400">⚠ Completed check failed</span>
-            )}
-            {!verifiableStats.verification.totalMatches && (
-              <span className="text-rose-400">⚠ Total check failed</span>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* 240m vs 24h Comparison Stats - Only show if there's meaningful data */}
-      {improvementStats && (improvementStats.noHitAt240m > 0 || improvementStats.laterHitTp1 > 0 || improvementStats.laterHitTp2 > 0 || improvementStats.laterHitStop > 0) && (
-        <section className="rounded-2xl border border-accent/20 bg-accent/5 p-4">
-          <div className="text-xs text-accent/80 uppercase tracking-widest mb-3">240m Horizon vs 24h Extended Comparison</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <div className="text-xs text-white/50">No Hit at 240m</div>
-              <div className="text-lg font-semibold">{improvementStats.noHitAt240m}</div>
-              <div className="text-[10px] text-white/40">Timed out at 4h horizon</div>
-            </div>
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
-              <div className="text-xs text-emerald-300">Later Hit TP1</div>
-              <div className="text-lg font-semibold text-emerald-200">{improvementStats.laterHitTp1}</div>
-              <div className="text-[10px] text-emerald-300/60">After 4h, within 24h</div>
-            </div>
-            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
-              <div className="text-xs text-emerald-300">Later Hit TP2</div>
-              <div className="text-lg font-semibold text-emerald-200">{improvementStats.laterHitTp2}</div>
-              <div className="text-[10px] text-emerald-300/60">Full target reached</div>
-            </div>
-            <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-3">
-              <div className="text-xs text-rose-300">Later Hit Stop</div>
-              <div className="text-lg font-semibold text-rose-200">{improvementStats.laterHitStop}</div>
-              <div className="text-[10px] text-rose-300/60">Stop after 4h window</div>
-            </div>
-          </div>
-          {improvementStats.noHitAt240m > 0 && (
-            <div className="mt-3 text-xs">
-              <span className="text-white/60">Of signals that showed "no hit" at 240m:</span>
-              <span className="ml-2 text-emerald-300 font-semibold">
-                {fmtRate(improvementStats.improvedWinRate, 1)} later became wins within 24h
-              </span>
-              <span className="text-white/40"> (TP1 or TP2 hit after hour 4)</span>
-            </div>
-          )}
         </section>
       )}
 
       {/* Managed Performance (Option B) */}
       <section className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-4">
         <div className="flex items-center justify-between mb-3">
-          <div className="text-xs text-cyan-400/80 uppercase tracking-widest">Managed Performance (Option B: 50% TP1 + BE Runner)</div>
+          <div className="text-xs text-cyan-400/80 uppercase tracking-widest">Managed Performance (50% TP1 + BE Runner)</div>
           <label className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1 cursor-pointer">
             <input 
               type="checkbox" 
               checked={showManagedStats} 
               onChange={(e) => setShowManagedStats(e.target.checked)} 
             />
-            Show Managed Stats
+            Show Details
           </label>
         </div>
         {showManagedStats && (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs text-white/50">Risk / Trade</div>
                 <div className="text-lg font-semibold">${managedStats?.riskPerTradeUsd ?? 15}</div>
-                <div className="text-[10px] text-white/40">Configurable</div>
               </div>
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
                 <div className="text-xs text-emerald-300">Managed Net R</div>
                 <div className={`text-lg font-semibold ${(managedStats?.totalManagedR ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
                   {managedStats ? `${managedStats.totalManagedR >= 0 ? '+' : ''}${fmt(managedStats.totalManagedR, 2)}R` : '--'}
                 </div>
-                <div className="text-[10px] text-emerald-300/60">Closed trades only</div>
               </div>
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
                 <div className="text-xs text-emerald-300">Managed Net $</div>
                 <div className={`text-lg font-semibold ${(managedStats?.totalManagedPnlUsd ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
                   {managedStats ? `${managedStats.totalManagedPnlUsd >= 0 ? '+' : ''}$${fmt(managedStats.totalManagedPnlUsd, 0)}` : '--'}
                 </div>
-                <div className="text-[10px] text-emerald-300/60">Based on risk/trade</div>
               </div>
               <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
-                <div className="text-xs text-cyan-300">Managed Win Rate</div>
+                <div className="text-xs text-cyan-300">Win Rate</div>
                 <div className="text-lg font-semibold text-cyan-200">
                   {verifiableStats 
                     ? `${verifiableStats.managedRates.winRate.pct.toFixed(1)}%` 
                     : managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}
-                </div>
-                <div className="text-[10px] text-cyan-300/60">
-                  {verifiableStats?.managedRates.winRate.label ?? "managed_r > 0 / closed"}
                 </div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -910,74 +817,6 @@ export default function ExtendedOutcomePage() {
                 <div className={`text-lg font-semibold ${(verifiableStats?.performance.avgManagedRPnL ?? 0) >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
                   {verifiableStats ? `${verifiableStats.performance.avgManagedRPnL >= 0 ? '+' : ''}${fmt(verifiableStats.performance.avgManagedRPnL, 2)}R` : '--'}
                 </div>
-                <div className="text-[10px] text-white/40">
-                  P&L trades only ({verifiableStats?.performance.managedTradesWithPnL ?? '--'})
-                </div>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/50">BE Rate</div>
-                <div className="text-lg font-semibold text-white/90">
-                  {verifiableStats 
-                    ? `${verifiableStats.managedRates.beRate.pct.toFixed(1)}%` 
-                    : '--'}
-                </div>
-                <div className="text-[10px] text-white/40">
-                  {verifiableStats?.managedRates.beRate.label ?? "managed_r = 0 / closed"}
-                </div>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/50">Avg R (All Closed)</div>
-                <div className={`text-lg font-semibold ${(verifiableStats?.performance.avgManagedR ?? 0) >= 0 ? 'text-emerald-200/70' : 'text-rose-200/70'}`}>
-                  {verifiableStats ? `${verifiableStats.performance.avgManagedR >= 0 ? '+' : ''}${fmt(verifiableStats.performance.avgManagedR, 2)}R` : '--'}
-                </div>
-                <div className="text-[10px] text-white/40">
-                  Includes BE ({verifiableStats?.performance.managedClosed ?? '--'} total)
-                </div>
-              </div>
-            </div>
-            
-            {/* Additional managed stats row */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
-                <div className="text-xs text-amber-300">BE Saves</div>
-                <div className="text-lg font-semibold text-amber-200">
-                  {verifiableStats?.managedCounts.beSaves ?? managedStats?.beSaves ?? '--'}
-                </div>
-                <div className="text-[10px] text-amber-300/60">TP1 → BE exits</div>
-              </div>
-              <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3">
-                <div className="text-xs text-blue-300">Timeout Exits</div>
-                <div className="text-lg font-semibold text-blue-200">
-                  {verifiableStats?.managedCounts.timeoutExits ?? managedStats?.timeoutExits ?? '--'}
-                </div>
-                <div className="text-[10px] text-blue-300/60">24h market close</div>
-              </div>
-              <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3">
-                <div className="text-xs text-purple-300">TP1 Touch Rate</div>
-                <div className="text-lg font-semibold text-purple-200">
-                  {verifiableStats 
-                    ? `${verifiableStats.signalRates.tp1TouchRate.pct.toFixed(1)}%` 
-                    : managedStats ? fmtRate(managedStats.tp1TouchRate, 1) : '--'}
-                </div>
-                <div className="text-[10px] text-purple-300/60">Any TP1 hit</div>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/50">Max Win R</div>
-                <div className="text-lg font-semibold text-emerald-200">{managedStats ? `+${fmt(managedStats.maxWinR, 2)}R` : '--'}</div>
-                <div className="text-[10px] text-white/40">Best outcome</div>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-xs text-white/50">Max Loss R</div>
-                <div className="text-lg font-semibold text-rose-200">{managedStats ? `${fmt(managedStats.maxLossR, 2)}R` : '--'}</div>
-                <div className="text-[10px] text-white/40">Worst outcome</div>
-              </div>
-            </div>
-            
-            {/* Win rate comparison note - Self-verifying (Step 2) */}
-            <div className="mt-3 text-xs">
-              <div className="flex gap-4 text-white/60 flex-wrap">
-                <span>A) Signal Win Rate: <strong className="text-white">{verifiableStats ? `${verifiableStats.signalRates.winRate.pct.toFixed(1)}%` : stats ? fmtRate(stats.winRate, 1) : '--'}</strong> <span className="text-white/40">({verifiableStats?.signalRates.winRate.label})</span></span>
-                <span>B) Managed Win Rate: <strong className="text-cyan-300">{verifiableStats ? `${verifiableStats.managedRates.winRate.pct.toFixed(1)}%` : managedStats ? fmtRate(managedStats.managedWinRate, 1) : '--'}</strong> <span className="text-white/40">({verifiableStats?.managedRates.winRate.label})</span></span>
               </div>
             </div>
           </>
@@ -993,30 +832,38 @@ export default function ExtendedOutcomePage() {
       {/* Filter Simulator Section (Step 4) */}
       <FilterSimulatorSection range={range} />
 
-      {/* Decision Engine Sections */}
+      {/* Decision Engine Sections - Collapsed by default */}
       <div className="rounded-2xl border border-red-500/30 bg-red-950/20 p-4">
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-lg">🚨</span>
-          <span className="text-sm font-semibold text-red-200">SIGNAL GATE (HARD EXECUTION FILTER)</span>
-        </div>
+        <button 
+          onClick={() => setShowDecisionEngine(!showDecisionEngine)}
+          className="flex items-center justify-between w-full"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🚨</span>
+            <span className="text-sm font-semibold text-red-200">SIGNAL GATE (HARD EXECUTION FILTER)</span>
+          </div>
+          <span className="text-xs text-red-300/50">{showDecisionEngine ? '▼' : '▶'}</span>
+        </button>
         
-        <div className="space-y-4">
-          <SignalGateStats />
-          <GateQuickSettings />
-          <FilterConfigSection />
-          <SymbolTierManagement />
-          <FilterTester />
-        </div>
-        
-        <div className="mt-4 pt-4 border-t border-red-500/20 text-xs text-red-300/70">
-          <div className="font-medium mb-1">Hard Gate Rules (Active when LIVE):</div>
-          <ul className="space-y-1 list-disc list-inside">
-            <li>RED tier symbols = BLOCKED</li>
-            <li>MFE30m &lt; 0.3% = BLOCKED (0.5% for YELLOW)</li>
-            <li>MQS &lt; 0.2 = BLOCKED</li>
-            <li>Need 2+ confluence points (score-based)</li>
-          </ul>
-        </div>
+        {showDecisionEngine && (
+          <div className="mt-4 space-y-4">
+            <SignalGateStats />
+            <GateQuickSettings />
+            <FilterConfigSection />
+            <SymbolTierManagement />
+            <FilterTester />
+            
+            <div className="pt-4 border-t border-red-500/20 text-xs text-red-300/70">
+              <div className="font-medium mb-1">Hard Gate Rules (Active when LIVE):</div>
+              <ul className="space-y-1 list-disc list-inside">
+                <li>RED tier symbols = BLOCKED</li>
+                <li>MFE30m &lt; 0.3% = BLOCKED (0.5% for YELLOW)</li>
+                <li>MQS &lt; 0.2 = BLOCKED</li>
+                <li>Need 2+ confluence points (score-based)</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Gate Backtest Comparison */}
@@ -1051,7 +898,6 @@ export default function ExtendedOutcomePage() {
                 <th className="text-left px-3 py-2">Category</th>
                 <th className="text-left px-3 py-2">Dir</th>
                 <th className="text-left px-3 py-2">Entry / Stop / TP1 / TP2</th>
-                {showComparison && <th className="text-left px-3 py-2">240m Result</th>}
                 <th className="text-left px-3 py-2">Status (24h)</th>
                 <th className="text-left px-3 py-2 text-red-400">Quality</th>
                 {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Managed R</th>}
@@ -1060,8 +906,6 @@ export default function ExtendedOutcomePage() {
                 <th className="text-left px-3 py-2">TP2 At</th>
                 <th className="text-left px-3 py-2">Stop At</th>
                 <th className="text-left px-3 py-2">Time to Hit</th>
-                <th className="text-left px-3 py-2">MFE / MAE</th>
-                <th className="text-left px-3 py-2">Coverage</th>
               </tr>
             </thead>
             <tbody>
@@ -1079,7 +923,7 @@ export default function ExtendedOutcomePage() {
                 const isLive = isPending && !!liveData;
                 
                 return (
-                <tr key={o.id} className={`border-b border-white/5 hover:bg-white/5 ${o.improved ? 'bg-emerald-500/5' : ''}`}>
+                <tr key={o.id} className="border-b border-white/5 hover:bg-white/5">
                   <td className="px-3 py-2 text-white/70">{dt(o.signalTime)}</td>
                   <td className="px-3 py-2 font-semibold">{o.symbol}</td>
                   <td className="px-3 py-2">
@@ -1093,16 +937,7 @@ export default function ExtendedOutcomePage() {
                   <td className="px-3 py-2 text-white/70">
                     {fmt(o.entryPrice, 6)} / {fmt(o.stopPrice, 6)} / {fmt(o.tp1Price, 6)} / {fmt(o.tp2Price, 6)}
                   </td>
-                  {showComparison && (
-                    <td className="px-3 py-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${o.horizon240mResult === 'NONE' ? 'bg-amber-400/20 text-amber-200' : 'bg-white/10 text-white/60'}`}>
-                        {o.horizon240mResult === 'NONE' ? 'NO HIT (240m)' : o.horizon240mResult || 'N/A'}
-                      </span>
-                      {o.improved && (
-                        <span className="ml-1 text-[10px] text-emerald-400">→ Improved!</span>
-                      )}
-                    </td>
-                  )}
+
                   <td className="px-3 py-2">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border ${STATUS_COLORS[o.status] || 'bg-white/10 border-white/20'}`}>
                       {STATUS_LABELS[o.status] || o.status}
@@ -1160,27 +995,13 @@ export default function ExtendedOutcomePage() {
                   <td className="px-3 py-2 text-white/70">
                     {o.timeToFirstHitSeconds ? fmtDuration(o.timeToFirstHitSeconds) : '--'}
                   </td>
-                  <td className="px-3 py-2 text-white/70">
-                    {isLive ? (
-                      <span className="text-cyan-400">
-                        {fmt(displayMfe, 2)}% / {fmt(displayMae, 2)}%
-                        <span className="text-[10px] text-white/40 ml-1">●</span>
-                      </span>
-                    ) : (
-                      <span>{fmt(displayMfe, 2)}% / {fmt(displayMae, 2)}%</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-white/70">
-                    {fmt(o.coveragePct, 0)}%
-                  </td>
+
                 </tr>
               )})}
               {!loading && outcomes.length === 0 && (
                 <tr>
-                  <td colSpan={showComparison ? (showManagedStats ? 16 : 14) : (showManagedStats ? 15 : 13)} className="px-3 py-4 text-white/50">
-                    {showImprovementsOnly 
-                      ? 'No improved signals found. These are signals that were "no hit" at 240m but hit within 24h.' 
-                      : 'No extended outcomes in range. Try backfilling signals or adjusting filters.'}
+                  <td colSpan={showManagedStats ? 10 : 8} className="px-3 py-4 text-white/50">
+                    No extended outcomes in range. Try backfilling signals or adjusting filters.
                   </td>
                 </tr>
               )}
