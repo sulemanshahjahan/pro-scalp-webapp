@@ -1010,7 +1010,7 @@ export default function ExtendedOutcomePage() {
         </div>
 
         <div className="p-3 border-t border-white/10 flex items-center justify-between text-xs text-white/60">
-          <div>Page {page + 1} / {Math.max(1, totalPages)} {showImprovementsOnly && <span className="ml-2 text-emerald-400">(Showing improvements only)</span>}</div>
+          <div>Page {page + 1} / {Math.max(1, totalPages)}</div>
           <div className="flex items-center gap-2">
             <button onClick={() => setPage(p => Math.max(0, p - 1))} className="px-2 py-1 rounded bg-white/10">Prev</button>
             <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} className="px-2 py-1 rounded bg-white/10">Next</button>
