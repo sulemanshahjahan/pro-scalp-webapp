@@ -67,6 +67,14 @@ export interface BacktestResult {
   };
   blockedReasons: Record<string, number>;
   tierBreakdown: Record<string, { total: number; allowed: number; blocked: number }>;
+  // Diagnostics for debugging empty results
+  _diagnostics?: {
+    totalInDb: number;
+    completedInDb: number;
+    executedInDb: number;
+    paperInDb: number;
+    queryReturned: number;
+  };
 }
 
 /**
@@ -98,7 +106,19 @@ export async function runGateBacktest(
   
   const d = getDb();
   
-  // Fetch recent signals with their outcomes
+  // First check if we have any data at all
+  const countCheck = await d.prepare(`
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) as completed,
+      SUM(CASE WHEN mode = 'EXECUTED' THEN 1 ELSE 0 END) as executed_count,
+      SUM(CASE WHEN mode = 'PAPER' THEN 1 ELSE 0 END) as paper_count
+    FROM extended_outcomes
+  `).get() as { total: number; completed: number; executed_count: number; paper_count: number };
+  
+  console.log('[gateBacktest] Data check:', countCheck);
+  
+  // Fetch recent signals with their outcomes (EXECUTED mode only - authoritative)
   const rows = await d.prepare(`
     SELECT 
       s.id,
@@ -111,13 +131,17 @@ export async function runGateBacktest(
       eo.mfe_30m_pct,
       eo.mae_30m_pct,
       eo.tp1_within_45m,
-      eo.completed_at
+      eo.completed_at,
+      eo.mode
     FROM signals s
     JOIN extended_outcomes eo ON eo.signal_id = s.id
     WHERE eo.completed_at IS NOT NULL
-    ORDER BY s.created_at DESC
+      AND eo.mode = 'EXECUTED'
+    ORDER BY s.time DESC
     LIMIT @limit
   `).all({ limit }) as any[];
+  
+  console.log(`[gateBacktest] Fetched ${rows.length} rows for analysis`);
 
   let allowed = 0;
   let blocked = 0;
@@ -274,6 +298,14 @@ export async function runGateBacktest(
     quality: { high, medium, low },
     blockedReasons,
     tierBreakdown,
+    // Diagnostics for debugging
+    _diagnostics: {
+      totalInDb: countCheck.total,
+      completedInDb: countCheck.completed,
+      executedInDb: countCheck.executed_count,
+      paperInDb: countCheck.paper_count,
+      queryReturned: rows.length,
+    },
   };
 }
 

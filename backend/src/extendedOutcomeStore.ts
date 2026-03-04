@@ -2582,7 +2582,7 @@ export async function listExtendedOutcomesWithComparison(params: {
   showImprovementsOnly?: boolean;
   limit?: number;
   offset?: number;
-}): Promise<{ rows: Array<ExtendedOutcome & { horizon240mResult: string | null; improved: boolean }>; total: number }> {
+}): Promise<{ rows: Array<ExtendedOutcome & { horizon240mResult: string | null; horizon240mExitReason: string | null; improved: boolean }>; total: number }> {
   await ensureSchema();
   const d = getDb();
 
@@ -2691,18 +2691,29 @@ export async function listExtendedOutcomesWithComparison(params: {
       eo.ext24_timeout_exit_price,
       eo.ext24_risk_usd_snapshot,
       eo.managed_debug_json,
-      o240.result as horizon_240m_result,
-      o240.exit_reason as horizon_240m_exit_reason,
+      -- Derive 240m result from extended outcomes (authoritative)
       CASE 
-        WHEN o240.result = 'NONE' AND eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1
-        WHEN o240.result = 'NONE' AND eo.status = 'LOSS_STOP' THEN 1
-        WHEN o240.result = 'NONE' AND eo.status = 'ACHIEVED_TP1' THEN 1
+        WHEN eo.time_to_tp1_seconds IS NOT NULL AND eo.time_to_tp1_seconds <= 14400 THEN 'WIN'
+        WHEN eo.time_to_stop_seconds IS NOT NULL AND eo.time_to_stop_seconds <= 14400 THEN 'LOSS'
+        WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') AND (eo.time_to_tp1_seconds IS NULL OR eo.time_to_tp1_seconds > 14400) THEN 'NONE'
+        WHEN eo.status = 'LOSS_STOP' AND (eo.time_to_stop_seconds IS NULL OR eo.time_to_stop_seconds > 14400) THEN 'NONE'
+        WHEN eo.status IN ('FLAT_TIMEOUT_24H', 'NO_TRADE') THEN 'NONE'
+        WHEN eo.status = 'PENDING' THEN NULL
+        ELSE 'NONE'
+      END as horizon_240m_result,
+      CASE 
+        WHEN eo.time_to_tp1_seconds IS NOT NULL AND eo.time_to_tp1_seconds <= 14400 THEN 'TP1'
+        WHEN eo.time_to_stop_seconds IS NOT NULL AND eo.time_to_stop_seconds <= 14400 THEN 'SL'
+        ELSE NULL
+      END as horizon_240m_exit_reason,
+      -- Improved = no hit at 240m but hit later (within 24h)
+      CASE 
+        WHEN eo.time_to_tp1_seconds IS NULL AND eo.time_to_stop_seconds IS NULL THEN 0 -- no hit at all
+        WHEN eo.time_to_tp1_seconds IS NOT NULL AND eo.time_to_tp1_seconds > 14400 THEN 1 -- TP1 hit after 240m
+        WHEN eo.time_to_stop_seconds IS NOT NULL AND eo.time_to_stop_seconds > 14400 THEN 1 -- Stop hit after 240m
         ELSE 0
       END as improved
     FROM extended_outcomes eo
-    LEFT JOIN signal_outcomes o240 
-      ON o240.signal_id = eo.signal_id 
-      AND o240.horizon_min = 240
     ${whereClause}
     ${showImprovementsOnly ? 'HAVING improved = 1' : ''}
     ORDER BY eo.signal_time DESC
@@ -2756,6 +2767,7 @@ export async function listExtendedOutcomesWithComparison(params: {
     debugJson: row.debug_json != null ? String(row.debug_json) : null,
     managedDebugJson: row.managed_debug_json != null ? String(row.managed_debug_json) : null,
     horizon240mResult: row.horizon_240m_result != null ? String(row.horizon_240m_result) : null,
+    horizon240mExitReason: row.horizon_240m_exit_reason != null ? String(row.horizon_240m_exit_reason) : null,
     improved: Boolean(row.improved),
     mfe30mPct: row.mfe_30m_pct != null ? Number(row.mfe_30m_pct) : null,
     mae30mPct: row.mae_30m_pct != null ? Number(row.mae_30m_pct) : null,
@@ -2803,14 +2815,31 @@ export async function getImprovementStats(params: {
   const stats = await d.prepare(`
     SELECT
       COUNT(*) as total_signals,
-      SUM(CASE WHEN o240.result = 'NONE' THEN 1 ELSE 0 END) as no_hit_at_240m,
-      SUM(CASE WHEN o240.result = 'NONE' AND eo.status = 'WIN_TP1' THEN 1 ELSE 0 END) as later_hit_tp1,
-      SUM(CASE WHEN o240.result = 'NONE' AND eo.status = 'WIN_TP2' THEN 1 ELSE 0 END) as later_hit_tp2,
-      SUM(CASE WHEN o240.result = 'NONE' AND eo.status = 'LOSS_STOP' THEN 1 ELSE 0 END) as later_hit_stop
+      -- No hit at 240m = neither TP1 nor Stop was hit within 14400 seconds (4h)
+      SUM(CASE 
+        WHEN (eo.time_to_tp1_seconds IS NULL OR eo.time_to_tp1_seconds > 14400) 
+         AND (eo.time_to_stop_seconds IS NULL OR eo.time_to_stop_seconds > 14400) 
+        THEN 1 ELSE 0 
+      END) as no_hit_at_240m,
+      -- Later hit TP1 = not hit at 240m, but TP1 hit within 24h
+      SUM(CASE 
+        WHEN (eo.time_to_tp1_seconds IS NULL OR eo.time_to_tp1_seconds > 14400) 
+         AND eo.status = 'WIN_TP1' 
+        THEN 1 ELSE 0 
+      END) as later_hit_tp1,
+      -- Later hit TP2 = not hit at 240m, but TP2 hit within 24h
+      SUM(CASE 
+        WHEN (eo.time_to_tp1_seconds IS NULL OR eo.time_to_tp1_seconds > 14400) 
+         AND eo.status = 'WIN_TP2' 
+        THEN 1 ELSE 0 
+      END) as later_hit_tp2,
+      -- Later hit Stop = not hit at 240m, but Stop hit within 24h
+      SUM(CASE 
+        WHEN (eo.time_to_stop_seconds IS NULL OR eo.time_to_stop_seconds > 14400) 
+         AND eo.status = 'LOSS_STOP' 
+        THEN 1 ELSE 0 
+      END) as later_hit_stop
     FROM extended_outcomes eo
-    LEFT JOIN signal_outcomes o240 
-      ON o240.signal_id = eo.signal_id 
-      AND o240.horizon_min = 240
     ${whereClause}
   `).get(...values) as {
     total_signals: number;

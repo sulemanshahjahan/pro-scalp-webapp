@@ -78,6 +78,13 @@ interface BacktestResult {
   };
   blockedReasons: Record<string, number>;
   tierBreakdown: Record<string, { total: number; allowed: number; blocked: number }>;
+  _diagnostics?: {
+    totalInDb: number;
+    completedInDb: number;
+    executedInDb: number;
+    paperInDb: number;
+    queryReturned: number;
+  };
 }
 
 // ============================================================================
@@ -422,8 +429,33 @@ export function GateBacktestComparison() {
         </div>
       )}
 
+      {/* No Data Diagnostic */}
+      {results && results.length > 0 && results[0]?._diagnostics && results[0]._diagnostics.queryReturned === 0 && (
+        <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10">
+          <div className="text-sm font-medium text-amber-300 mb-2">⚠️ No Backtest Data Available</div>
+          <div className="text-xs text-white/70 space-y-1">
+            <p>Database status:</p>
+            <ul className="list-disc list-inside ml-2 space-y-0.5">
+              <li>Total outcomes in DB: <span className="text-white">{results[0]._diagnostics.totalInDb}</span></li>
+              <li>Completed outcomes: <span className="text-white">{results[0]._diagnostics.completedInDb}</span></li>
+              <li>EXECUTED mode: <span className="text-white">{results[0]._diagnostics.executedInDb}</span></li>
+              <li>PAPER mode: <span className="text-white">{results[0]._diagnostics.paperInDb}</span></li>
+            </ul>
+            <p className="mt-2 text-amber-200/70">
+              {results[0]._diagnostics.totalInDb === 0 
+                ? "No extended outcomes found. Run signal scanning first."
+                : results[0]._diagnostics.completedInDb === 0
+                ? "Outcomes exist but none are completed. Wait for 24h window to complete or check evaluation."
+                : results[0]._diagnostics.executedInDb === 0
+                ? "Only PAPER mode outcomes found. EXECUTED mode required for backtest."
+                : "Query returned no data. Check database consistency."}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Results Table - Step 3: Self-verifying with throughput metrics */}
-      {results && (
+      {results && results.length > 0 && (results[0]?._diagnostics?.queryReturned ?? 1) > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>

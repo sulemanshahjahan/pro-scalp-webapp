@@ -3978,6 +3978,130 @@ app.post('/api/admin/evaluate-all-outcomes', async (req, res) => {
   }
 });
 
+// Fix stale 240m outcomes by syncing with 24h extended outcomes
+app.post('/api/admin/fix-240m-outcomes', async (req, res) => {
+  const d = getDb();
+  const limit = Number((req.query as any)?.limit) || 100;
+  const dryRun = (req.query as any)?.dryRun === 'true';
+  
+  try {
+    // Find signals where 240m outcome doesn't match 24h outcome
+    const mismatches = await d.prepare(`
+      SELECT 
+        eo.signal_id,
+        eo.symbol,
+        eo.status as ext_status,
+        eo.first_tp1_at,
+        eo.stop_at,
+        eo.time_to_tp1_seconds,
+        eo.time_to_stop_seconds,
+        o240.result as o240_result,
+        o240.exit_reason as o240_exit_reason
+      FROM extended_outcomes eo
+      JOIN signal_outcomes o240 ON o240.signal_id = eo.signal_id AND o240.horizon_min = 240
+      WHERE eo.mode = 'EXECUTED'
+        AND (
+          -- 24h says WIN but 240m says something else
+          (eo.status IN ('WIN_TP1', 'WIN_TP2') AND o240.result != 'WIN') OR
+          -- 24h says LOSS but 240m says something else
+          (eo.status = 'LOSS_STOP' AND o240.result != 'LOSS') OR
+          -- 24h says NO_TRADE but 240m says something else
+          (eo.status = 'NO_TRADE' AND o240.result != 'NONE')
+        )
+      ORDER BY eo.signal_id DESC
+      LIMIT ?
+    `).all(limit) as any[];
+    
+    if (mismatches.length === 0) {
+      return res.json({ ok: true, message: 'No mismatches found', fixed: 0 });
+    }
+    
+    if (dryRun) {
+      return res.json({ 
+        ok: true, 
+        dryRun: true, 
+        wouldFix: mismatches.length,
+        sample: mismatches.slice(0, 5).map((m: any) => ({ 
+          signalId: m.signal_id, 
+          symbol: m.symbol, 
+          extStatus: m.ext_status,
+          o240Result: m.o240_result
+        }))
+      });
+    }
+    
+    // Fix each mismatch
+    let fixed = 0;
+    let errors = 0;
+    
+    for (const row of mismatches) {
+      try {
+        // Determine correct 240m result from 24h data
+        let correctResult = 'NONE';
+        let correctExitReason = null;
+        
+        // Check if TP1 was hit within 240m (4 hours = 14400 seconds)
+        const hitTp1Within240m = row.time_to_tp1_seconds && row.time_to_tp1_seconds <= 14400;
+        const hitStopWithin240m = row.time_to_stop_seconds && row.time_to_stop_seconds <= 14400;
+        
+        if (hitTp1Within240m) {
+          correctResult = 'WIN';
+          correctExitReason = 'TP1';
+        } else if (hitStopWithin240m) {
+          correctResult = 'LOSS';
+          correctExitReason = 'SL';
+        } else {
+          correctResult = 'NONE'; // No hit within 240m
+        }
+        
+        // Update the 240m outcome
+        await d.prepare(`
+          UPDATE signal_outcomes
+          SET result = ?,
+              exit_reason = ?,
+              hit_tp1 = ?,
+              hit_sl = ?,
+              window_status = 'COMPLETE',
+              outcome_state = 'COMPLETE',
+              complete_reason = CASE 
+                WHEN ? = 'WIN' THEN 'HIT_TP1'
+                WHEN ? = 'LOSS' THEN 'HIT_SL'
+                ELSE 'NO_HIT'
+              END,
+              updated_at = datetime('now')
+          WHERE signal_id = ? AND horizon_min = 240
+        `).run(
+          correctResult,
+          correctExitReason,
+          hitTp1Within240m ? 1 : 0,
+          hitStopWithin240m ? 1 : 0,
+          correctResult,
+          correctResult,
+          row.signal_id
+        );
+        
+        console.log(`[fix-240m] Signal ${row.signal_id} (${row.symbol}): ${row.o240_result} → ${correctResult}`);
+        fixed++;
+      } catch (e: any) {
+        console.error(`[fix-240m] Error for signal ${row.signal_id}:`, e?.message);
+        errors++;
+      }
+    }
+    
+    res.json({ 
+      ok: true, 
+      processed: mismatches.length,
+      fixed,
+      errors,
+      message: `Fixed ${fixed} 240m outcomes (${errors} errors)`
+    });
+    
+  } catch (e: any) {
+    console.error('[fix-240m] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Get extended outcomes with 240m horizon comparison
 app.get('/api/extended-outcomes/comparison', async (req, res) => {
   try {
