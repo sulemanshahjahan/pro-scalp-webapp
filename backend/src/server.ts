@@ -3996,11 +3996,11 @@ app.get('/api/analysis/whitelist-performance', async (req, res) => {
         COUNT(*) as total_trades,
         SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) as wins,
         SUM(CASE WHEN eo.status = 'LOSS_STOP' THEN 1 ELSE 0 END) as losses,
-        ROUND(AVG(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN eo.ext24_realized_r END), 2) as avg_win_r,
-        ROUND(AVG(CASE WHEN eo.status = 'LOSS_STOP' THEN eo.ext24_realized_r END), 2) as avg_loss_r,
-        ROUND(SUM(eo.ext24_realized_r), 2) as total_r,
+        ROUND(AVG(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN eo.ext24_realized_r END)::numeric, 2) as avg_win_r,
+        ROUND(AVG(CASE WHEN eo.status = 'LOSS_STOP' THEN eo.ext24_realized_r END)::numeric, 2) as avg_loss_r,
+        ROUND(SUM(eo.ext24_realized_r)::numeric, 2) as total_r,
         ROUND((100.0 * SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
-          NULLIF(SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate
+          NULLIF(SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0))::numeric, 1) as win_rate
       FROM extended_outcomes eo
       WHERE eo.mode = 'EXECUTED'
         AND eo.completed_at IS NOT NULL
@@ -4015,9 +4015,9 @@ app.get('/api/analysis/whitelist-performance', async (req, res) => {
         COUNT(*) as total_trades,
         SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) as wins,
         SUM(CASE WHEN status = 'LOSS_STOP' THEN 1 ELSE 0 END) as losses,
-        ROUND(SUM(ext24_realized_r), 2) as total_r,
+        ROUND(SUM(ext24_realized_r)::numeric, 2) as total_r,
         ROUND((100.0 * SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
-          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate
+          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0))::numeric, 1) as win_rate
       FROM extended_outcomes
       WHERE mode = 'EXECUTED'
         AND completed_at IS NOT NULL
@@ -4029,8 +4029,8 @@ app.get('/api/analysis/whitelist-performance', async (req, res) => {
       SELECT 
         COUNT(*) as total_trades,
         ROUND((100.0 * SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
-          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate,
-        ROUND(SUM(ext24_realized_r), 2) as total_r
+          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0))::numeric, 1) as win_rate,
+        ROUND(SUM(ext24_realized_r)::numeric, 2) as total_r
       FROM extended_outcomes
       WHERE mode = 'EXECUTED'
         AND completed_at IS NOT NULL
