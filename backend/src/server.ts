@@ -4066,6 +4066,170 @@ app.get('/api/analysis/whitelist-performance', async (req, res) => {
   }
 });
 
+// Recalculate outcomes with NEW wider stops
+// Shows what would have happened with 1.5x wider stops on ACTUAL price data
+app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
+  try {
+    const d = getDb();
+    const stopMultiplier = Number(req.query.multiplier) || 1.5; // Default 1.5x wider
+    const limit = Number(req.query.limit) || 50; // Last 50 trades
+    
+    // Get recent completed trades with full price data
+    const trades = await d.prepare(`
+      SELECT 
+        eo.signal_id,
+        eo.symbol,
+        eo.category,
+        eo.direction,
+        eo.entry_price,
+        eo.stop_price,
+        eo.tp1_price,
+        eo.tp2_price,
+        eo.status,
+        eo.first_tp1_at,
+        eo.stop_at,
+        eo.signal_time,
+        eo.max_favorable_excursion_pct,
+        eo.max_adverse_excursion_pct,
+        eo.ext24_realized_r,
+        eo.time_to_stop_seconds,
+        eo.time_to_tp1_seconds,
+        CASE 
+          WHEN eo.direction = 'LONG' AND eo.entry_price > 0 
+          THEN ((eo.entry_price - eo.stop_price) / eo.entry_price * 100)
+          WHEN eo.direction = 'SHORT' AND eo.entry_price > 0
+          THEN ((eo.stop_price - eo.entry_price) / eo.entry_price * 100)
+          ELSE NULL
+        END as current_stop_pct,
+        s.created_at
+      FROM extended_outcomes eo
+      JOIN signals s ON s.id = eo.signal_id
+      WHERE eo.mode = 'EXECUTED'
+        AND eo.completed_at IS NOT NULL
+        AND eo.stop_price IS NOT NULL
+        AND eo.stop_price > 0
+      ORDER BY eo.signal_time DESC
+      LIMIT @limit
+    `).all({ limit }) as any[];
+    
+    // Analyze each trade with wider stops
+    const results = trades.map(trade => {
+      const currentStop = Number(trade.current_stop_pct) || 0;
+      const widerStop = currentStop * stopMultiplier;
+      const mae = Math.abs(Number(trade.max_adverse_excursion_pct) || 0) * 100;
+      const mfe = Math.abs(Number(trade.max_favorable_excursion_pct) || 0) * 100;
+      
+      // Current outcome
+      const currentStatus = trade.status;
+      const currentR = Number(trade.ext24_realized_r) || 0;
+      
+      // Simulate wider stop outcome
+      let newStatus = currentStatus;
+      let newR = currentR;
+      let wouldSurvive = false;
+      let wouldHitTp1 = false;
+      
+      if (currentStatus === 'LOSS_STOP') {
+        // Check if wider stop would have prevented the loss
+        wouldSurvive = widerStop > mae;
+        
+        if (wouldSurvive) {
+          // Check if price eventually hit TP1
+          if (trade.time_to_tp1_seconds && trade.first_tp1_at) {
+            wouldHitTp1 = true;
+            newStatus = 'WIN_TP1';
+            // Estimate R (entry to TP1 distance / risk)
+            const entryToTp1 = Math.abs(Number(trade.tp1_price) - Number(trade.entry_price)) / Number(trade.entry_price) * 100;
+            newR = entryToTp1 / widerStop; // Approximate R
+          } else {
+            // Survived but no TP1 hit - breakeven or small loss
+            newStatus = 'SURVIVED_NO_TP1';
+            newR = 0;
+          }
+        }
+      }
+      
+      return {
+        signalId: trade.signal_id,
+        symbol: trade.symbol,
+        category: trade.category,
+        direction: trade.direction,
+        signalTime: new Date(Number(trade.signal_time)).toISOString(),
+        currentStatus,
+        currentR: currentR.toFixed(2),
+        newStatus,
+        newR: newR.toFixed(2),
+        improvement: (newR - currentR).toFixed(2),
+        currentStop: currentStop.toFixed(2) + '%',
+        widerStop: widerStop.toFixed(2) + '%',
+        mae: mae.toFixed(2) + '%',
+        mfe: mfe.toFixed(2) + '%',
+        wouldSurvive,
+        wouldHitTp1,
+        isWhitelisted: ['SUIUSDT', 'ADAUSDT', 'LINKUSDT', 'SOLUSDT', 'XRPUSDT'].includes(trade.symbol)
+      };
+    });
+    
+    // Calculate summary
+    const totalTrades = results.length;
+    const losses = results.filter(r => r.currentStatus === 'LOSS_STOP');
+    const savedByWiderStop = losses.filter(r => r.wouldSurvive).length;
+    const savedAndHitTp1 = losses.filter(r => r.wouldSurvive && r.wouldHitTp1).length;
+    
+    const currentTotalR = results.reduce((sum, r) => sum + parseFloat(r.currentR), 0);
+    const newTotalR = results.reduce((sum, r) => sum + parseFloat(r.newR), 0);
+    
+    // Filter for last 3 whitelisted signals
+    const whitelistedSignals = results.filter(r => r.isWhitelisted);
+    const last3Whitelisted = whitelistedSignals.slice(0, 3);
+    
+    res.json({
+      ok: true,
+      stopMultiplier,
+      summary: {
+        totalTrades,
+        losses: losses.length,
+        savedByWiderStop,
+        savedAndHitTp1,
+        currentTotalR: currentTotalR.toFixed(2) + 'R',
+        newTotalR: newTotalR.toFixed(2) + 'R',
+        improvement: (newTotalR - currentTotalR).toFixed(2) + 'R'
+      },
+      last3Whitelisted: last3Whitelisted.map(s => ({
+        symbol: s.symbol,
+        time: s.signalTime,
+        currentOutcome: s.currentStatus,
+        currentR: s.currentR,
+        newOutcome: s.newStatus,
+        newR: s.newR,
+        saved: s.wouldSurvive,
+        wouldHitTp1: s.wouldHitTp1,
+        stopOld: s.currentStop,
+        stopNew: s.widerStop,
+        mae: s.mae
+      })),
+      changedTrades: results
+        .filter(r => r.currentStatus === 'LOSS_STOP' && r.wouldSurvive)
+        .map(r => ({
+          symbol: r.symbol,
+          category: r.category,
+          time: r.signalTime,
+          currentStatus: r.currentStatus,
+          newStatus: r.newStatus,
+          improvement: r.improvement,
+          oldStop: r.currentStop,
+          newStop: r.widerStop,
+          mae: r.mae,
+          wouldHitTp1: r.wouldHitTp1
+        }))
+    });
+    
+  } catch (e: any) {
+    console.error('[recalculate-wider-stops] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Backtest: Wider Stops Analysis
 // Shows how 1.5x wider stops would have performed on historical data
 app.get('/api/analysis/wider-stops-backtest', async (req, res) => {
