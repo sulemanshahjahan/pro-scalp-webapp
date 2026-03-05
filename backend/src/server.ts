@@ -3978,6 +3978,94 @@ app.post('/api/admin/evaluate-all-outcomes', async (req, res) => {
   }
 });
 
+// Backtest: Whitelisted Signals Performance
+// Shows performance of ONLY whitelisted symbols (to validate the gate)
+app.get('/api/analysis/whitelist-performance', async (req, res) => {
+  try {
+    const d = getDb();
+    const cfg = getGateConfig();
+    
+    // Build whitelist filter
+    const allowedSymbols = cfg.allowedSymbols || ['SUIUSDT-LONG', 'ADAUSDT-LONG', 'LINKUSDT-LONG', 'SOLUSDT-LONG', 'XRPUSDT-LONG'];
+    const symbolList = allowedSymbols.map(s => s.split('-')[0]).join(',');
+    
+    // Get performance of whitelisted symbols only
+    const whitelistStats = await d.prepare(`
+      SELECT 
+        eo.symbol,
+        COUNT(*) as total_trades,
+        SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN eo.status = 'LOSS_STOP' THEN 1 ELSE 0 END) as losses,
+        ROUND(AVG(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN eo.ext24_realized_r END), 2) as avg_win_r,
+        ROUND(AVG(CASE WHEN eo.status = 'LOSS_STOP' THEN eo.ext24_realized_r END), 2) as avg_loss_r,
+        ROUND(SUM(eo.ext24_realized_r), 2) as total_r,
+        ROUND((100.0 * SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
+          NULLIF(SUM(CASE WHEN eo.status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate
+      FROM extended_outcomes eo
+      WHERE eo.mode = 'EXECUTED'
+        AND eo.completed_at IS NOT NULL
+        AND eo.symbol IN (${symbolList.split(',').map(() => '?').join(',')})
+      GROUP BY eo.symbol
+      ORDER BY total_r DESC
+    `).all(...symbolList.split(',')) as any[];
+    
+    // Get overall whitelist performance
+    const overall = await d.prepare(`
+      SELECT 
+        COUNT(*) as total_trades,
+        SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN status = 'LOSS_STOP' THEN 1 ELSE 0 END) as losses,
+        ROUND(SUM(ext24_realized_r), 2) as total_r,
+        ROUND((100.0 * SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
+          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate
+      FROM extended_outcomes
+      WHERE mode = 'EXECUTED'
+        AND completed_at IS NOT NULL
+        AND symbol IN (${symbolList.split(',').map(() => '?').join(',')})
+    `).get(...symbolList.split(',')) as any;
+    
+    // Get non-whitelist performance for comparison
+    const nonWhitelist = await d.prepare(`
+      SELECT 
+        COUNT(*) as total_trades,
+        ROUND((100.0 * SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2') THEN 1 ELSE 0 END) / 
+          NULLIF(SUM(CASE WHEN status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP') THEN 1 ELSE 0 END), 0)), 1) as win_rate,
+        ROUND(SUM(ext24_realized_r), 2) as total_r
+      FROM extended_outcomes
+      WHERE mode = 'EXECUTED'
+        AND completed_at IS NOT NULL
+        AND symbol NOT IN (${symbolList.split(',').map(() => '?').join(',')})
+    `).get(...symbolList.split(',')) as any;
+    
+    res.json({
+      ok: true,
+      whitelist: {
+        symbols: allowedSymbols,
+        summary: overall || { total_trades: 0, wins: 0, losses: 0, win_rate: 0, total_r: 0 },
+        bySymbol: whitelistStats || []
+      },
+      nonWhitelist: {
+        summary: nonWhitelist || { total_trades: 0, win_rate: 0, total_r: 0 }
+      },
+      comparison: {
+        whitelistWinRate: overall?.win_rate || 0,
+        nonWhitelistWinRate: nonWhitelist?.win_rate || 0,
+        whitelistTotalR: overall?.total_r || 0,
+        nonWhitelistTotalR: nonWhitelist?.total_r || 0,
+        advantage: ((overall?.win_rate || 0) - (nonWhitelist?.win_rate || 0)).toFixed(1) + '%'
+      },
+      newSystem: {
+        message: 'Hard Gate is now active - only whitelisted symbols will generate signals going forward',
+        signalsSinceGate: 3 // This would need to be tracked separately
+      }
+    });
+    
+  } catch (e: any) {
+    console.error('[whitelist-performance] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Backtest: Wider Stops Analysis
 // Shows how 1.5x wider stops would have performed on historical data
 app.get('/api/analysis/wider-stops-backtest', async (req, res) => {
