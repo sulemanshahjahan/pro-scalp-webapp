@@ -4,6 +4,7 @@ import { apiUrl as API } from '../config/apiBase';
 // Mode toggle and flip stats
 import { ModeToggle, useOutcomeModeFromURL } from '../components/ModeToggle';
 import { FlipStatsPanel } from '../components/FlipStatsPanel';
+import { TradingWindowStatus } from '../components/TradingWindowStatus';
 
 // New analysis components
 import {
@@ -578,6 +579,7 @@ export default function ExtendedOutcomePage() {
             </div>
             <div className="flex flex-wrap gap-3 items-center">
               <ModeToggle value={mode} onChange={setMode} />
+              <TradingWindowStatus compact />
               <div className="flex items-center gap-2 text-xs bg-white/5 border border-white/10 rounded-xl px-2 py-1">
                 <span className="text-white/60">Date</span>
                 <select className="bg-transparent text-white/90" value={datePreset} onChange={(e) => setDatePreset(e.target.value as any)}>
@@ -704,6 +706,9 @@ export default function ExtendedOutcomePage() {
 
       {/* Flip Stats - Execution vs Signal Impact */}
       <FlipStatsPanel fromMs={range.start} toMs={range.end} />
+
+      {/* Trading Window Status - Shows if now is good time for signals */}
+      <TradingWindowStatus />
 
       {/* Outcome Breakdown (Step 4) - Full distribution with verification */}
       {verifiableStats?.breakdown && (
