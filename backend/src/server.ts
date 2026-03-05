@@ -5824,7 +5824,7 @@ app.get('/api/extended-outcomes/live-pending', async (req, res) => {
     const d = getDb();
     const { klinesRange } = await import('./binance.js');
     
-    // Get all pending/active extended outcomes
+    // Get all pending/active extended outcomes (exclude DEBUG symbols)
     const pending = await d.prepare(`
       SELECT 
         eo.signal_id,
@@ -5844,8 +5844,8 @@ app.get('/api/extended-outcomes/live-pending', async (req, res) => {
         der.target_confirm_price
       FROM extended_outcomes eo
       LEFT JOIN delayed_entry_records der ON der.signal_id = eo.signal_id
-      WHERE eo.status IN ('PENDING', 'ACHIEVED_TP1')
-         OR (eo.completed_at IS NULL)
+      WHERE (eo.status IN ('PENDING', 'ACHIEVED_TP1') OR (eo.completed_at IS NULL))
+        AND eo.symbol NOT LIKE 'DEBUG%'
       ORDER BY eo.signal_time DESC
       LIMIT 100
     `).all() as any[];
