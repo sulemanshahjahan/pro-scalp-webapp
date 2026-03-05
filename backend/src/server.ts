@@ -4613,6 +4613,32 @@ app.get('/api/gate/backtest/recommended', (_req, res) => {
   }
 });
 
+// Get current gate configuration
+app.get('/api/gate/config', (_req, res) => {
+  try {
+    const config = getGateConfig();
+    res.json({ 
+      ok: true, 
+      config: {
+        enabled: config.enabled,
+        useSymbolWhitelist: config.useSymbolWhitelist,
+        allowedSymbols: config.allowedSymbols,
+        useTimeFilters: config.useTimeFilters,
+        blockedHours: config.blockedHours,
+        blockedDays: config.blockedDays,
+        useMfeDeathZoneFilter: config.useMfeDeathZoneFilter,
+        mfeDeathZoneMin: config.mfeDeathZoneMin,
+        mfeDeathZoneMax: config.mfeDeathZoneMax,
+        allowedCategories: config.allowedCategories,
+        allowEarlyReady: config.allowEarlyReady,
+      }
+    });
+  } catch (e) {
+    console.error('[api/gate/config] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // ============================================================================
 // DELETE EARLY_READY_SHORT SIGNALS (ADMIN)
 // ============================================================================

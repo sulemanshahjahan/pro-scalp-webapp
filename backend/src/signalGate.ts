@@ -4,12 +4,14 @@
  * This module provides the HARD GATE that blocks signals BEFORE they are recorded.
  * This is the execution layer - not just analysis.
  * 
- * Rules (based on user requirements):
- * 1. Block RED tier symbols (or require 0.5% MFE)
- * 2. Require MFE30m >= 0.3% (minimum momentum proof)
- * 3. Require MQS >= 0.2 (momentum quality)
- * 4. Combined score >= 2 (confluence of conditions)
- * 5. Track blocked signals for analysis
+ * DATA-DRIVEN RULES (from historical analysis):
+ * 1. Symbol-Direction Whitelist (only high-win-rate symbols)
+ * 2. Block Bad Hours (21, 19, 18, 0, 17, 20, 11, 14, 15, 16 UTC)
+ * 3. Block Bad Days (Monday, Tuesday, Saturday)
+ * 4. MFE Death Zone Filter (block 0.2-0.5%, allow <0.2% or >=0.5%)
+ * 5. Category Filter (only READY_TO_BUY, BEST_ENTRY)
+ * 
+ * Results: Filters out signals with <40% historical win rate
  */
 
 import type { Signal } from './types.js';
@@ -23,56 +25,127 @@ export interface GateConfig {
   // Master switch
   enabled: boolean;
   
-  // Hard rules
+  // Symbol-Direction Whitelist (data-driven: >50% win rate)
+  useSymbolWhitelist: boolean;
+  allowedSymbols: string[];  // Format: "SYMBOL-DIRECTION"
+  
+  // Time-based filters (data-driven)
+  useTimeFilters: boolean;
+  blockedHours: number[];  // UTC hours to block
+  blockedDays: string[];  // Days to block
+  
+  // MFE Death Zone Filter (data-driven: 0.2-0.5% is death zone)
+  useMfeDeathZoneFilter: boolean;
+  mfeDeathZoneMin: number;  // 0.002 = 0.2%
+  mfeDeathZoneMax: number;  // 0.005 = 0.5%
+  
+  // Category Filter
+  allowedCategories: string[];
+  
+  // Legacy filters (kept for compatibility)
   blockRedTier: boolean;
   minMfe30mPct: number;
   redTierMinMfe30mPct: number;
   minMqs: number;
-  
-  // Combined score (confluence)
   useCombinedScore: boolean;
   minCombinedScore: number;
-  
-  // 15m confirmation (early movement proof)
   require15mConfirmation: boolean;
   minMfe15mPct: number;
-  
-  // Signal type filtering
-  allowEarlyReady: boolean;  // If false, blocks EARLY_READY and EARLY_READY_SHORT
-  
-  // Target: reduce signals by 40-60%
+  allowEarlyReady: boolean;
   targetReductionPct: number;
 }
 
-// DEFAULT: Aggressive filtering to cut bad trades
+// DATA-DRIVEN HARD GATE CONFIG
+// Based on analysis of 200+ EXECUTED signals
 export const DEFAULT_GATE_CONFIG: GateConfig = {
   enabled: true,
+  
+  // Symbol-Direction Whitelist (>50% win rate from data)
+  useSymbolWhitelist: true,
+  allowedSymbols: [
+    'SUIUSDT-LONG',   // 66.7% win rate
+    'ADAUSDT-LONG',   // 66.7% win rate
+    'LINKUSDT-LONG',  // 66.7% win rate
+    'SOLUSDT-LONG',   // 62.5% win rate
+    'XRPUSDT-LONG',   // 60% win rate
+  ],
+  
+  // Time filters (data-driven)
+  useTimeFilters: true,
+  blockedHours: [0, 11, 14, 15, 16, 17, 18, 19, 20, 21],  // <40% win rate
+  blockedDays: ['Monday', 'Tuesday', 'Saturday'],  // <30% win rate
+  
+  // MFE Death Zone (data-driven: avoid 0.2-0.5% range)
+  useMfeDeathZoneFilter: true,
+  mfeDeathZoneMin: 0.002,  // 0.2%
+  mfeDeathZoneMax: 0.005,  // 0.5%
+  
+  // Category filter
+  allowedCategories: ['READY_TO_BUY', 'BEST_ENTRY', 'BEST_SHORT_ENTRY'],
+  
+  // Legacy filters
   blockRedTier: true,
-  minMfe30mPct: 0.30,      // 0.3% MFE in first 30m
-  redTierMinMfe30mPct: 0.50, // 0.5% for RED symbols (if not blocked)
-  minMqs: 0.20,             // MQS >= 0.2
-  useCombinedScore: true,   // Require multiple conditions
-  minCombinedScore: 2,      // Need 2+ points to pass
-  require15mConfirmation: false, // Optional: wait for 15m proof
-  minMfe15mPct: 0.20,       // 0.2% in first 15m
-  allowEarlyReady: false,   // Block EARLY_READY - only allow READY/BEST_ENTRY
-  targetReductionPct: 50,   // Aim to cut 50% of signals
+  minMfe30mPct: 0.30,
+  redTierMinMfe30mPct: 0.50,
+  minMqs: 0.20,
+  useCombinedScore: false,  // Disabled in favor of hard rules
+  minCombinedScore: 2,
+  require15mConfirmation: false,
+  minMfe15mPct: 0.20,
+  allowEarlyReady: false,
+  targetReductionPct: 70,   // More aggressive with new rules
 };
 
 // Get config from environment with defaults
 export function getGateConfig(): GateConfig {
+  // Parse symbol whitelist from env or use default
+  const defaultSymbols = [
+    'SUIUSDT-LONG', 'ADAUSDT-LONG', 'LINKUSDT-LONG', 
+    'SOLUSDT-LONG', 'XRPUSDT-LONG'
+  ];
+  const allowedSymbols = process.env.SIGNAL_GATE_ALLOWED_SYMBOLS 
+    ? process.env.SIGNAL_GATE_ALLOWED_SYMBOLS.split(',')
+    : defaultSymbols;
+    
+  // Parse blocked hours from env
+  const defaultBlockedHours = [0, 11, 14, 15, 16, 17, 18, 19, 20, 21];
+  const blockedHours = process.env.SIGNAL_GATE_BLOCKED_HOURS
+    ? process.env.SIGNAL_GATE_BLOCKED_HOURS.split(',').map(Number)
+    : defaultBlockedHours;
+    
+  // Parse blocked days from env
+  const defaultBlockedDays = ['Monday', 'Tuesday', 'Saturday'];
+  const blockedDays = process.env.SIGNAL_GATE_BLOCKED_DAYS
+    ? process.env.SIGNAL_GATE_BLOCKED_DAYS.split(',')
+    : defaultBlockedDays;
+
   return {
     enabled: (process.env.SIGNAL_GATE_ENABLED || 'true').toLowerCase() === 'true',
+    
+    // New data-driven filters
+    useSymbolWhitelist: (process.env.SIGNAL_GATE_USE_WHITELIST || 'true').toLowerCase() === 'true',
+    allowedSymbols,
+    useTimeFilters: (process.env.SIGNAL_GATE_USE_TIME || 'true').toLowerCase() === 'true',
+    blockedHours,
+    blockedDays,
+    useMfeDeathZoneFilter: (process.env.SIGNAL_GATE_USE_MFE_ZONE || 'true').toLowerCase() === 'true',
+    mfeDeathZoneMin: parseFloat(process.env.SIGNAL_GATE_MFE_ZONE_MIN || '0.002'),
+    mfeDeathZoneMax: parseFloat(process.env.SIGNAL_GATE_MFE_ZONE_MAX || '0.005'),
+    allowedCategories: process.env.SIGNAL_GATE_ALLOWED_CATEGORIES 
+      ? process.env.SIGNAL_GATE_ALLOWED_CATEGORIES.split(',')
+      : ['READY_TO_BUY', 'BEST_ENTRY', 'BEST_SHORT_ENTRY'],
+    
+    // Legacy filters
     blockRedTier: (process.env.SIGNAL_GATE_BLOCK_RED || 'true').toLowerCase() === 'true',
     minMfe30mPct: parseFloat(process.env.SIGNAL_GATE_MIN_MFE30M || '0.30'),
     redTierMinMfe30mPct: parseFloat(process.env.SIGNAL_GATE_RED_MIN_MFE30M || '0.50'),
     minMqs: parseFloat(process.env.SIGNAL_GATE_MIN_MQS || '0.20'),
-    useCombinedScore: (process.env.SIGNAL_GATE_USE_SCORE || 'true').toLowerCase() === 'true',
+    useCombinedScore: (process.env.SIGNAL_GATE_USE_SCORE || 'false').toLowerCase() === 'true',
     minCombinedScore: parseInt(process.env.SIGNAL_GATE_MIN_SCORE || '2', 10),
     require15mConfirmation: (process.env.SIGNAL_GATE_15M || 'false').toLowerCase() === 'true',
     minMfe15mPct: parseFloat(process.env.SIGNAL_GATE_MIN_MFE15M || '0.20'),
     allowEarlyReady: (process.env.SIGNAL_GATE_ALLOW_EARLY_READY || 'false').toLowerCase() === 'true',
-    targetReductionPct: parseInt(process.env.SIGNAL_GATE_TARGET_REDUCTION || '50', 10),
+    targetReductionPct: parseInt(process.env.SIGNAL_GATE_TARGET_REDUCTION || '70', 10),
   };
 }
 
@@ -261,7 +334,109 @@ export async function checkSignalGate(
     }
   }
   
-  // Hard rule 3: Combined score check (confluence)
+  // ============================================================================
+  // NEW DATA-DRIVEN HARD RULES (Based on 200+ signal analysis)
+  // ============================================================================
+  
+  // Hard rule 3: Symbol-Direction Whitelist
+  if (cfg.useSymbolWhitelist) {
+    const symbolDirection = `${signal.symbol.toUpperCase()}-${direction}`;
+    const symbolOnly = signal.symbol.toUpperCase();
+    
+    // Check if symbol-direction combo is allowed OR if symbol is in any allowed combo
+    const isAllowed = cfg.allowedSymbols.some(allowed => {
+      const [allowedSymbol, allowedDir] = allowed.split('-');
+      return allowedSymbol === symbolOnly && allowedDir === direction;
+    });
+    
+    if (!isAllowed) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['SYMBOL_NOT_WHITELISTED', `${symbolDirection} not in allowed symbols list (historical win rate <50%)`],
+        tier,
+        mqs,
+      };
+    }
+  }
+  
+  // Hard rule 4: Time-based filters
+  if (cfg.useTimeFilters) {
+    const signalTime = signal.time || Date.now();
+    const signalDate = new Date(signalTime);
+    const hourUtc = signalDate.getUTCHours();
+    const dayName = signalDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+    
+    // Block bad hours
+    if (cfg.blockedHours.includes(hourUtc)) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['BAD_HOUR_BLOCKED', `Hour ${hourUtc}:00 UTC has <40% historical win rate`],
+        tier,
+        mqs,
+      };
+    }
+    
+    // Block bad days
+    if (cfg.blockedDays.includes(dayName)) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['BAD_DAY_BLOCKED', `${dayName} has <30% historical win rate`],
+        tier,
+        mqs,
+      };
+    }
+  }
+  
+  // Hard rule 5: Category filter (strict whitelist)
+  if (cfg.allowedCategories && cfg.allowedCategories.length > 0) {
+    const upperCategory = signal.category.toUpperCase();
+    const isAllowedCategory = cfg.allowedCategories.some(
+      cat => cat.toUpperCase() === upperCategory
+    );
+    
+    if (!isAllowedCategory) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['CATEGORY_BLOCKED', `${signal.category} not in allowed categories [${cfg.allowedCategories.join(', ')}]`],
+        tier,
+        mqs,
+      };
+    }
+  }
+  
+  // Hard rule 6: MFE Death Zone Filter (for signals with MFE data)
+  if (cfg.useMfeDeathZoneFilter && hasMfeData) {
+    const inDeathZone = mfe30m >= cfg.mfeDeathZoneMin && mfe30m < cfg.mfeDeathZoneMax;
+    if (inDeathZone) {
+      return {
+        allowed: false,
+        quality: 'REJECTED',
+        score,
+        totalScore: total,
+        reasons: ['MFE_DEATH_ZONE', `MFE30m ${(mfe30m * 100).toFixed(2)}% is in death zone (${(cfg.mfeDeathZoneMin * 100).toFixed(1)}%-${(cfg.mfeDeathZoneMax * 100).toFixed(1)}%). Need >=${(cfg.mfeDeathZoneMax * 100).toFixed(1)}% or <${(cfg.mfeDeathZoneMin * 100).toFixed(1)}%`],
+        tier,
+        mqs,
+      };
+    }
+  }
+  
+  // ============================================================================
+  // LEGACY RULES (Optional, disabled by default)
+  // ============================================================================
+  
+  // Legacy: Combined score check (confluence)
   // Skip MFE/MQS check for new signals without historical data - they'll be evaluated after recording
   const skipMfeCheck = !hasMfeData;
   

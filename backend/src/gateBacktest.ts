@@ -88,17 +88,8 @@ export async function runGateBacktest(
   
   // Ensure all config values are explicitly set (don't fallback to env vars)
   const explicitConfig: BacktestConfig = {
-    enabled: config.enabled ?? true,
-    blockRedTier: config.blockRedTier ?? true,
-    minMfe30mPct: config.minMfe30mPct ?? 0.30,
-    redTierMinMfe30mPct: config.redTierMinMfe30mPct ?? 0.50,
-    minMqs: config.minMqs ?? 0.20,
-    useCombinedScore: config.useCombinedScore ?? true,
-    minCombinedScore: config.minCombinedScore ?? 2,
-    require15mConfirmation: config.require15mConfirmation ?? false,
-    minMfe15mPct: config.minMfe15mPct ?? 0.20,
-    allowEarlyReady: config.allowEarlyReady ?? false,
-    targetReductionPct: config.targetReductionPct ?? 50,
+    ...DEFAULT_GATE_CONFIG,  // Include all defaults
+    ...config,  // Override with provided config
     name: config.name || 'Custom',
   };
   
