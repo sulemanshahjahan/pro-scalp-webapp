@@ -342,6 +342,16 @@ export default function ExtendedOutcomePage() {
     lastUpdated: string;
   }>>(new Map());
 
+  // Wider stop analysis - compute which trades would be saved
+  const widerStopAnalysis = useMemo(() => {
+    const analysis = new Map<number, { saved: boolean; newR: number; wouldHitTp1: boolean }>();
+    outcomes.forEach(o => {
+      const result = calculateWiderStopOutcome(o, stopMultiplier);
+      analysis.set(o.id, result);
+    });
+    return analysis;
+  }, [outcomes, stopMultiplier]);
+
   // Date range
   const range = useMemo(() => {
     const now = new Date();
