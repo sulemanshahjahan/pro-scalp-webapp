@@ -4129,6 +4129,7 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
       let newR = currentR;
       let wouldSurvive = false;
       let wouldHitTp1 = false;
+      let debugInfo: any = null;
       
       if (currentStatus === 'LOSS_STOP') {
         // Check if wider stop would have prevented the loss
@@ -4140,10 +4141,17 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
           const firstTp1At = Number(trade.first_tp1_at) || 0;
           const tp1HitAfterStop = firstTp1At > stopAt && stopAt > 0 && firstTp1At > 0;
           
-          // Debug logging for SOLUSDT
+          // Debug info for SOLUSDT
           if (trade.symbol === 'SOLUSDT') {
-            console.log(`[DEBUG SOLUSDT] stopAt: ${stopAt}, firstTp1At: ${firstTp1At}, tp1HitAfterStop: ${tp1HitAfterStop}`);
-            console.log(`[DEBUG SOLUSDT] stop_time: ${trade.stop_at}, tp1_time: ${trade.first_tp1_at}`);
+            debugInfo = {
+              stopAt,
+              firstTp1At,
+              tp1HitAfterStop,
+              stop_at_raw: trade.stop_at,
+              first_tp1_at_raw: trade.first_tp1_at,
+              time_to_tp1_seconds: trade.time_to_tp1_seconds,
+              time_to_stop_seconds: trade.time_to_stop_seconds
+            };
           }
           
           if (tp1HitAfterStop) {
@@ -4165,7 +4173,7 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
         }
       }
       
-      return {
+      const result: any = {
         signalId: trade.signal_id,
         symbol: trade.symbol,
         category: trade.category,
@@ -4184,6 +4192,13 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
         wouldHitTp1,
         isWhitelisted: ['SUIUSDT', 'ADAUSDT', 'LINKUSDT', 'SOLUSDT', 'XRPUSDT'].includes(trade.symbol)
       };
+      
+      // Add debug info for SOLUSDT
+      if (debugInfo) {
+        result._debug = debugInfo;
+      }
+      
+      return result;
     });
     
     // Calculate summary
