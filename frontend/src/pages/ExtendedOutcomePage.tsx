@@ -1009,10 +1009,14 @@ export default function ExtendedOutcomePage() {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border ${STATUS_COLORS[o.status] || 'bg-white/10 border-white/20'}`}>
                       {STATUS_LABELS[o.status] || o.status}
                     </span>
-                    {showWiderStopWins && widerStopAnalysis.get(o.id)?.saved && (
-                      <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  </td>
+                  <td className="px-3 py-2">
+                    {showWiderStopWins && widerStopAnalysis.get(o.id)?.saved ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         → 1.4×
                       </span>
+                    ) : (
+                      <span className="text-white/30">--</span>
                     )}
                   </td>
                   <td className="px-3 py-2">
