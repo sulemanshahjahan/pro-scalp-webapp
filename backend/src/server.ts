@@ -4116,8 +4116,9 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
     const results = trades.map(trade => {
       const currentStop = Number(trade.current_stop_pct) || 0;
       const widerStop = currentStop * stopMultiplier;
-      const mae = Math.abs(Number(trade.max_adverse_excursion_pct) || 0) * 100;
-      const mfe = Math.abs(Number(trade.max_favorable_excursion_pct) || 0) * 100;
+      // MAE/MFE are already stored as percentages (e.g., 1.32 for 1.32%), not decimals
+      const mae = Math.abs(Number(trade.max_adverse_excursion_pct) || 0);
+      const mfe = Math.abs(Number(trade.max_favorable_excursion_pct) || 0);
       
       // Current outcome
       const currentStatus = trade.status;
