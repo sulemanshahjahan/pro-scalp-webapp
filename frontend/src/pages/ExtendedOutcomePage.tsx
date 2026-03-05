@@ -77,6 +77,45 @@ function fmt(n: number | null | undefined, digits = 2) {
   return v.toFixed(digits);
 }
 
+// Calculate if wider stop would save this trade
+function calculateWiderStopOutcome(
+  outcome: ExtendedOutcome,
+  multiplier: number
+): { wouldSurvive: boolean; newR: number; wouldHitTp1: boolean } {
+  if (outcome.status !== 'LOSS_STOP' || !outcome.stopPrice || !outcome.entryPrice) {
+    return { wouldSurvive: false, newR: 0, wouldHitTp1: false };
+  }
+  
+  // Calculate current stop distance
+  const currentStopPct = ((outcome.entryPrice - outcome.stopPrice) / outcome.entryPrice) * 100;
+  const widerStopPct = currentStopPct * multiplier;
+  const mae = Math.abs(outcome.maxAdverseExcursionPct || 0);
+  
+  // Would wider stop survive?
+  const wouldSurvive = widerStopPct > mae;
+  
+  if (!wouldSurvive) {
+    return { wouldSurvive: false, newR: -1, wouldHitTp1: false };
+  }
+  
+  // Check if TP1 was hit after stop
+  const stopAt = outcome.stopAt || 0;
+  const firstTp1At = outcome.firstTp1At || 0;
+  const tp1HitAfterStop = firstTp1At > stopAt && stopAt > 0 && firstTp1At > 0;
+  
+  if (tp1HitAfterStop && outcome.tp1Price) {
+    // Calculate R with wider stop
+    const newStopPrice = outcome.entryPrice * (1 - widerStopPct / 100);
+    const risk = outcome.entryPrice - newStopPrice;
+    const reward = outcome.tp1Price - outcome.entryPrice;
+    const newR = risk > 0 ? reward / risk : 0;
+    return { wouldSurvive: true, newR, wouldHitTp1: true };
+  }
+  
+  // Survived but no TP1 hit
+  return { wouldSurvive: true, newR: 0, wouldHitTp1: false };
+}
+
 function fmtRate(n: number | null | undefined, digits = 1) {
   const v = num(n);
   if (!Number.isFinite(v)) return '--';
@@ -289,6 +328,8 @@ export default function ExtendedOutcomePage() {
   const [showManagedStats, setShowManagedStats] = useState(true);
   const [showDecisionEngine, setShowDecisionEngine] = useState(false);
   const [showDebugInfo, setShowDebugInfo] = useState(false);
+  const [showWiderStopWins, setShowWiderStopWins] = useState(true);
+  const [stopMultiplier, setStopMultiplier] = useState(1.4);
   
   // Live pending data for real-time updates
   const [livePendingData, setLivePendingData] = useState<Map<number, {
@@ -904,6 +945,17 @@ export default function ExtendedOutcomePage() {
                 <th className="text-left px-3 py-2">Dir</th>
                 <th className="text-left px-3 py-2">Entry / Stop / TP1 / TP2</th>
                 <th className="text-left px-3 py-2">Status (24h)</th>
+                <th className="text-left px-3 py-2 text-emerald-400">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={showWiderStopWins} 
+                      onChange={(e) => setShowWiderStopWins(e.target.checked)}
+                      className="w-3 h-3"
+                    />
+                    Wider Stop
+                  </label>
+                </th>
                 <th className="text-left px-3 py-2 text-red-400">Quality</th>
                 {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Managed R</th>}
                 {showManagedStats && <th className="text-left px-3 py-2 text-cyan-400">Runner Exit</th>}
@@ -947,6 +999,11 @@ export default function ExtendedOutcomePage() {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-lg border ${STATUS_COLORS[o.status] || 'bg-white/10 border-white/20'}`}>
                       {STATUS_LABELS[o.status] || o.status}
                     </span>
+                    {showWiderStopWins && widerStopAnalysis.get(o.id)?.saved && (
+                      <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        → 1.4×
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     {o.ext24ManagedR != null && o.ext24ManagedR > 0 ? (
