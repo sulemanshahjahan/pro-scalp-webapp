@@ -353,7 +353,7 @@ export default function ExtendedOutcomePage() {
 
   // Wider stop analysis - compute which trades would be saved
   const widerStopAnalysis = useMemo(() => {
-    const analysis = new Map<number, { saved: boolean; newR: number; wouldHitTp1: boolean }>();
+    const analysis = new Map<number, { wouldSurvive: boolean; newR: number; wouldHitTp1: boolean }>();
     outcomes.forEach(o => {
       const result = calculateWiderStopOutcome(o, stopMultiplier);
       analysis.set(o.id, result);
@@ -1020,7 +1020,7 @@ export default function ExtendedOutcomePage() {
                     </span>
                   </td>
                   <td className="px-3 py-2">
-                    {showWiderStopWins && widerStopAnalysis.get(o.id)?.saved ? (
+                    {showWiderStopWins && widerStopAnalysis.get(o.id)?.wouldSurvive ? (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30" title="Would survive with 1.4x stop">
                         → 1.4×
                       </span>
