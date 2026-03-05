@@ -29,8 +29,8 @@ const BEST_BODY_ATR_MULT = parseFloat(process.env.BEST_BODY_ATR_MULT || '0.80');
 const READY_BODY_MIN_PCT = parseFloat(process.env.READY_BODY_MIN_PCT || '0.008');    // Static floor: 0.8%
 const BEST_BODY_MIN_PCT = parseFloat(process.env.BEST_BODY_MIN_PCT || '0.015');      // Static floor: 1.5%
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
-const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.2');
-const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '0');
+const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '1.5');  // Minimum 1.5% stop to avoid whipsaws
+const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '1.5');  // Minimum 1.5% for READY signals
 const READY_RECLAIM_REQUIRED = (process.env.READY_RECLAIM_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_CONFIRM15_REQUIRED = (process.env.READY_CONFIRM15_REQUIRED ?? 'true').toLowerCase() !== 'false';
 const READY_TREND_REQUIRED = (process.env.READY_TREND_REQUIRED ?? 'false').toLowerCase() !== 'false';
@@ -94,7 +94,7 @@ const SHORT_BODY_MIN_PCT = parseFloat(process.env.SHORT_BODY_MIN_PCT || '0.008')
 const SHORT_CLOSE_POS_MAX = parseFloat(process.env.SHORT_CLOSE_POS_MAX || '0.40'); // Close in bottom 40%
 const SHORT_LOWER_WICK_MAX = parseFloat(process.env.SHORT_LOWER_WICK_MAX || '0.40');
 const SHORT_MIN_RR = parseFloat(process.env.SHORT_MIN_RR || '1.35');
-const SHORT_MIN_RISK_PCT = parseFloat(process.env.SHORT_MIN_RISK_PCT || '0.25');
+const SHORT_MIN_RISK_PCT = parseFloat(process.env.SHORT_MIN_RISK_PCT || '1.5');  // Minimum 1.5% for SHORT signals
 const SHORT_SWEEP_REQUIRED = (process.env.SHORT_SWEEP_REQUIRED ?? 'false').toLowerCase() !== 'false';
 const SHORT_BTC_REQUIRED = (process.env.SHORT_BTC_REQUIRED ?? 'false').toLowerCase() !== 'false';
 const BEST_SHORT_BTC_REQUIRED = (process.env.BEST_SHORT_BTC_REQUIRED ?? 'true').toLowerCase() !== 'false';
