@@ -86,12 +86,20 @@ function calculateWiderStopOutcome(
     return { wouldSurvive: false, newR: 0, wouldHitTp1: false };
   }
   
-  // Calculate current stop distance
-  const currentStopPct = ((outcome.entryPrice - outcome.stopPrice) / outcome.entryPrice) * 100;
+  // Handle both LONG and SHORT directions
+  const isLong = outcome.direction === 'LONG';
+  const entry = outcome.entryPrice;
+  const stop = outcome.stopPrice;
+  
+  // Calculate current stop distance as percentage
+  const currentStopDistance = Math.abs(entry - stop);
+  const currentStopPct = (currentStopDistance / entry) * 100;
   const widerStopPct = currentStopPct * multiplier;
+  
+  // MAE is stored as percentage (e.g., 1.32 = 1.32%)
   const mae = Math.abs(outcome.maxAdverseExcursionPct || 0);
   
-  // Would wider stop survive?
+  // Would wider stop survive? (wider stop distance > actual adverse move)
   const wouldSurvive = widerStopPct > mae;
   
   if (!wouldSurvive) {
@@ -104,11 +112,12 @@ function calculateWiderStopOutcome(
   const tp1HitAfterStop = firstTp1At > stopAt && stopAt > 0 && firstTp1At > 0;
   
   if (tp1HitAfterStop && outcome.tp1Price) {
-    // Calculate R with wider stop
-    const newStopPrice = outcome.entryPrice * (1 - widerStopPct / 100);
-    const risk = outcome.entryPrice - newStopPrice;
-    const reward = outcome.tp1Price - outcome.entryPrice;
-    const newR = risk > 0 ? reward / risk : 0;
+    // Calculate new R with wider stop
+    const tp1 = outcome.tp1Price;
+    const newStopDistance = (entry * widerStopPct / 100);
+    const newRisk = newStopDistance;
+    const reward = Math.abs(tp1 - entry);
+    const newR = newRisk > 0 ? reward / newRisk : 0;
     return { wouldSurvive: true, newR, wouldHitTp1: true };
   }
   
@@ -1015,6 +1024,8 @@ export default function ExtendedOutcomePage() {
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         → 1.4×
                       </span>
+                    ) : showWiderStopWins && o.status === 'LOSS_STOP' ? (
+                      <span className="text-[10px] text-white/30" title={`MAE: ${o.maxAdverseExcursionPct?.toFixed(2)}%, Stop: ${o.stopPrice}`}>no</span>
                     ) : (
                       <span className="text-white/30">--</span>
                     )}
