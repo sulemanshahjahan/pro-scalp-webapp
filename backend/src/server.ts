@@ -4135,15 +4135,28 @@ app.get('/api/analysis/recalculate-wider-stops', async (req, res) => {
         wouldSurvive = widerStop > mae;
         
         if (wouldSurvive) {
-          // Check if price eventually hit TP1
-          if (trade.time_to_tp1_seconds && trade.first_tp1_at) {
+          // Check if TP1 was hit AFTER the stop (within 24h window)
+          // first_tp1_at > stop_at means TP1 was hit after the stop was hit
+          const stopAt = Number(trade.stop_at) || 0;
+          const firstTp1At = Number(trade.first_tp1_at) || 0;
+          const tp1HitAfterStop = firstTp1At > stopAt && stopAt > 0;
+          
+          if (tp1HitAfterStop) {
+            wouldHitTp1 = true;
+            newStatus = 'WIN_TP1_AFTER_STOP';
+            // Calculate R: (TP1 - Entry) / (Entry - NewStop)
+            const entry = Number(trade.entry_price);
+            const tp1 = Number(trade.tp1_price);
+            const newStopPrice = entry * (1 - widerStop / 100);
+            newR = (tp1 - entry) / (entry - newStopPrice);
+          } else if (trade.time_to_tp1_seconds && trade.first_tp1_at) {
+            // TP1 was hit before stop (original path)
             wouldHitTp1 = true;
             newStatus = 'WIN_TP1';
-            // Estimate R (entry to TP1 distance / risk)
             const entryToTp1 = Math.abs(Number(trade.tp1_price) - Number(trade.entry_price)) / Number(trade.entry_price) * 100;
-            newR = entryToTp1 / widerStop; // Approximate R
+            newR = entryToTp1 / widerStop;
           } else {
-            // Survived but no TP1 hit - breakeven or small loss
+            // Survived but no TP1 hit - breakeven
             newStatus = 'SURVIVED_NO_TP1';
             newR = 0;
           }
