@@ -361,6 +361,69 @@ export default function ExtendedOutcomePage() {
     return analysis;
   }, [outcomes, stopMultiplier]);
 
+  // Wider stop simulation stats - calculate what win rate/R would be with 1.4x stops
+  const widerStopSimulation = useMemo(() => {
+    if (!outcomes.length) return null;
+    
+    // Count completed trades (exclude PENDING, NO_TRADE)
+    const completedTrades = outcomes.filter(o => 
+      o.status !== 'PENDING' && o.status !== 'NO_TRADE'
+    );
+    
+    if (!completedTrades.length) return null;
+    
+    let simulatedWins = 0;
+    let simulatedLosses = 0;
+    let totalSimulatedR = 0;
+    let savedTrades = 0;
+    
+    completedTrades.forEach(o => {
+      const analysis = widerStopAnalysis.get(o.id);
+      if (!analysis) return;
+      
+      if (analysis.wouldSurvive) {
+        // This trade would survive with wider stop
+        savedTrades++;
+        if (analysis.wouldHitTp1) {
+          // Survived and hit TP1 - count as win
+          simulatedWins++;
+          totalSimulatedR += analysis.newR;
+        } else {
+          // Survived but no TP1 hit - neutral (0R)
+          // Could still be running or flat
+          totalSimulatedR += 0;
+        }
+      } else {
+        // Still stopped out - count as loss
+        if (o.status === 'WIN_TP1' || o.status === 'WIN_TP2') {
+          simulatedWins++;
+          totalSimulatedR += o.ext24ManagedR ?? 0;
+        } else if (o.status === 'LOSS_STOP') {
+          simulatedLosses++;
+          totalSimulatedR += -1; // Assume -1R for stopped trades
+        } else {
+          // TIMEOUT or other - use actual R
+          const r = o.ext24ManagedR ?? 0;
+          if (r > 0) simulatedWins++;
+          else if (r < 0) simulatedLosses++;
+          totalSimulatedR += r;
+        }
+      }
+    });
+    
+    const totalCompleted = simulatedWins + simulatedLosses;
+    const winRate = totalCompleted > 0 ? (simulatedWins / totalCompleted) * 100 : 0;
+    
+    return {
+      savedTrades,
+      winRate,
+      totalR: totalSimulatedR,
+      totalTrades: completedTrades.length,
+      simulatedWins,
+      simulatedLosses
+    };
+  }, [outcomes, widerStopAnalysis]);
+
   // Date range
   const range = useMemo(() => {
     const now = new Date();
@@ -763,6 +826,59 @@ export default function ExtendedOutcomePage() {
           loading={statsLoading}
         />
       </section>
+
+      {/* Wider Stop Simulation */}
+      {widerStopSimulation && (
+        <section className="rounded-2xl border border-amber-500/20 bg-amber-950/10 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs text-amber-400/80 uppercase tracking-widest">
+              Wider Stop Simulation (1.4× multiplier)
+            </div>
+            <span className="text-[10px] text-amber-300/60">
+              {widerStopSimulation.savedTrades} trades saved
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <div className="text-xs text-white/50">Simulated Win Rate</div>
+              <div className={`text-lg font-semibold ${widerStopSimulation.winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {widerStopSimulation.winRate.toFixed(1)}%
+              </div>
+              <div className="text-[10px] text-white/40">
+                {widerStopSimulation.simulatedWins}W / {widerStopSimulation.simulatedLosses}L
+              </div>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <div className="text-xs text-white/50">Simulated Total R</div>
+              <div className={`text-lg font-semibold ${widerStopSimulation.totalR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {widerStopSimulation.totalR >= 0 ? '+' : ''}{widerStopSimulation.totalR.toFixed(2)}R
+              </div>
+              <div className="text-[10px] text-white/40">
+                vs {verifiableStats ? `${verifiableStats.performance.totalManagedR >= 0 ? '+' : ''}${verifiableStats.performance.totalManagedR.toFixed(2)}R` : 'current'} actual
+              </div>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <div className="text-xs text-white/50">Trades Saved</div>
+              <div className="text-lg font-semibold text-amber-300">
+                {widerStopSimulation.savedTrades}
+              </div>
+              <div className="text-[10px] text-white/40">
+                of {widerStopSimulation.totalTrades} completed
+              </div>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <div className="text-xs text-white/50">Improvement</div>
+              <div className={`text-lg font-semibold ${widerStopSimulation.totalR - (verifiableStats?.performance.totalManagedR ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {(widerStopSimulation.totalR - (verifiableStats?.performance.totalManagedR ?? 0)) >= 0 ? '+' : ''}
+                {(widerStopSimulation.totalR - (verifiableStats?.performance.totalManagedR ?? 0)).toFixed(2)}R
+              </div>
+              <div className="text-[10px] text-white/40">
+                potential gain
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Flip Stats - Execution vs Signal Impact */}
       <FlipStatsPanel fromMs={range.start} toMs={range.end} />
