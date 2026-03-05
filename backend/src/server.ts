@@ -4480,17 +4480,6 @@ app.post('/api/filter/mqs', (req, res) => {
 // SIGNAL GATE API (Hard Execution Filter)
 // ============================================================================
 
-// Get gate config
-app.get('/api/gate/config', (_req, res) => {
-  try {
-    const config = getGateConfig();
-    res.json({ ok: true, config });
-  } catch (e) {
-    console.error('[api/gate/config] Error:', e);
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
 // Check a signal through the gate (dry run)
 app.post('/api/gate/check', async (req, res) => {
   try {
@@ -4535,17 +4524,6 @@ app.get('/api/gate/stats', (_req, res) => {
     res.json({ ok: true, stats });
   } catch (e) {
     console.error('[api/gate/stats] Error:', e);
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
-// Get current gate config
-app.get('/api/gate/config', (_req, res) => {
-  try {
-    const config = getGateConfig();
-    res.json({ ok: true, config });
-  } catch (e) {
-    console.error('[api/gate/config] Error:', e);
     res.status(500).json({ ok: false, error: String(e) });
   }
 });

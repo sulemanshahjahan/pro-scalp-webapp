@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { apiUrl as API } from '../config/apiBase';
 
 interface GateConfig {
   enabled: boolean;
@@ -51,7 +52,7 @@ export function useTradingWindowStatus(): WindowStatus {
       const dayName = now.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
       
       // Fetch gate config
-      fetch('/api/gate/config')
+      fetch(API('/api/gate/config'))
         .then(r => r.json())
         .then(data => {
           const config: GateConfig = data?.config || {
@@ -127,13 +128,57 @@ export function useTradingWindowStatus(): WindowStatus {
           });
         })
         .catch(() => {
-          // Fallback if API fails
+          // Fallback if API fails - use default config
+          const config = {
+            enabled: true,
+            blockedHours: DEFAULT_BLOCKED_HOURS,
+            blockedDays: DEFAULT_BLOCKED_DAYS,
+            allowedSymbols: [],
+          };
+          
+          const isBlockedHour = config.blockedHours.includes(hourUtc);
+          const isBlockedDay = config.blockedDays.includes(dayName);
+          const isExcellentHour = EXCELLENT_HOURS.includes(hourUtc);
+          const isGoodHour = GOOD_HOURS.includes(hourUtc) || isExcellentHour;
+
+          let windowStatus: WindowStatus['status'] = 'blocked';
+          let message = '';
+          let details: string[] = [];
+          let isGood = false;
+
+          if (isBlockedDay) {
+            windowStatus = 'blocked';
+            message = '❌ Bad Day for Trading';
+            details = [`${dayName} has <30% historical win rate`, 'No signals expected today'];
+          } else if (isBlockedHour) {
+            windowStatus = 'blocked';
+            message = '❌ Bad Hour for Trading';
+            details = [`${hourUtc}:00 UTC has <40% win rate`, 'Signals blocked during this hour'];
+          } else if (isExcellentHour) {
+            windowStatus = 'excellent';
+            message = '🎯 EXCELLENT Trading Window';
+            details = ['85%+ historical win rate', 'High probability signals expected'];
+            isGood = true;
+          } else if (isGoodHour) {
+            windowStatus = 'good';
+            message = '✅ Good Trading Window';
+            details = ['50%+ historical win rate', 'Quality signals may arrive'];
+            isGood = true;
+          } else {
+            windowStatus = 'marginal';
+            message = '⚠️ Marginal Window';
+            details = ['Limited historical data', 'Few signals expected'];
+            isGood = true;
+          }
+
+          const nextGoodWindow = calculateNextGoodWindow(config.blockedHours, config.blockedDays);
+
           setStatus({
-            isGood: false,
-            status: 'blocked',
-            message: '⚠️ Unable to check trading window',
-            details: ['API error - check connection'],
-            nextGoodWindow: null,
+            isGood,
+            status: windowStatus,
+            message,
+            details,
+            nextGoodWindow,
             currentHour: hourUtc,
             currentDay: dayName,
           });
