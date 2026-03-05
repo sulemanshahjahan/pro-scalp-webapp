@@ -6,6 +6,7 @@ import { atrPct, ema, rsi } from './indicators.js';
 import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { buildConfigSnapshot, computeConfigHash } from './configSnapshot.js';
+import { checkSignalGate, recordGateResult } from './signalGate.js';
 import type { MarketInfo, OHLCV } from './types.js';
 
 // Configuration
@@ -960,17 +961,25 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
           signalsByCategory[key] = (signalsByCategory[key] ?? 0) + 1;
         }
 
-        if (['BEST_ENTRY', 'READY_TO_BUY', 'BEST_SHORT_ENTRY', 'READY_TO_SELL'].includes(withTime.category)) {
-          const title = withTime.category === 'BEST_ENTRY' ? '[BEST] Best Entry'
-            : withTime.category === 'READY_TO_BUY' ? '[BUY] Ready to BUY'
-            : withTime.category === 'BEST_SHORT_ENTRY' ? '[BEST SHORT] Best Short Entry'
-            : '[SELL] Ready to SELL';
+        // HARD GATE: Check signal before notifying
+        const gateResult = await checkSignalGate(withTime);
+        recordGateResult(gateResult);
+        
+        if (gateResult.allowed) {
+          if (['BEST_ENTRY', 'READY_TO_BUY', 'BEST_SHORT_ENTRY', 'READY_TO_SELL'].includes(withTime.category)) {
+            const title = withTime.category === 'BEST_ENTRY' ? '[BEST] Best Entry'
+              : withTime.category === 'READY_TO_BUY' ? '[BUY] Ready to BUY'
+              : withTime.category === 'BEST_SHORT_ENTRY' ? '[BEST SHORT] Best Short Entry'
+              : '[SELL] Ready to SELL';
 
-          const body = `${sym} @ ${withTime.price.toFixed(6)} | ΔVWAP ${withTime.deltaVwapPct.toFixed(2)}% | RSI ${withTime.rsi9.toFixed(1)} | Vol× ${withTime.volSpike.toFixed(2)}`;
-          const bucket = Math.floor(withTime.time / (5 * 60_000));
-          const baseKey = `${preset}|${sym}|${withTime.category}`;
-          const dedupeKey = `${baseKey}|${bucket}`;
-          toNotify.push({ sym, title, body, sig: withTime, dedupeKey });
+            const body = `${sym} @ ${withTime.price.toFixed(6)} | ΔVWAP ${withTime.deltaVwapPct.toFixed(2)}% | RSI ${withTime.rsi9.toFixed(1)} | Vol× ${withTime.volSpike.toFixed(2)}`;
+            const bucket = Math.floor(withTime.time / (5 * 60_000));
+            const baseKey = `${preset}|${sym}|${withTime.category}`;
+            const dedupeKey = `${baseKey}|${bucket}`;
+            toNotify.push({ sym, title, body, sig: withTime, dedupeKey });
+          }
+        } else {
+          console.log(`[signal-gate] BLOCKED: ${sym} ${withTime.category} - ${gateResult.reasons.join(', ')}`);
         }
       }
 
