@@ -1021,11 +1021,21 @@ export default function ExtendedOutcomePage() {
                   </td>
                   <td className="px-3 py-2">
                     {showWiderStopWins && widerStopAnalysis.get(o.id)?.saved ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30" title="Would survive with 1.4x stop">
                         → 1.4×
                       </span>
-                    ) : showWiderStopWins && o.status === 'LOSS_STOP' ? (
-                      <span className="text-[10px] text-white/30" title={`MAE: ${o.maxAdverseExcursionPct?.toFixed(2)}%, Stop: ${o.stopPrice}`}>no</span>
+                    ) : showWiderStopWins && o.status === 'LOSS_STOP' && o.stopPrice && o.entryPrice ? (
+                      (() => {
+                        const currentStopPct = (Math.abs(o.entryPrice - o.stopPrice) / o.entryPrice) * 100;
+                        const widerStopPct = currentStopPct * 1.4;
+                        const mae = Number(o.maxAdverseExcursionPct) || 0;
+                        return (
+                          <span className="text-[10px] text-white/30" 
+                            title={`MAE: ${mae.toFixed(2)}%, StopDist: ${currentStopPct.toFixed(2)}%, Wider: ${widerStopPct.toFixed(2)}%`}>
+                            no
+                          </span>
+                        );
+                      })()
                     ) : (
                       <span className="text-white/30">--</span>
                     )}
