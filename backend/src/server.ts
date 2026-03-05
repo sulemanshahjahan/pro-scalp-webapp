@@ -3978,6 +3978,146 @@ app.post('/api/admin/evaluate-all-outcomes', async (req, res) => {
   }
 });
 
+// Backtest: Wider Stops Analysis
+// Shows how 1.5x wider stops would have performed on historical data
+app.get('/api/analysis/wider-stops-backtest', async (req, res) => {
+  try {
+    const d = getDb();
+    
+    // Get historical trades with stop analysis
+    const trades = await d.prepare(`
+      SELECT 
+        eo.signal_id,
+        eo.symbol,
+        eo.category,
+        eo.direction,
+        eo.entry_price,
+        eo.stop_price,
+        eo.tp1_price,
+        eo.status,
+        eo.time_to_stop_seconds,
+        eo.time_to_tp1_seconds,
+        eo.max_favorable_excursion_pct,
+        eo.max_adverse_excursion_pct,
+        eo.ext24_realized_r,
+        CASE 
+          WHEN eo.direction = 'LONG' AND eo.entry_price > 0 
+          THEN ((eo.entry_price - eo.stop_price) / eo.entry_price * 100)
+          WHEN eo.direction = 'SHORT' AND eo.entry_price > 0
+          THEN ((eo.stop_price - eo.entry_price) / eo.entry_price * 100)
+          ELSE NULL
+        END as current_stop_pct
+      FROM extended_outcomes eo
+      WHERE eo.mode = 'EXECUTED'
+        AND eo.completed_at IS NOT NULL
+        AND eo.status IN ('WIN_TP1', 'WIN_TP2', 'LOSS_STOP')
+        AND eo.stop_price IS NOT NULL
+        AND eo.stop_price > 0
+      ORDER BY eo.signal_time DESC
+      LIMIT 200
+    `).all() as any[];
+    
+    // Analyze each trade
+    let totalTrades = 0;
+    let wins = 0;
+    let losses = 0;
+    let currentTotalR = 0;
+    let savedByWiderStop = 0;
+    let savedAndHitTp1 = 0;
+    let estimatedTotalR = 0;
+    
+    const symbolStats: Record<string, { trades: number; saved: number; avgStop: number }> = {};
+    
+    for (const trade of trades) {
+      totalTrades++;
+      const currentStop = Number(trade.current_stop_pct) || 0;
+      const widerStop = currentStop * 1.5;
+      const mae = Math.abs(Number(trade.max_adverse_excursion_pct) || 0) * 100;
+      const realizedR = Number(trade.ext24_realized_r) || 0;
+      
+      currentTotalR += realizedR;
+      
+      // Track symbol stats
+      if (!symbolStats[trade.symbol]) {
+        symbolStats[trade.symbol] = { trades: 0, saved: 0, avgStop: 0 };
+      }
+      symbolStats[trade.symbol].trades++;
+      symbolStats[trade.symbol].avgStop += currentStop;
+      
+      if (trade.status === 'WIN_TP1' || trade.status === 'WIN_TP2') {
+        wins++;
+        estimatedTotalR += realizedR; // Wins stay the same
+      } else if (trade.status === 'LOSS_STOP') {
+        losses++;
+        
+        // Check if wider stop would have saved this trade
+        const wouldSurvive = widerStop > mae;
+        const hitTp1Later = trade.time_to_tp1_seconds !== null;
+        
+        if (wouldSurvive) {
+          savedByWiderStop++;
+          symbolStats[trade.symbol].saved++;
+          
+          if (hitTp1Later) {
+            savedAndHitTp1++;
+            estimatedTotalR += 1.0; // Assume +1R if hit TP1
+          } else {
+            estimatedTotalR += 0; // Breakeven if survived but no TP1
+          }
+        } else {
+          estimatedTotalR += realizedR; // Still lost
+        }
+      }
+    }
+    
+    // Calculate averages
+    const winRate = totalTrades > 0 ? (wins / totalTrades * 100).toFixed(1) : '0';
+    const avgStop = trades.length > 0 
+      ? (trades.reduce((sum, t) => sum + (Number(t.current_stop_pct) || 0), 0) / trades.length).toFixed(2)
+      : '0';
+    
+    // Format symbol breakdown for top symbols
+    const topSymbols = Object.entries(symbolStats)
+      .sort((a, b) => b[1].trades - a[1].trades)
+      .slice(0, 5)
+      .map(([symbol, stats]) => ({
+        symbol,
+        trades: stats.trades,
+        avgStop: (stats.avgStop / stats.trades).toFixed(2) + '%',
+        savedByWiderStop: stats.saved
+      }));
+    
+    res.json({
+      ok: true,
+      summary: {
+        totalTrades,
+        wins,
+        losses,
+        winRate: winRate + '%',
+        avgStopDistance: avgStop + '%',
+        currentTotalR: currentTotalR.toFixed(2) + 'R',
+      },
+      widerStopsImpact: {
+        tradesThatWouldBeSaved: savedByWiderStop,
+        percentOfLossesSaved: losses > 0 ? ((savedByWiderStop / losses) * 100).toFixed(1) + '%' : '0%',
+        savedAndHitTp1: savedAndHitTp1,
+        estimatedTotalR: estimatedTotalR.toFixed(2) + 'R',
+        improvement: (estimatedTotalR - currentTotalR).toFixed(2) + 'R',
+      },
+      topSymbols,
+      recommendation: savedByWiderStop > losses * 0.3 
+        ? 'Wider stops would significantly improve performance'
+        : savedByWiderStop > losses * 0.15
+          ? 'Wider stops would moderately improve performance'
+          : 'Current stops are appropriate'
+    });
+    
+  } catch (e: any) {
+    console.error('[wider-stops-backtest] Error:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // Fix stale 240m outcomes by syncing with 24h extended outcomes
 app.post('/api/admin/fix-240m-outcomes', async (req, res) => {
   const d = getDb();
