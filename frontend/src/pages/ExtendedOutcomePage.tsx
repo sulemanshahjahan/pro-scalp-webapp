@@ -1141,8 +1141,8 @@ export default function ExtendedOutcomePage() {
                         title={`MAE: ${o.maxAdverseExcursionPct?.toFixed(2)}% | Would survive with 1.4x stop`}>
                         → 1.4×
                       </span>
-                    ) : showWiderStopWins && o.status === 'LOSS_STOP' ? (
-                      <span className="text-[10px] text-white/30" title={`MAE: ${o.maxAdverseExcursionPct?.toFixed(2)}% exceeds wider stop`}>--</span>
+                    ) : showWiderStopWins && (o.status === 'LOSS_STOP' || o.ext24ManagedStatus?.includes('STOP')) ? (
+                      <span className="text-[10px] text-white/30" title={`Status: ${o.status}, MAE: ${o.maxAdverseExcursionPct?.toFixed(2)}%`}>--</span>
                     ) : (
                       <span className="text-white/30">--</span>
                     )}
