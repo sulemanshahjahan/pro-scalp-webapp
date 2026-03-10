@@ -119,7 +119,7 @@ export function getGateConfig(): GateConfig {
     ? process.env.SIGNAL_GATE_BLOCKED_DAYS.split(',')
     : defaultBlockedDays;
 
-  return {
+  const cfg: GateConfig = {
     enabled: (process.env.SIGNAL_GATE_ENABLED || 'true').toLowerCase() === 'true',
     
     // New data-driven filters
@@ -147,6 +147,14 @@ export function getGateConfig(): GateConfig {
     allowEarlyReady: (process.env.SIGNAL_GATE_ALLOW_EARLY_READY || 'false').toLowerCase() === 'true',
     targetReductionPct: parseInt(process.env.SIGNAL_GATE_TARGET_REDUCTION || '70', 10),
   };
+  
+  // DEBUG: Log config on first load
+  if (typeof global !== 'undefined' && !(global as any).__gateConfigLogged) {
+    (global as any).__gateConfigLogged = true;
+    console.log(`[signal-gate] Config loaded: enabled=${cfg.enabled}, useWhitelist=${cfg.useSymbolWhitelist}, symbols=[${cfg.allowedSymbols?.join(',')}]`);
+  }
+  
+  return cfg;
 }
 
 // ============================================================================
