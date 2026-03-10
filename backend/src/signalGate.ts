@@ -349,6 +349,11 @@ export async function checkSignalGate(
       return allowedSymbol === symbolOnly && allowedDir === direction;
     });
     
+    // DEBUG
+    if (symbolOnly === 'KITEUSDT' || symbolOnly === 'kiteusdt') {
+      console.log(`[GATE-DEBUG] Whitelist check: ${symbolDirection}, useWhitelist=${cfg.useSymbolWhitelist}, allowedSymbols=${cfg.allowedSymbols?.length}, isAllowed=${isAllowed}`);
+    }
+    
     if (!isAllowed) {
       return {
         allowed: false,

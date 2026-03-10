@@ -965,6 +965,11 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         const gateResult = await checkSignalGate(withTime);
         recordGateResult(gateResult);
         
+        // DEBUG: Always log gate decisions for suspicious symbols
+        if (sym === 'KITEUSDT' || sym === 'kiteusdt') {
+          console.log(`[GATE-DEBUG] ${sym} ${withTime.category}: allowed=${gateResult.allowed}, reasons=${gateResult.reasons?.join(',')}`);
+        }
+        
         if (gateResult.allowed) {
           if (['BEST_ENTRY', 'READY_TO_BUY', 'BEST_SHORT_ENTRY', 'READY_TO_SELL'].includes(withTime.category)) {
             const title = withTime.category === 'BEST_ENTRY' ? '[BEST] Best Entry'
