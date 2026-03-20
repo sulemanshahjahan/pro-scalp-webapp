@@ -1113,6 +1113,20 @@ export function startLoop(onUpdate?: (signals: any[]) => void) {
     }
   };
   loop();
+  
+  // Auto re-evaluate pending extended outcomes every 5 minutes (backend-side)
+  // This ensures signals complete even when no one has the UI open
+  setInterval(async () => {
+    try {
+      const { reevaluatePendingExtendedOutcomes } = await import('./extendedOutcomeStore.js');
+      const result = await reevaluatePendingExtendedOutcomes(25);
+      if (result.evaluated > 0) {
+        console.log(`[auto-reevaluate] Evaluated: ${result.evaluated}, Completed: ${result.completed}, Errors: ${result.errors}`);
+      }
+    } catch (e) {
+      console.error('[auto-reevaluate] Error:', e);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
 }
 
 
