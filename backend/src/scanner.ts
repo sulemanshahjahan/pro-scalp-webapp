@@ -7,6 +7,7 @@ import { pushToAll } from './notifier.js';
 import { emailNotify } from './emailNotifier.js';
 import { buildConfigSnapshot, computeConfigHash } from './configSnapshot.js';
 import { checkSignalGate, recordGateResult } from './signalGate.js';
+import { runDelayedEntryWatcher } from './delayedEntry.js';
 import type { MarketInfo, OHLCV } from './types.js';
 
 // Configuration
@@ -1127,6 +1128,19 @@ export function startLoop(onUpdate?: (signals: any[]) => void) {
       console.error('[auto-reevaluate] Error:', e);
     }
   }, 5 * 60 * 1000); // Every 5 minutes
+  
+  // Auto run delayed entry watcher every 30 seconds (backend-side)
+  // This expires WATCH records that never confirmed
+  setInterval(async () => {
+    try {
+      const result = await runDelayedEntryWatcher();
+      if (result.checked > 0) {
+        console.log(`[delayed-entry-watcher] Checked: ${result.checked}, Entered: ${result.entered}, Expired: ${result.expired}`);
+      }
+    } catch (e) {
+      console.error('[delayed-entry-watcher] Error:', e);
+    }
+  }, 30 * 1000); // Every 30 seconds
 }
 
 
