@@ -31,8 +31,8 @@ router.get('/api/research/analysis', async (req, res) => {
         SUM(CASE WHEN ext24_managed_r > 0 THEN 1 ELSE 0 END) as wins,
         SUM(CASE WHEN ext24_managed_r < 0 THEN 1 ELSE 0 END) as losses,
         SUM(CASE WHEN ext24_managed_r = 0 THEN 1 ELSE 0 END) as be,
-        ROUND(AVG(ext24_managed_r), 3) as avg_r,
-        ROUND(SUM(ext24_managed_r), 3) as total_r
+        CAST(AVG(ext24_managed_r) AS DECIMAL(10,3)) as avg_r,
+        CAST(SUM(ext24_managed_r) AS DECIMAL(10,3)) as total_r
       FROM extended_outcomes
       WHERE completed_at IS NOT NULL
     `).get();
@@ -53,10 +53,10 @@ router.get('/api/research/analysis', async (req, res) => {
         symbol,
         COUNT(*) as trades,
         SUM(CASE WHEN ext24_managed_r > 0 THEN 1 ELSE 0 END) as wins,
-        ROUND(AVG(ext24_managed_r), 3) as avg_r,
-        ROUND(SUM(ext24_managed_r), 3) as total_r,
-        ROUND(AVG(max_favorable_excursion_pct), 2) as avg_mfe,
-        ROUND(AVG(max_adverse_excursion_pct), 2) as avg_mae
+        CAST(AVG(ext24_managed_r) AS DECIMAL(10,3)) as avg_r,
+        CAST(SUM(ext24_managed_r) AS DECIMAL(10,3)) as total_r,
+        CAST(AVG(max_favorable_excursion_pct) AS DECIMAL(10,2)) as avg_mfe,
+        CAST(AVG(max_adverse_excursion_pct) AS DECIMAL(10,2)) as avg_mae
       FROM extended_outcomes
       WHERE completed_at IS NOT NULL
       GROUP BY symbol
@@ -78,8 +78,8 @@ router.get('/api/research/analysis', async (req, res) => {
         category,
         COUNT(*) as trades,
         SUM(CASE WHEN ext24_managed_r > 0 THEN 1 ELSE 0 END) as wins,
-        ROUND(AVG(ext24_managed_r), 3) as avg_r,
-        ROUND(SUM(ext24_managed_r), 3) as total_r
+        CAST(AVG(ext24_managed_r) AS DECIMAL(10,3)) as avg_r,
+        CAST(SUM(ext24_managed_r) AS DECIMAL(10,3)) as total_r
       FROM extended_outcomes
       WHERE completed_at IS NOT NULL
       GROUP BY category
@@ -143,8 +143,8 @@ router.get('/api/research/analysis', async (req, res) => {
           ELSE 'OTHER'
         END as outcome,
         COUNT(*) as count,
-        ROUND(AVG(max_favorable_excursion_pct), 2) as avg_mfe,
-        ROUND(AVG(max_adverse_excursion_pct), 2) as avg_mae
+        CAST(AVG(max_favorable_excursion_pct) AS DECIMAL(10,2)) as avg_mfe,
+        CAST(AVG(max_adverse_excursion_pct) AS DECIMAL(10,2)) as avg_mae
       FROM extended_outcomes
       WHERE completed_at IS NOT NULL
       GROUP BY outcome
