@@ -7,9 +7,8 @@
  * in winners vs losers, optimal trading conditions, and gate effectiveness.
  */
 
-const { getDb } = require('../backend/dist/src/db/db.js');
-
 async function analyze() {
+  const { getDb } = await import('../backend/dist/src/db/db.js');
   console.log('\n🔍 SIGNAL & OUTCOME RESEARCH ANALYSIS\n');
   console.log('=' .repeat(70));
   

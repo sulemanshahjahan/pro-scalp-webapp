@@ -98,6 +98,7 @@ import {
   type FilterConfig,
   type SignalWithEarlyMetrics,
 } from './entryFilter.js';
+import researchRouter from './researchEndpoint.js';
 import {
   checkSignalGate,
   filterSignalsThroughGate,
@@ -1145,6 +1146,9 @@ void ensureVapid()
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+// Research Analysis Endpoint
+app.use(researchRouter);
 
 // System health (scan + outcomes + BTC)
 app.get('/api/system/health', async (req, res) => {
