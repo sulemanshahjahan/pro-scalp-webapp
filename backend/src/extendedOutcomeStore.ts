@@ -1489,7 +1489,7 @@ export async function updateExtendedOutcome(
     runnerExitReason: ext24RunnerExitReason,
   });
 
-  await d.prepare(`
+  const updateResult = await d.prepare(`
     UPDATE extended_outcomes SET
       status = ?,
       completed_at = ?,
@@ -1554,6 +1554,14 @@ export async function updateExtendedOutcome(
     signalIdNum,
     mode
   );
+  
+  console.log('[extended-outcomes] Update result:', { 
+    signalId, 
+    mode, 
+    rowsAffected: (updateResult as any)?.changes ?? 'unknown',
+    status: result.status,
+    completed: result.completed 
+  });
 }
 
 /**
@@ -2228,6 +2236,7 @@ export async function reevaluatePendingExtendedOutcomes(
         id: outcome.id, 
         signalId: outcome.signalId,
         symbol: outcome.symbol,
+        mode: outcome.mode,
         hasSignalId: outcome.signalId != null,
         signalIdType: typeof outcome.signalId
       });
@@ -2250,6 +2259,7 @@ export async function reevaluatePendingExtendedOutcomes(
         stopPrice: outcome.stopPrice != null ? Number(outcome.stopPrice) : null,
         tp1Price: outcome.tp1Price != null ? Number(outcome.tp1Price) : null,
         tp2Price: outcome.tp2Price != null ? Number(outcome.tp2Price) : null,
+        mode: outcome.mode || 'EXECUTED',
       };
 
       const result = await evaluateAndUpdateExtendedOutcome(signal);
