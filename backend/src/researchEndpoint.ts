@@ -96,7 +96,7 @@ router.get('/api/research/analysis', async (req, res) => {
         CAST(signal_time / 1000 / 3600 % 24 AS INTEGER) as hour,
         COUNT(*) as trades,
         SUM(CASE WHEN ext24_managed_r > 0 THEN 1 ELSE 0 END) as wins,
-        ROUND(AVG(ext24_managed_r), 3) as avg_r
+        CAST(AVG(ext24_managed_r) AS DECIMAL(10,3)) as avg_r
       FROM extended_outcomes
       WHERE completed_at IS NOT NULL
       GROUP BY hour
