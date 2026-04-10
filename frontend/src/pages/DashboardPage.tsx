@@ -351,8 +351,8 @@ export default function DashboardPage() {
       const start = Date.now() - days * 24 * 60 * 60 * 1000;
 
       const [outcomeRes, statsRes] = await Promise.all([
-        fetch(API(`/api/extended-outcomes?sort=time_desc&limit=200&start=${start}`)),
-        fetch(API(`/api/extended-outcomes/managed-stats?start=${start}`)),
+        fetch(API(`/api/extended-outcomes?sort=time_desc&limit=200&start=${start}&mode=EXECUTED`)),
+        fetch(API(`/api/extended-outcomes/managed-stats?start=${start}&mode=EXECUTED`)),
       ]);
 
       const outcomeData = await outcomeRes.json();
