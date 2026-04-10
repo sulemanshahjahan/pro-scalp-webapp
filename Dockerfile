@@ -8,6 +8,8 @@ RUN npm ci && npm run build
 # ------------ Build Backend ------------
 FROM node:20-alpine AS be-build
 WORKDIR /app
+# Copy root package files (workspace config + lockfile)
+COPY package.json package-lock.json ./
 COPY backend ./backend
 WORKDIR /app/backend
 RUN npm ci && npm run build
@@ -16,10 +18,11 @@ RUN npm ci && npm run build
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-# Copy backend source for production install + compiled dist
-COPY --from=be-build /app/backend/package.json /app/backend/package-lock.json ./backend/
+# Copy root package files for workspace-aware production install
+COPY package.json package-lock.json ./
+COPY backend/package.json ./backend/
 WORKDIR /app/backend
-RUN npm ci --omit=dev
+RUN cd /app && npm ci --omit=dev --workspace=backend
 # Copy compiled backend
 COPY --from=be-build /app/backend/dist ./dist
 # Copy frontend built assets
