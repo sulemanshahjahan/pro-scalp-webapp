@@ -611,7 +611,7 @@ export async function computeBucketAnalysis(
 // STEP 3: SYMBOL GATES / TIERING
 // ============================================================================
 
-const MIN_SIGNALS_FOR_TIER = 10;
+const MIN_SIGNALS_FOR_TIER = Math.max(1, parseInt(process.env.MIN_SIGNALS_FOR_TIER || '20', 10));
 
 const TIER_THRESHOLDS = {
   GREEN: 0.30, // >= 30% win rate

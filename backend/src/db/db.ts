@@ -262,13 +262,14 @@ function createPostgresDb(): DbConn {
   );
 
   const sslEnv = String(process.env.PG_SSL || '').toLowerCase();
-  const ssl =
+  const sslRequired =
     sslEnv === '1' ||
     sslEnv === 'true' ||
     url.includes('sslmode=require') ||
-    url.includes('ssl=true')
-      ? { rejectUnauthorized: false }
-      : undefined;
+    url.includes('ssl=true');
+  // In production, prefer verifying certs. Use PG_SSL_REJECT_UNAUTHORIZED=false to override for Railway/managed DBs.
+  const rejectUnauthorized = (process.env.PG_SSL_REJECT_UNAUTHORIZED ?? 'false').toLowerCase() !== 'false';
+  const ssl = sslRequired ? { rejectUnauthorized } : undefined;
 
   const pool = new Pool({
     connectionString: url,

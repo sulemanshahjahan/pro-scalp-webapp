@@ -79,7 +79,7 @@ export async function pushToAll(payload: any) {
       const msg = String(e?.statusCode || '') + ' ' + String(e);
       // If gone, remove
       if (msg.includes('410') || msg.includes('404')) {
-        try { await db.prepare('DELETE FROM subscriptions WHERE endpoint = ?').run(r.endpoint); } catch {}
+        try { await db.prepare('DELETE FROM subscriptions WHERE endpoint = ?').run(r.endpoint); } catch (delErr) { console.warn('[notifier] failed to remove stale subscription:', delErr); }
       }
     }
   }));

@@ -15,3 +15,14 @@ backend/data/
 .env
 .env.local
 .env.*.local
+
+# databases
+*.db
+*.db-shm
+*.db-wal
+
+# scripts with credentials (never commit)
+backend/scripts/queryDb.js
+
+# tmp
+tmp/

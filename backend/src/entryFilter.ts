@@ -1,8 +1,10 @@
 /**
  * Entry Filter / Decision Engine
- * 
- * Implements the MASTER FILTER logic to prevent weak entries.
- * This is the gate that decides whether a signal should be entered or rejected.
+ *
+ * @deprecated This module is NOT used in the live scan pipeline.
+ * Live filtering is handled by logic.ts gates + signalGate.ts.
+ * This module is only used by /api/filter/test and /api/filter/simulate
+ * endpoints for backtesting. Consider consolidating with signalGate.ts.
  */
 
 import type { Signal } from './types.js';

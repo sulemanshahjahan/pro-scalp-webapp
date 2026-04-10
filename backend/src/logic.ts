@@ -28,6 +28,8 @@ const READY_BODY_ATR_MULT = parseFloat(process.env.READY_BODY_ATR_MULT || '0.40'
 const BEST_BODY_ATR_MULT = parseFloat(process.env.BEST_BODY_ATR_MULT || '0.80');     // Body >= 0.8x ATR
 const READY_BODY_MIN_PCT = parseFloat(process.env.READY_BODY_MIN_PCT || '0.008');    // Static floor: 0.8%
 const BEST_BODY_MIN_PCT = parseFloat(process.env.BEST_BODY_MIN_PCT || '0.015');      // Static floor: 1.5%
+const READY_BODY_QUALITY_MIN_SCORE = parseInt(process.env.READY_BODY_QUALITY_MIN_SCORE || '0', 10); // 0 = use boolean (legacy), 1-100 = min score
+const BEST_BODY_QUALITY_MIN_SCORE = parseInt(process.env.BEST_BODY_QUALITY_MIN_SCORE || '0', 10);
 const MIN_ATR_PCT = parseFloat(process.env.MIN_ATR_PCT || '0.10');    // skip when 5m ATR% < 0.10% (too dead)
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '1.5');  // Minimum 1.5% stop to avoid whipsaws
 const READY_MIN_RISK_PCT = parseFloat(process.env.READY_MIN_RISK_PCT || '1.5');  // Minimum 1.5% for READY signals
@@ -378,6 +380,19 @@ function confirm15_soft(data15: OHLCV[], dbg?: { reason?: string }): boolean {
     r[i - 1] > 55 && r[i - 1] < 80 &&
     r[i - 1] >= r[i - 2];
   if (hadRecentStrict) { if (dbg) dbg.reason = 'strict_prev'; return true; }
+
+  // Pullback mode: 15m trend is bullish (EMA50 > EMA200) but price pulled back
+  // This catches valid pullback entries in uptrends — the core VWAP scalping pattern
+  const CONFIRM15_ALLOW_PULLBACK = (process.env.CONFIRM15_ALLOW_PULLBACK ?? 'false').toLowerCase() === 'true';
+  if (CONFIRM15_ALLOW_PULLBACK) {
+    const e50 = ema(closes, 50);
+    const trendBullish15 = e50[i] > e[i] && e[i] >= e[Math.max(0, i - 3)]; // EMA50 > EMA200 and EMA200 rising
+    const rsiPullbackOk = r[i] >= 45 && r[i] < RSI_MAX && r[i] > r[i - 1]; // RSI turning up from pullback
+    if (trendBullish15 && rsiPullbackOk) {
+      if (dbg) dbg.reason = 'pullback';
+      return true;
+    }
+  }
 
   // rolling anchor for soft confirm
   const roll = Math.max(1, CONFIRM15_VWAP_ROLL_BARS || 96);
@@ -791,8 +806,13 @@ function analyzeSymbolInternal(
   const currentCandle = { open: data5[i].open, high: highs5[i], low: lows5[i], close: closes5[i] };
   const bodyQualityBest = checkBodyQuality(currentCandle, atrNow, true);
   const bodyQualityReady = checkBodyQuality(currentCandle, atrNow, false);
-  const strongBodyBest = bodyQualityBest.pass;
-  const strongBodyReady = bodyQualityReady.pass;
+  // Use score-based check when min score is set, otherwise fall back to boolean pass/fail
+  const strongBodyBest = BEST_BODY_QUALITY_MIN_SCORE > 0
+    ? bodyQualityBest.score >= BEST_BODY_QUALITY_MIN_SCORE
+    : bodyQualityBest.pass;
+  const strongBodyReady = READY_BODY_QUALITY_MIN_SCORE > 0
+    ? bodyQualityReady.score >= READY_BODY_QUALITY_MIN_SCORE
+    : bodyQualityReady.pass;
 
   // Backward compatibility: also compute old-style body metrics for logging
   const openNow = data5[i].open;
@@ -861,7 +881,20 @@ function analyzeSymbolInternal(
   let rr: number | null = null;
   let riskPct: number | null = null;
 
-  const ATR_STOP_MULT = parseFloat(process.env.STOP_ATR_MULT || '1.5');
+  // Adaptive stop: use regime-specific multipliers if configured
+  const STOP_ATR_ADAPTIVE = (process.env.STOP_ATR_ADAPTIVE ?? 'false').toLowerCase() === 'true';
+  const STOP_ATR_BASE = parseFloat(process.env.STOP_ATR_MULT || '1.5');
+  const STOP_ATR_DORMANT = parseFloat(process.env.STOP_ATR_DORMANT || '2.0');
+  const STOP_ATR_WARMING = parseFloat(process.env.STOP_ATR_WARMING || '2.5');
+  const STOP_ATR_ACTIVE = parseFloat(process.env.STOP_ATR_ACTIVE || String(STOP_ATR_BASE));
+  let ATR_STOP_MULT = STOP_ATR_BASE;
+  if (STOP_ATR_ADAPTIVE && atrNow > 0) {
+    // Use ATR percentile as a proxy for regime when market conditions aren't available
+    // Low ATR (<0.5%) = dormant, Mid (0.5-1.5%) = warming, High (>1.5%) = active
+    if (atrNow < 0.5) ATR_STOP_MULT = STOP_ATR_DORMANT;
+    else if (atrNow < 1.5) ATR_STOP_MULT = STOP_ATR_WARMING;
+    else ATR_STOP_MULT = STOP_ATR_ACTIVE;
+  }
   const ATR_STOP_FLOOR_MULT = parseFloat(process.env.STOP_ATR_FLOOR_MULT || '1.0');
   const atrPrice = price * (atrNow / 100);
   const maxStopPriceByFloor = price - (atrPrice * ATR_STOP_FLOOR_MULT);
@@ -1198,7 +1231,9 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
 
     // Short body quality (bearish candle)
     const bodyQualityShort = checkBodyQualityShort(currentCandle, atrNow);
-    strongBodyShort = bodyQualityShort.pass;
+    strongBodyShort = READY_BODY_QUALITY_MIN_SCORE > 0
+      ? bodyQualityShort.score >= READY_BODY_QUALITY_MIN_SCORE
+      : bodyQualityShort.pass;
 
     // Short volume
     const shortVolMinOk = volSpikeNow >= Math.max(1.2, thresholds.volSpikeX);
@@ -1580,6 +1615,34 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
       bodyQualityBest: bodyQualityBest.details,
     },
   };
+  // === Weighted Confluence Score (0-100) ===
+  // Provides a continuous quality metric beyond pass/fail gates
+  const vwapProximityScore = Math.max(0, Math.min(100, (1 - Math.abs(distToVwapPct) / Math.max(readyVwapMax, 0.01)) * 100));
+  const rsiMomentumScore = rsiReadyOk
+    ? Math.min(100, 50 + (rsiDelta > 0 ? Math.min(50, rsiDelta * 100) : 0))
+    : Math.max(0, 30 - Math.abs(rsiNow - (RSI_READY_MIN + RSI_READY_MAX) / 2));
+  const bodyScore = bodyQualityReady.score;
+  const volSpikeScore = Math.min(100, (volSpikeNow / Math.max(thresholds.volSpikeX, 1)) * 50);
+  const trendScore = trendOk ? 100 : (readyTrendOk ? 70 : (ema200Up ? 40 : 0));
+  const confirm15Score = confirm15mStrict ? 100 : (confirm15mSoft ? 60 : 0);
+  const btcScore = btcBull ? 100 : (!btcBear ? 50 : 0);
+  const sweepScore = liq.ok ? 100 : (reclaimOk ? 50 : 0);
+
+  const confluenceScore = Math.round(
+    vwapProximityScore * 0.20 +
+    rsiMomentumScore * 0.12 +
+    bodyScore * 0.18 +
+    volSpikeScore * 0.12 +
+    trendScore * 0.10 +
+    confirm15Score * 0.10 +
+    btcScore * 0.10 +
+    sweepScore * 0.08
+  );
+  features.computed = {
+    ...features.computed,
+    confluenceScore,
+  } as any;
+
   const debug = { candidate: candidateDebug, gateSnapshot, features, confirm15: confirm15Debug, confirm15Short: confirm15ShortDebug };
 
   if (!category) {
@@ -1622,6 +1685,7 @@ const readyDailyVwapOk = READY_REQUIRE_DAILY_VWAP ? (confirm15mStrict || price >
     blockedReasons: readyBlockedReasons,
     firstFailedGate: readyDebug.firstFailedGate,
     gateScore: readyDebug.gateScore,
+    confluenceScore,
     readyDebug,
     bestDebug
   };

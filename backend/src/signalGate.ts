@@ -429,22 +429,9 @@ export async function checkSignalGate(
     }
   }
   
-  // Hard rule 6: MFE Death Zone Filter (for signals with MFE data)
-  if (cfg.useMfeDeathZoneFilter && hasMfeData) {
-    const inDeathZone = mfe30m >= cfg.mfeDeathZoneMin && mfe30m < cfg.mfeDeathZoneMax;
-    if (inDeathZone) {
-      return {
-        allowed: false,
-        quality: 'REJECTED',
-        score,
-        totalScore: total,
-        reasons: ['MFE_DEATH_ZONE', `MFE30m ${(mfe30m * 100).toFixed(2)}% is in death zone (${(cfg.mfeDeathZoneMin * 100).toFixed(1)}%-${(cfg.mfeDeathZoneMax * 100).toFixed(1)}%). Need >=${(cfg.mfeDeathZoneMax * 100).toFixed(1)}% or <${(cfg.mfeDeathZoneMin * 100).toFixed(1)}%`],
-        tier,
-        mqs,
-      };
-    }
-  }
-  
+  // NOTE: MFE Death Zone filter removed — it checked MFE30m data that doesn't exist on new signals
+  // (MFE is an outcome metric computed after 30 minutes, not available at gate time)
+
   // ============================================================================
   // LEGACY RULES (Optional, disabled by default)
   // ============================================================================

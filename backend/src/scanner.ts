@@ -8,10 +8,14 @@ import { emailNotify } from './emailNotifier.js';
 import { buildConfigSnapshot, computeConfigHash } from './configSnapshot.js';
 import { checkSignalGate, recordGateResult } from './signalGate.js';
 import { runDelayedEntryWatcher } from './delayedEntry.js';
+import { getMarketConditions } from './marketConditions.js';
 import type { MarketInfo, OHLCV } from './types.js';
 
 // Configuration
 const TOP_N = parseInt(process.env.TOP_N || '300', 10);
+const MARKET_REGIME_GATING = (process.env.MARKET_REGIME_GATING ?? 'false').toLowerCase() === 'true';
+const MARKET_REGIME_MIN_SCORE = parseInt(process.env.MARKET_REGIME_MIN_SCORE || '30', 10);
+const MIN_CONFLUENCE_SCORE = parseInt(process.env.MIN_CONFLUENCE_SCORE || '0', 10); // 0 = disabled
 const SCAN_INTERVAL_MS = parseInt(process.env.SCAN_INTERVAL_MS || '30000', 10);
 const SYMBOL_DELAY_MS = parseInt(process.env.SYMBOL_DELAY_MS || '120', 10);
 const MAX_SCAN_MS = parseInt(process.env.MAX_SCAN_MS || String(4 * 60_000), 10);
@@ -462,6 +466,22 @@ function computeBtcMarket(data15: OHLCV[]): MarketInfo | null {
 
 export async function scanOnce(preset: Preset = 'BALANCED') {
   const t0 = Date.now();
+
+  // Market regime gating: skip scan if market is too dormant
+  if (MARKET_REGIME_GATING) {
+    try {
+      const conditions = await getMarketConditions(['1h']);
+      const longMetrics = conditions.long?.['1h'];
+      if (longMetrics && longMetrics.readinessScore < MARKET_REGIME_MIN_SCORE) {
+        console.log(`[scan] skip: market regime ${longMetrics.regime} (score=${longMetrics.readinessScore} < ${MARKET_REGIME_MIN_SCORE}), blocking=${longMetrics.blockingGate}`);
+        return [];
+      }
+    } catch (e) {
+      // Don't block scanning if regime check fails
+      console.warn('[scan] market regime check failed, proceeding with scan:', e);
+    }
+  }
+
   const thresholds = thresholdsForPreset(preset);
   const runConfigSnapshot = buildConfigSnapshot({
     preset,
@@ -960,6 +980,12 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
         if (withTime?.category) {
           const key = String(withTime.category);
           signalsByCategory[key] = (signalsByCategory[key] ?? 0) + 1;
+        }
+
+        // Confluence score filter (if enabled)
+        if (MIN_CONFLUENCE_SCORE > 0 && (withTime.confluenceScore ?? 0) < MIN_CONFLUENCE_SCORE) {
+          console.log(`[scan] ${sym} ${withTime.category} confluenceScore=${withTime.confluenceScore ?? 0} < ${MIN_CONFLUENCE_SCORE}, skipping`);
+          continue;
         }
 
         // HARD GATE: Check signal before notifying

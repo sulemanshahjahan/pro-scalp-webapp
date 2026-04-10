@@ -6,15 +6,22 @@ const enabled = (process.env.EMAIL_ENABLED || 'false').toLowerCase() === 'true';
 const useResend = !!process.env.RESEND_API_KEY;
 
 // SMTP transport (fallback)
-const transporter = (enabled && !useResend) ? nodemailer.createTransport({
-  host: process.env.SMTP_HOST!,
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: (process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
-  auth: {
-    user: process.env.SMTP_USER!,
-    pass: process.env.SMTP_PASS!,
-  },
-}) : null;
+let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
+if (enabled && !useResend) {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  if (smtpHost && smtpUser && smtpPass) {
+    transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: (process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+      auth: { user: smtpUser, pass: smtpPass },
+    });
+  } else {
+    console.error('[email] EMAIL_ENABLED=true but SMTP credentials missing (SMTP_HOST/USER/PASS). Email disabled.');
+  }
+}
 
 const fromName = process.env.EMAIL_FROM_NAME || 'Pro Scalp Scanner';
 const fromAddr = process.env.EMAIL_FROM_ADDRESS || process.env.SMTP_USER || 'no-reply@localhost';
@@ -29,7 +36,8 @@ export type MailPayload = {
 // Resend API sender
 async function sendViaResend(payload: MailPayload): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   try {
-    const apiKey = process.env.RESEND_API_KEY!;
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) return { ok: false, error: 'RESEND_API_KEY not set' };
     const to = Array.isArray(payload.to) ? payload.to : [payload.to];
     
     const response = await fetch('https://api.resend.com/emails', {

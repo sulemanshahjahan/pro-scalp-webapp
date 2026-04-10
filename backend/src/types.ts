@@ -116,6 +116,7 @@ export interface Signal {
   blockedReasons?: string[];
   firstFailedGate?: string | null;
   gateScore?: number;
+  confluenceScore?: number;  // Weighted 0-100 signal strength score
   readyDebug?: {
     blockedReasons: string[];
     firstFailedGate: string | null;

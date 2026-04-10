@@ -81,15 +81,15 @@ const TIER_THRESHOLDS = {
   YELLOW: 0.15,
 };
 
-const MIN_SIGNALS_FOR_TIER = 10;
+const MIN_SIGNALS_FOR_TIER = Math.max(1, parseInt(process.env.MIN_SIGNALS_FOR_TIER || '20', 10));
 
-export function computeSymbolTier(winRate: number, totalSignals: number): SymbolTier {
+export function computeSymbolTier(winRate: number, totalSignals: number): { tier: SymbolTier; lowConfidence: boolean } {
   if (totalSignals < MIN_SIGNALS_FOR_TIER) {
-    return 'YELLOW'; // Not enough data, be cautious
+    return { tier: 'YELLOW', lowConfidence: true }; // Not enough data, be cautious
   }
-  if (winRate >= TIER_THRESHOLDS.GREEN) return 'GREEN';
-  if (winRate >= TIER_THRESHOLDS.YELLOW) return 'YELLOW';
-  return 'RED';
+  if (winRate >= TIER_THRESHOLDS.GREEN) return { tier: 'GREEN', lowConfidence: false };
+  if (winRate >= TIER_THRESHOLDS.YELLOW) return { tier: 'YELLOW', lowConfidence: false };
+  return { tier: 'RED', lowConfidence: false };
 }
 
 /**
@@ -249,13 +249,16 @@ export async function computeAndUpdateTiers(
         continue; // Don't overwrite manual overrides
       }
 
-      const tier = computeSymbolTier(winRate, total);
+      const { tier, lowConfidence } = computeSymbolTier(winRate, total);
+      const reason = lowConfidence
+        ? `auto-computed (low confidence: N=${total} < ${MIN_SIGNALS_FOR_TIER})`
+        : 'auto-computed';
 
       await d.prepare(`
         INSERT INTO symbol_tiers (
           symbol, direction, tier, win_rate, total_signals, avg_realized_r,
           computed_at, updated_at, manual_override, reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'auto-computed')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         ON CONFLICT(symbol, direction) DO UPDATE SET
           tier = EXCLUDED.tier,
           win_rate = EXCLUDED.win_rate,
@@ -264,8 +267,8 @@ export async function computeAndUpdateTiers(
           computed_at = EXCLUDED.computed_at,
           updated_at = EXCLUDED.updated_at,
           manual_override = 0,
-          reason = 'auto-computed'
-      `).run(symbol, direction, tier, winRate, total, avgRealizedR, now, now);
+          reason = EXCLUDED.reason
+      `).run(symbol, direction, tier, winRate, total, avgRealizedR, now, now, reason);
 
       updated++;
     } catch (e) {

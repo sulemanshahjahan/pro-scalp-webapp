@@ -16,13 +16,15 @@ RUN npm ci && npm run build
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-# Copy backend dist and node_modules
-COPY --from=be-build /app/backend/dist ./backend/dist
-COPY --from=be-build /app/backend/node_modules ./backend/node_modules
-# Copy frontend built assets
-COPY --from=fe-build /app/frontend/dist ./frontend/dist
-# Copy db folder (schema)
-COPY db ./db
-EXPOSE 8080
+# Copy backend source for production install + compiled dist
+COPY --from=be-build /app/backend/package.json /app/backend/package-lock.json ./backend/
 WORKDIR /app/backend
+RUN npm ci --omit=dev
+# Copy compiled backend
+COPY --from=be-build /app/backend/dist ./dist
+# Copy frontend built assets
+COPY --from=fe-build /app/frontend/dist /app/frontend/dist
+# Copy db folder (schema)
+COPY db /app/db
+EXPOSE 8080
 CMD ["node", "dist/server.js"]

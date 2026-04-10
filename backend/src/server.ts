@@ -1,7 +1,29 @@
 import 'dotenv/config';
-// Railway deploy trigger v2 - 2026-02-25T20:15
+
+// Startup validation — fail fast if critical env vars are missing
+function validateEnv() {
+  const errors: string[] = [];
+  const driver = process.env.DB_DRIVER || 'sqlite';
+  if (driver === 'postgres' && !process.env.DATABASE_URL) {
+    errors.push('DB_DRIVER=postgres but DATABASE_URL is not set');
+  }
+  if ((process.env.EMAIL_ENABLED || '').toLowerCase() === 'true') {
+    if (!process.env.SMTP_HOST && !process.env.RESEND_API_KEY) errors.push('EMAIL_ENABLED=true but neither SMTP_HOST nor RESEND_API_KEY is set');
+    if (process.env.SMTP_HOST && !process.env.SMTP_USER) errors.push('SMTP_HOST set but SMTP_USER is missing');
+    if (process.env.SMTP_HOST && !process.env.SMTP_PASS) errors.push('SMTP_HOST set but SMTP_PASS is missing');
+    if (!process.env.ALERT_EMAILS) errors.push('EMAIL_ENABLED=true but ALERT_EMAILS is not set');
+  }
+  if (errors.length > 0) {
+    console.error('[startup] Environment validation failed:');
+    errors.forEach(e => console.error(`  - ${e}`));
+    process.exit(1);
+  }
+}
+validateEnv();
+
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
@@ -140,26 +162,33 @@ const buildGitSha =
 const buildStartedAt = Number(process.env.BUILD_STARTED_AT) || serverStartedAt;
 
 const app = express();
-const corsOrigins = (process.env.CORS_ORIGINS || '*')
+const corsOriginsRaw = process.env.CORS_ORIGINS || '';
+const corsOrigins = corsOriginsRaw
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-// Allow Vercel preview/production domains and localhost automatically
+if (!corsOriginsRaw && process.env.NODE_ENV === 'production') {
+  console.warn('[cors] CORS_ORIGINS not set in production — only localhost allowed. Set CORS_ORIGINS env var.');
+}
+
+// Allow configured origins + localhost in dev
 const isAllowedOrigin = (origin: string): boolean => {
   if (corsOrigins.includes('*')) return true;
   if (corsOrigins.includes(origin)) return true;
-  if (origin.includes('vercel.app')) return true;
-  if (origin.includes('localhost')) return true;
-  if (origin.includes('127.0.0.1')) return true;
+  // Allow localhost in all environments for local dev
+  if (origin.includes('localhost') || origin.includes('127.0.0.1')) return true;
   return false;
 };
 
 // Handle OPTIONS preflight for debug endpoints BEFORE cors middleware
 app.options('/api/debug/backfill-no-trade', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin || '';
+  if (isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-token');
   res.status(204).end();
 });
 app.options('/api/debug/reevaluate-signal', (req, res) => {
@@ -179,7 +208,33 @@ app.use(cors({
   credentials: true,
 }));
 app.options('*', cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute
+  max: 120,              // 120 requests per minute for general API
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests, please try again later' },
+});
+const debugLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,               // 10 requests per minute for debug endpoints
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests' },
+});
+const scanLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 2,                // 2 scan triggers per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Scan rate limited' },
+});
+app.use('/api/debug', debugLimiter);
+app.use('/api/scan', scanLimiter);
+app.use('/api', apiLimiter);
 
 function parsePreset(v: any): Preset {
   const s = String(v || '').toUpperCase();
@@ -189,7 +244,10 @@ function parsePreset(v: any): Preset {
 
 function requireAdmin(req: express.Request, res: express.Response) {
   const token = process.env.ADMIN_TOKEN;
-  if (!token) return true;
+  if (!token) {
+    res.status(401).json({ ok: false, error: 'ADMIN_TOKEN not configured' });
+    return false;
+  }
   const got = req.header('x-admin-token');
   if (got !== token) {
     res.status(401).json({ ok: false, error: 'Unauthorized' });
@@ -656,7 +714,8 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
       WHERE e.run_id IN (${eventPlaceholders})
       ORDER BY e.id ASC
     `).all(bindEvents) as any[];
-  } catch {
+  } catch (e) {
+    console.warn('[api/scanRuns] event query failed:', e);
     eventRows = [];
   }
 
@@ -697,7 +756,8 @@ async function loadSignalsForRuns(runIds: string[], horizonMin = 120): Promise<R
       WHERE s.run_id IN (${signalPlaceholders})
       ORDER BY s.id ASC
     `).all(bindSignals) as any[];
-  } catch {
+  } catch (e) {
+    console.warn('[api/scanRuns] signal query failed:', e);
     signalRows = [];
   }
   return out.concat(toRows(signalRows));
@@ -1286,7 +1346,8 @@ app.get('/api/scanRuns/:runId/detail', async (req, res) => {
         ORDER BY e.id ASC
         LIMIT @limit OFFSET @offset
       `).all(bind) as any[];
-    } catch {
+    } catch (e) {
+      console.warn('[api/scanRuns/detail] query failed, using fallback:', e);
       source = 'signals_fallback';
       total = 0;
       rows = [];
@@ -2214,6 +2275,7 @@ app.get('/api/tuning/config-hashes', async (req, res) => {
 
 // Debug: list tables
 app.get('/api/debug/tables', async (_req, res) => {
+  if (!requireAdmin(_req, res)) return;
   try {
     if (db.driver === 'sqlite') {
       const rows = await db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all() as Array<{ name: string }>;
@@ -2276,7 +2338,7 @@ app.post('/api/subscribe', async (req, res) => {
 app.post('/api/unsubscribe', async (req, res) => {
   const sub = req.body;
   if (sub?.endpoint) {
-    try { await db.prepare('DELETE FROM subscriptions WHERE endpoint = ?').run(sub.endpoint); } catch {}
+    try { await db.prepare('DELETE FROM subscriptions WHERE endpoint = ?').run(sub.endpoint); } catch (e) { console.warn('[unsubscribe] delete failed:', e); }
   }
   res.json({ ok: true });
 });
@@ -2330,37 +2392,22 @@ async function runScan(preset: Preset) {
     
     lastByPreset.set(preset, { signals: passedSignals, at });
     
-    // DEBUG: Log what we're about to record
-    console.log(`[DEBUG] Recording ${out.length} signals (${blockedCount} blocked, ${passedSignals.length} passed)`);
-    
+    console.log(`[scan] ${out.length} raw signals, ${blockedCount} blocked, ${passedSignals.length} passed gate`);
+
     try {
-      // Record ALL signals (both blocked and passed)
-      const allSignals = out;
+      // Only record signals that PASSED the gate (fixes blocked signals leaking into extended outcomes)
       let recorded = 0;
       let failed = 0;
-      
-      for (const sig of allSignals) {
-        const isBlocked = blockedMap.has(sig.symbol);
-        const blockedReasons = blockedMap.get(sig.symbol) ?? [];
-        
-        const sigWithGateInfo = {
-          ...sig,
-          blockedReasons: blockedReasons.length > 0 ? blockedReasons : undefined,
-          firstFailedGate: blockedReasons[0] ?? null,
-          gateBlocked: isBlocked,
-        };
-        
-        console.log(`[DEBUG] Recording ${sig.symbol} ${sig.category} (blocked: ${isBlocked})...`);
-        
+
+      for (const sig of passedSignals) {
         try {
-          const signalId = await recordSignal(sigWithGateInfo as any, preset);
-          
+          const signalId = await recordSignal(sig as any, preset);
+
           if (signalId) {
             recorded++;
-            console.log(`[DEBUG] Recorded ${sig.symbol} with ID ${signalId}`);
-            
+
             const delayedConfig = getDelayedEntryConfig();
-            if (delayedConfig.enabled && !isBlocked) {
+            if (delayedConfig.enabled) {
               await initDelayedEntry(
                 { ...sig, id: signalId },
                 sig.stop,
@@ -2369,16 +2416,15 @@ async function runScan(preset: Preset) {
               );
             }
           } else {
-            console.log(`[DEBUG] recordSignal returned null for ${sig.symbol}`);
             failed++;
           }
         } catch (recordErr) {
-          console.error(`[DEBUG] FAILED to record ${sig.symbol}:`, recordErr);
+          console.error(`[scan] FAILED to record ${sig.symbol}:`, recordErr);
           failed++;
         }
       }
-      
-      console.log(`[DEBUG] Recording complete: ${recorded} success, ${failed} failed, ${allSignals.length} total`);
+
+      console.log(`[scan] Recording complete: ${recorded} success, ${failed} failed`);
     } catch (e) {
       console.warn('[signals] record failed:', e);
     }
@@ -2427,6 +2473,7 @@ app.get('/api/scan', async (req, res) => {
 
 // --- DEBUG: push ---
 app.post('/api/debug/push', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     const { symbol = 'DEMOUSDT', category = 'BEST_ENTRY', price = 1.2345 } = req.body || {};
     const title =
@@ -2445,6 +2492,7 @@ app.post('/api/debug/push', async (req, res) => {
 
 // --- DEBUG: email ---
 app.get('/api/debug/email', async (_req, res) => {
+  if (!requireAdmin(_req, res)) return;
   try {
     // Check email config
     const emailConfig = {
@@ -2487,6 +2535,7 @@ app.get('/api/debug/email', async (_req, res) => {
 
 // --- DEBUG: record signal test ---
 app.get('/api/debug/record-signal', async (_req, res) => {
+  if (!requireAdmin(_req, res)) return;
   try {
     const testSignal = {
       symbol: 'DEBUGUSDT',
@@ -2649,7 +2698,8 @@ app.get('/api/debug/readyGate', async (req, res) => {
           firstFailedGate = failed[0]?.key ?? null;
           gateScore = gateMap.length ? Math.round(((gateMap.length - failed.length) / gateMap.length) * 100) : null;
         }
-      } catch {
+      } catch (e) {
+        console.warn('[api/signals] gate parse failed:', e);
         blockedReasons = [];
         firstFailedGate = null;
         gateScore = null;
@@ -2696,7 +2746,7 @@ app.post('/api/debug/outcomes/run', async (req, res) => {
     let signalEventsTotal: { n: number } | null = null;
     try {
       signalEventsTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_events').get() as { n: number };
-    } catch {
+    } catch (e) { console.warn('[debug/outcomes] signal_events query failed:', e);
       signalEventsTotal = { n: 0 };
     }
     const outcomesTotal = await db.prepare('SELECT COUNT(1) as n FROM signal_outcomes').get() as { n: number };
@@ -5278,9 +5328,45 @@ if (!isRailwayEnv) {
   });
 }
 
+// Global error handler — prevent stack traces and DB details from leaking to clients
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[server] Unhandled error:', err);
+  if (res.headersSent) return;
+  const isProd = process.env.NODE_ENV === 'production';
+  res.status(err.status || 500).json({
+    ok: false,
+    error: isProd ? 'Internal server error' : String(err?.message || err),
+  });
+});
+
 // Server
 const port = parseInt(process.env.PORT || '8080', 10);
-app.listen(port, () => console.log(`Server on http://localhost:${port}`));
+const server = app.listen(port, () => console.log(`Server on http://localhost:${port}`));
+
+// Graceful shutdown
+let shuttingDown = false;
+function gracefulShutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received, draining connections...`);
+  server.close(() => {
+    console.log('[shutdown] HTTP server closed');
+    try {
+      const { getDb } = require('./db/db.js');
+      const d = getDb();
+      if (d?.close) d.close();
+      console.log('[shutdown] Database connection closed');
+    } catch {}
+    process.exit(0);
+  });
+  // Force exit after 10s if drain takes too long
+  setTimeout(() => {
+    console.warn('[shutdown] Forced exit after timeout');
+    process.exit(1);
+  }, 10_000);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 function logRegisteredRoutes() {
   const stack = (app as any)?._router?.stack || [];
@@ -5360,8 +5446,14 @@ if (SERVER_LOOP_ENABLED) {
   console.log('[scan] server loop disabled (SERVER_LOOP_ENABLED=false)');
 }
 
-// Outcomes updater (safe to run even if no signals yet)
-startOutcomeUpdater();
+// Short-horizon outcomes updater (15m/30m/60m/120m/240m)
+// Set SHORT_HORIZON_OUTCOMES=false to disable if only using 24h extended outcomes
+const SHORT_HORIZON_OUTCOMES = (process.env.SHORT_HORIZON_OUTCOMES ?? 'true').toLowerCase() !== 'false';
+if (SHORT_HORIZON_OUTCOMES) {
+  startOutcomeUpdater();
+} else {
+  console.log('[outcomes] Short-horizon outcome updater disabled (SHORT_HORIZON_OUTCOMES=false)');
+}
 
 // ============================================================================
 // DELAYED ENTRY WATCHER (Confirmation-Based Trading)
@@ -5404,7 +5496,7 @@ if (delayedConfig.enabled) {
  * This allows instant confirmation without waiting for the watcher loop
  */
 app.post('/api/debug/check-delayed-entry-now', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const { signalId } = req.body || {};
   
   if (!signalId) {
@@ -5483,7 +5575,7 @@ app.post('/api/debug/check-delayed-entry-now', async (req, res) => {
  * Get delayed entry configuration and recent history
  */
 app.get('/api/debug/delayed-entry-config', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   
   try {
     const { getDelayedEntryConfig, getActiveWatches } = await import('./delayedEntry.js');
@@ -5888,7 +5980,7 @@ app.get('/api/v', (req, res) => {
 
 // TEMP: Debug why signals aren't being recorded
 app.get('/api/debug/why-no-signals', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   
   // Recent scan runs - use portable columns
@@ -5925,7 +6017,7 @@ app.get('/api/debug/why-no-signals', async (req, res) => {
 
 // TEMP: Kill stuck scan
 app.post('/api/debug/kill-stuck-scan', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   
   // Find stuck scans (running for > 10 minutes)
@@ -5973,7 +6065,7 @@ app.get('/api/expired-signals', async (req, res) => {
         if (r.blocked_reasons_json) {
           reasons = JSON.parse(r.blocked_reasons_json);
         }
-      } catch {}
+      } catch { /* invalid JSON in stored data, ignore */ }
       return {
         symbol: r.symbol,
         category: r.category,
@@ -5994,7 +6086,7 @@ app.get('/api/expired-signals', async (req, res) => {
 
 // TEMP: Fix outcome status for ALL mismatched signals
 app.post('/api/debug/fix-all-status', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   
   // Find ALL signals with managed PnL data to check for mismatches
@@ -6051,7 +6143,7 @@ app.post('/api/debug/fix-all-status', async (req, res) => {
 
 // TEMP: Fix managed PnL values for WIN_TP2 signals
 app.post('/api/debug/fix-managed-pnl', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   
   // Find all WIN_TP2 signals with incorrect managedR
@@ -6099,7 +6191,7 @@ app.post('/api/debug/fix-managed-pnl', async (req, res) => {
  * and updates them to NO_TRADE (0R instead of -1R)
  */
 app.post('/api/debug/backfill-no-trade', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   const body = req.body || {};
   // Force boolean - handle both boolean false and string "false"
@@ -6194,7 +6286,7 @@ app.post('/api/debug/backfill-no-trade', async (req, res) => {
  * Debug endpoint: Check delayed entry stats
  */
 app.get('/api/debug/delayed-entry-stats', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const d = getDb();
   
   try {
@@ -6577,7 +6669,7 @@ app.post('/api/delayed-entry/mark-invalid', async (req, res) => {
  * Debug endpoint: Check delayed entry status for a signal
  */
 app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const signalId = Number(req.params.signalId);
   
   if (!Number.isFinite(signalId)) {
@@ -6697,7 +6789,7 @@ app.get('/api/debug/delayed-entry/:signalId', async (req, res) => {
  * Debug endpoint: Re-evaluate specific signal with NO_TRADE check
  */
 app.post('/api/debug/reevaluate-signal', async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!requireAdmin(req, res)) return;
   const { signalId } = req.body || {};
   
   if (!signalId) {

@@ -8,6 +8,7 @@ import StatsPage from '../pages/StatsPage'
 import TunePage from '../pages/TunePage'
 import TuningBundlesPage from '../pages/TuningBundlesPage'
 import ExtendedOutcomePage from '../pages/ExtendedOutcomePage'
+import DashboardPage from '../pages/DashboardPage'
 import { enableSoundSync, isSoundEnabled } from '../services/sound'
 import { playAlert } from '../services/sound'
 
@@ -19,24 +20,22 @@ const toApiPreset = (p: StorePreset): ApiPreset =>
   : p === 'Balanced'   ? 'BALANCED'
   : 'AGGRESSIVE';
 
-type Route = 'home' | 'stats' | 'tune' | 'bundles' | 'extended';
+type Route = 'home' | 'stats' | 'tune' | 'bundles' | 'extended' | 'dashboard';
 function getInitialRoute(): Route {
   if (window.location.pathname === '/stats') return 'stats';
   if (window.location.pathname === '/tune') return 'tune';
   if (window.location.pathname === '/bundles') return 'bundles';
   if (window.location.pathname === '/extended') return 'extended';
+  if (window.location.pathname === '/dashboard') return 'dashboard';
   return 'home';
 }
 function navigate(to: Route) {
-  const path = to === 'stats'
-    ? '/stats'
-    : to === 'tune'
-      ? '/tune'
-      : to === 'bundles'
-        ? '/bundles'
-        : to === 'extended'
-          ? '/extended'
-          : '/';
+  const path = to === 'stats' ? '/stats'
+    : to === 'tune' ? '/tune'
+    : to === 'bundles' ? '/bundles'
+    : to === 'extended' ? '/extended'
+    : to === 'dashboard' ? '/dashboard'
+    : '/';
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
@@ -92,6 +91,23 @@ export default function App() {
     );
   }
 
+  if (route === 'dashboard') {
+    return (
+      <div className="min-h-dvh">
+        <header className="sticky top-0 bg-gray-950/90 backdrop-blur z-10 py-3 px-4 border-b border-gray-800/50">
+          <div className="flex items-center justify-between max-w-7xl mx-auto">
+            <div className="text-xl font-semibold text-white">Pro Scalp</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => navigate('extended')} className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15 text-sm">Old 24h</button>
+              <button onClick={() => navigate('home')} className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15 text-sm">Home</button>
+            </div>
+          </div>
+        </header>
+        <DashboardPage />
+      </div>
+    );
+  }
+
   if (route === 'extended') {
     return (
       <div className="min-h-dvh px-3 pb-24 max-w-[90%] mx-auto">
@@ -99,6 +115,12 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('dashboard')}
+                className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
+              >
+                Dashboard
+              </button>
               <button
                 onClick={() => navigate('bundles')}
                 className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/15"
@@ -185,6 +207,12 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Pro Scalp</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('dashboard')}
+                className="px-3 py-1 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300"
+              >
+                Dashboard
+              </button>
               <button
                 onClick={() => navigate('extended')}
                 className="px-3 py-1 rounded-xl bg-accent/20 hover:bg-accent/30"
