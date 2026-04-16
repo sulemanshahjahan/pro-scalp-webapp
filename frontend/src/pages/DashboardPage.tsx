@@ -38,6 +38,11 @@ interface ExtendedOutcome {
   ext24LiveManagedR?: number | null;
   ext24RunnerExitReason?: string | null;
   confluenceScore?: number | null;
+  // Live data (merged from live-pending API)
+  currentPrice?: number | null;
+  currentMovePct?: number | null;
+  liveMfe?: number | null;
+  liveMae?: number | null;
 }
 
 interface ManagedStats {
@@ -87,6 +92,18 @@ function fmtDuration(seconds: number | null | undefined): string {
   const m = Math.floor((seconds % 3600) / 60);
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+const QA_TZ = 'Asia/Qatar'; // UTC+3
+
+function fmtQatarTime(ms: number): string {
+  if (!ms || !Number.isFinite(ms)) return '--';
+  return new Date(ms).toLocaleString('en-GB', {
+    timeZone: QA_TZ,
+    day: '2-digit', month: 'short',
+    hour: '2-digit', minute: '2-digit',
+    hour12: true,
+  });
 }
 
 function timeAgo(ms: number): string {
@@ -202,6 +219,10 @@ function LiveTradeCard({ o }: { o: ExtendedOutcome }) {
   const tp2 = o.tp2Price;
   const risk = stop && entry ? Math.abs(entry - stop) : 0;
   const riskPct = entry ? (risk / entry) * 100 : 0;
+  const currentPrice = o.currentPrice;
+  const pnlPct = currentPrice && entry
+    ? isLong ? ((currentPrice - entry) / entry) * 100 : ((entry - currentPrice) / entry) * 100
+    : null;
 
   return (
     <div className="bg-gray-800/80 rounded-lg p-4 border border-gray-700/50 hover:border-gray-600/70 transition-colors">
@@ -211,8 +232,22 @@ function LiveTradeCard({ o }: { o: ExtendedOutcome }) {
           <span className={`text-xs px-2 py-0.5 rounded-full ${dirBadge(o.direction)}`}>{o.direction}</span>
           <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(o.status)}`}>{statusLabel(o.status)}</span>
         </div>
-        <div className="text-xs text-gray-500">{timeAgo(o.signalTime)}</div>
+        <div className="text-right">
+          <div className="text-xs text-gray-500">{fmtQatarTime(o.signalTime)}</div>
+          <div className="text-xs text-gray-600">{timeAgo(o.signalTime)}</div>
+        </div>
       </div>
+
+      {/* Current price bar */}
+      {currentPrice != null && (
+        <div className="flex items-center justify-between bg-gray-900/60 rounded px-3 py-2 mb-3">
+          <span className="text-xs text-gray-400">Now</span>
+          <span className="text-lg font-bold font-mono text-white">{fmt(currentPrice, 6)}</span>
+          <span className={`text-sm font-bold ${pnlPct != null && pnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {pnlPct != null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%` : '--'}
+          </span>
+        </div>
+      )}
 
       <div className="grid grid-cols-4 gap-3 text-sm mb-3">
         <div>
@@ -236,24 +271,22 @@ function LiveTradeCard({ o }: { o: ExtendedOutcome }) {
       <div className="flex items-center justify-between text-xs">
         <div className="flex gap-4">
           <span className="text-gray-500">Risk: <span className="text-rose-300">{fmt(riskPct, 2)}%</span></span>
-          <span className="text-gray-500">MFE: <span className="text-emerald-300">{fmt(o.maxFavorableExcursionPct, 2)}%</span></span>
-          <span className="text-gray-500">MAE: <span className="text-rose-300">{fmt(o.maxAdverseExcursionPct, 2)}%</span></span>
+          <span className="text-gray-500">MFE: <span className="text-emerald-300">{fmt(o.liveMfe ?? o.maxFavorableExcursionPct, 2)}%</span></span>
+          <span className="text-gray-500">MAE: <span className="text-rose-300">{fmt(o.liveMae ?? o.maxAdverseExcursionPct, 2)}%</span></span>
         </div>
         <span className="text-gray-500">{timeRemaining(o.expiresAt)}</span>
       </div>
 
-      {o.ext24LiveManagedR != null && (
-        <div className="mt-2 pt-2 border-t border-gray-700/50 flex items-center gap-3 text-xs">
-          <span className="text-gray-500">Live R:</span>
-          <span className={`font-bold ${rColor(o.ext24LiveManagedR)}`}>{fmtR(o.ext24LiveManagedR)}</span>
-          {o.confluenceScore != null && (
-            <>
-              <span className="text-gray-600">|</span>
-              <span className="text-gray-500">Score: <span className="text-white">{o.confluenceScore}</span></span>
-            </>
-          )}
-        </div>
-      )}
+      <div className="mt-2 pt-2 border-t border-gray-700/50 flex items-center gap-3 text-xs">
+        <span className="text-gray-500">Live R:</span>
+        <span className={`font-bold ${rColor(o.ext24LiveManagedR)}`}>{fmtR(o.ext24LiveManagedR)}</span>
+        {o.confluenceScore != null && (
+          <>
+            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">Score: <span className="text-white">{o.confluenceScore}</span></span>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -261,7 +294,7 @@ function LiveTradeCard({ o }: { o: ExtendedOutcome }) {
 function CompletedTradeRow({ o }: { o: ExtendedOutcome }) {
   return (
     <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
-      <td className="py-2 px-3 text-xs text-gray-500">{new Date(o.signalTime).toLocaleDateString()}<br />{new Date(o.signalTime).toLocaleTimeString()}</td>
+      <td className="py-2 px-3 text-xs text-gray-500">{fmtQatarTime(o.signalTime)}</td>
       <td className="py-2 px-3 font-bold text-white">{o.symbol}</td>
       <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full ${dirBadge(o.direction)}`}>{o.direction}</span></td>
       <td className="py-2 px-3"><span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(o.status)}`}>{statusLabel(o.status)}</span></td>
@@ -350,17 +383,43 @@ export default function DashboardPage() {
     try {
       const start = Date.now() - days * 24 * 60 * 60 * 1000;
 
-      const [outcomeRes, statsRes] = await Promise.all([
+      const [outcomeRes, statsRes, liveRes] = await Promise.all([
         fetch(API(`/api/extended-outcomes?sort=time_desc&limit=200&start=${start}&mode=EXECUTED`)),
         fetch(API(`/api/extended-outcomes/managed-stats?start=${start}&mode=EXECUTED`)),
+        fetch(API('/api/extended-outcomes/live-pending')),
       ]);
 
       const outcomeData = await outcomeRes.json();
       const statsData = await statsRes.json();
+      const liveData = await liveRes.json();
+
+      // Build live price map from live-pending API
+      const liveMap = new Map<number, { currentPrice: number; currentMovePct: number; liveMfe: number; liveMae: number; liveManagedR: number | null }>();
+      if (liveData.ok && liveData.signals) {
+        for (const s of liveData.signals) {
+          liveMap.set(s.signalId, {
+            currentPrice: s.currentPrice,
+            currentMovePct: s.currentMovePct,
+            liveMfe: s.liveMfe,
+            liveMae: s.liveMae,
+            liveManagedR: s.liveManagedR,
+          });
+        }
+      }
 
       if (outcomeData.ok && outcomeData.rows) {
         const rows = outcomeData.rows as ExtendedOutcome[];
-        setActive(rows.filter(r => r.status === 'PENDING' || r.status === 'ACHIEVED_TP1'));
+        // Merge live data into active trades
+        const activeRows = rows
+          .filter(r => r.status === 'PENDING' || r.status === 'ACHIEVED_TP1')
+          .map(r => {
+            const live = liveMap.get(r.signalId);
+            if (live) {
+              return { ...r, currentPrice: live.currentPrice, currentMovePct: live.currentMovePct, liveMfe: live.liveMfe, liveMae: live.liveMae, ext24LiveManagedR: live.liveManagedR };
+            }
+            return r;
+          });
+        setActive(activeRows);
         setCompleted(rows.filter(r => r.completedAt != null).sort((a, b) => b.signalTime - a.signalTime));
       }
 
