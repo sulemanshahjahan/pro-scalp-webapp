@@ -441,7 +441,7 @@ export default function DashboardPage() {
   // Auto-refresh every 60s
   useEffect(() => {
     if (!autoRefresh) return;
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, 15_000);
     return () => clearInterval(id);
   }, [autoRefresh, fetchData]);
 
