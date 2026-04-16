@@ -535,19 +535,19 @@ async function executeDelayedEntry(
   await d.prepare(`
     INSERT INTO extended_outcomes (
       signal_id, symbol, direction, signal_time, started_at, entry_price,
-      stop_price, tp1_price, tp2_price, status, risk_usd_snapshot
+      stop_price, tp1_price, tp2_price, status, ext24_risk_usd_snapshot, mode
     )
-    SELECT 
-      s.id, s.symbol, ?, s.time, ?, ?, ?, ?, ?, 'ACTIVE', 15
+    SELECT
+      s.id, s.symbol, ?, s.time, ?, ?, ?, ?, ?, 'PENDING', 15, 'EXECUTED'
     FROM signals s
     WHERE s.id = ?
-    ON CONFLICT(signal_id) DO UPDATE SET
+    ON CONFLICT(signal_id, mode) DO UPDATE SET
       started_at = excluded.started_at,
       entry_price = excluded.entry_price,
       stop_price = excluded.stop_price,
       tp1_price = excluded.tp1_price,
       tp2_price = excluded.tp2_price,
-      status = 'ACTIVE'
+      status = 'PENDING'
   `).run(
     record.direction,
     Date.now(),
