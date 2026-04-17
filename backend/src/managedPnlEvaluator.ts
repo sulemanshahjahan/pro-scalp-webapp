@@ -34,8 +34,15 @@ const RISK_PER_TRADE_USD = Number(process.env.EXT24_RISK_PER_TRADE_USD) || DEFAU
 // Timeout runner mode: 'MARKET_CLOSE' (recommended) or 'BREAKEVEN_ASSUMED'
 const TIMEOUT_RUNNER_MODE = process.env.EXT24_TIMEOUT_RUNNER_MODE || 'MARKET_CLOSE';
 
-// Same-candle policy: 'CONSERVATIVE' (stop/BE wins) 
+// Same-candle policy: 'CONSERVATIVE' (stop/BE wins)
 const SAME_CANDLE_POLICY = process.env.EXT24_SAME_CANDLE_POLICY || 'CONSERVATIVE';
+
+// Runner trailing stop mode: 'BE' (break-even at entry) or 'TRAIL' (trail at entry + offset)
+const RUNNER_STOP_MODE = process.env.EXT24_RUNNER_STOP_MODE || 'BE';
+// When TRAIL: initial offset above entry in R terms (0.25 = lock 0.25R profit on runner)
+const RUNNER_TRAIL_LOCK_R = parseFloat(process.env.EXT24_RUNNER_TRAIL_LOCK_R || '0.25');
+// When TRAIL: trail the stop up with price, keeping this many R below the high water mark
+const RUNNER_TRAIL_DISTANCE_R = parseFloat(process.env.EXT24_RUNNER_TRAIL_DISTANCE_R || '0.5');
 
 // Managed status for extended outcomes
 export type ManagedStatus =
@@ -467,34 +474,68 @@ export function evaluateManagedPnl(
   }
 
   // Phase 2: Track runner (remaining 50%) after TP1 hit
-  // Runner stop is at BE (entry price)
+  // Runner stop depends on mode: BE (entry) or TRAIL (entry + offset, trailing up)
+  let runnerStopPrice = entryPrice; // Default: break-even at entry
+  if (RUNNER_STOP_MODE === 'TRAIL' && riskDistance > 0) {
+    // Initial trail: lock in RUNNER_TRAIL_LOCK_R above entry
+    if (direction === 'LONG') {
+      runnerStopPrice = entryPrice + riskDistance * RUNNER_TRAIL_LOCK_R;
+    } else {
+      runnerStopPrice = entryPrice - riskDistance * RUNNER_TRAIL_LOCK_R;
+    }
+  }
+  debug.runnerStopPrice = runnerStopPrice;
+
+  let highWaterMark = direction === 'LONG'
+    ? (tp1Price ?? entryPrice)
+    : (tp1Price ?? entryPrice); // Best price seen so far
+
   for (let i = tp1HitIndex + 1; i < sortedCandles.length; i++) {
     const candle = sortedCandles[i];
-    
+
     // Stop if we've passed expiry
     if (candle.time > expiresAt) break;
 
-    const beHit = isBreakEvenHit(direction, candle, entryPrice);
+    // Update trailing stop if in TRAIL mode
+    if (RUNNER_STOP_MODE === 'TRAIL' && riskDistance > 0) {
+      if (direction === 'LONG') {
+        if (candle.high > highWaterMark) highWaterMark = candle.high;
+        const trailedStop = highWaterMark - riskDistance * RUNNER_TRAIL_DISTANCE_R;
+        if (trailedStop > runnerStopPrice) runnerStopPrice = trailedStop;
+      } else {
+        if (candle.low < highWaterMark) highWaterMark = candle.low;
+        const trailedStop = highWaterMark + riskDistance * RUNNER_TRAIL_DISTANCE_R;
+        if (trailedStop < runnerStopPrice) runnerStopPrice = trailedStop;
+      }
+      debug.runnerStopPrice = runnerStopPrice;
+    }
+
+    // Check if runner stop is hit
+    const runnerStopHit = direction === 'LONG'
+      ? candle.low <= runnerStopPrice
+      : candle.high >= runnerStopPrice;
     const tp2Hit = hasTp2 ? isTp2Hit(direction, candle, tp2Price!) : false;
 
-    // Same-candle ambiguity: After TP1, BE wins over TP2 (conservative)
-    if (beHit && tp2Hit && SAME_CANDLE_POLICY === 'CONSERVATIVE') {
+    // Same-candle ambiguity: After TP1, runner stop wins over TP2 (conservative)
+    if (runnerStopHit && tp2Hit && SAME_CANDLE_POLICY === 'CONSERVATIVE') {
       debug.sameCandleConflicts.push({
         stage: 'RUNNER',
         candleTime: candle.time,
-        hits: ['BE', 'TP2'],
+        hits: ['RUNNER_STOP', 'TP2'],
         resolution: 'BE_WINS',
       });
-      
+
+      // Calculate runner R at the stop price
+      const runnerR = priceToR(direction, entryPrice, stopPrice!, runnerStopPrice) * 0.5;
+      realizedR = 0.5 + runnerR; // TP1 partial + runner portion
       runnerBeAt = candle.time;
       managedStatus = 'CLOSED_BE_AFTER_TP1';
       runnerExitReason = 'BREAK_EVEN';
       runnerExitAt = candle.time;
-      // realizedR is already +0.5R from TP1 partial
-      
+
       return {
         managedStatus,
-        managedR: realizedR, // +0.5R
+        managedR: realizedR,
         managedPnlUsd: realizedR * RISK_PER_TRADE_USD,
         realizedR,
         unrealizedRunnerR: null,
@@ -509,16 +550,17 @@ export function evaluateManagedPnl(
       };
     }
 
-    if (beHit) {
+    if (runnerStopHit) {
+      const runnerR = priceToR(direction, entryPrice, stopPrice!, runnerStopPrice) * 0.5;
+      realizedR = 0.5 + runnerR; // TP1 partial + runner at trail stop
       runnerBeAt = candle.time;
       managedStatus = 'CLOSED_BE_AFTER_TP1';
       runnerExitReason = 'BREAK_EVEN';
       runnerExitAt = candle.time;
-      // realizedR is already +0.5R from TP1 partial
-      
+
       return {
         managedStatus,
-        managedR: realizedR, // +0.5R
+        managedR: realizedR,
         managedPnlUsd: realizedR * RISK_PER_TRADE_USD,
         realizedR,
         unrealizedRunnerR: null,
@@ -538,7 +580,7 @@ export function evaluateManagedPnl(
       runnerExitReason = 'TP2';
       runnerExitAt = candle.time;
       realizedR = 1.5; // +0.5R from TP1 + 1.0R from runner at TP2
-      
+
       return {
         managedStatus,
         managedR: realizedR, // +1.5R

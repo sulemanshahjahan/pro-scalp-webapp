@@ -27,7 +27,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ensureVapid } from './notifier.js';
-import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, thresholdsForPreset, type Preset } from './scanner.js';
+import { getLastBtcMarket, getLastScanHealth, getScanIntervalMs, getMaxScanMs, startLoop, scanOnce, scan15mOnce, thresholdsForPreset, type Preset } from './scanner.js';
 import { klinesRange } from './binance.js';
 import { getLatestScanRuns, listScanRuns, getScanRunByRunId } from './scanStore.js';
 import { listCandidateFeatures, listCandidateFeaturesMulti } from './candidateFeaturesStore.js';
@@ -5444,6 +5444,39 @@ if (SERVER_LOOP_ENABLED) {
   });
 } else {
   console.log('[scan] server loop disabled (SERVER_LOOP_ENABLED=false)');
+}
+
+// 15-minute timeframe scan loop (independent of 5m scan)
+const SCAN_15M_ENABLED = (process.env.SCAN_15M_ENABLED ?? 'false').toLowerCase() === 'true';
+const SCAN_15M_INTERVAL_MS = parseInt(process.env.SCAN_15M_INTERVAL_MS || String(15 * 60_000), 10);
+if (SCAN_15M_ENABLED) {
+  console.log(`[scan-15m] Enabled, interval=${SCAN_15M_INTERVAL_MS}ms`);
+  let running15m = false;
+  setInterval(async () => {
+    if (running15m) return;
+    running15m = true;
+    try {
+      const signals = await scan15mOnce('BALANCED');
+      for (const sig of signals) {
+        try {
+          const signalId = await recordSignal(sig as any, 'BALANCED');
+          if (signalId) {
+            const delayedConfig = getDelayedEntryConfig();
+            if (delayedConfig.enabled) {
+              await initDelayedEntry({ ...sig, id: signalId }, sig.stop, sig.tp1, sig.tp2);
+            }
+            try { await emailNotify(undefined, sig); } catch {}
+          }
+        } catch (e) { console.error('[scan-15m] record error:', e); }
+      }
+    } catch (e) {
+      console.error('[scan-15m] loop error:', e);
+    } finally {
+      running15m = false;
+    }
+  }, SCAN_15M_INTERVAL_MS);
+} else {
+  console.log('[scan-15m] Disabled (SCAN_15M_ENABLED=false)');
 }
 
 // Short-horizon outcomes updater (15m/30m/60m/120m/240m)

@@ -16,6 +16,9 @@ const TOP_N = parseInt(process.env.TOP_N || '300', 10);
 const MARKET_REGIME_GATING = (process.env.MARKET_REGIME_GATING ?? 'false').toLowerCase() === 'true';
 const MARKET_REGIME_MIN_SCORE = parseInt(process.env.MARKET_REGIME_MIN_SCORE || '30', 10);
 const MIN_CONFLUENCE_SCORE = parseInt(process.env.MIN_CONFLUENCE_SCORE || '0', 10); // 0 = disabled
+// 15m timeframe scan: reuses same logic but on 15m+1h instead of 5m+15m
+const SCAN_15M_ENABLED = (process.env.SCAN_15M_ENABLED ?? 'false').toLowerCase() === 'true';
+const SCAN_15M_INTERVAL_MS = parseInt(process.env.SCAN_15M_INTERVAL_MS || String(15 * 60_000), 10); // 15 min default
 const SCAN_INTERVAL_MS = parseInt(process.env.SCAN_INTERVAL_MS || '30000', 10);
 const SYMBOL_DELAY_MS = parseInt(process.env.SYMBOL_DELAY_MS || '120', 10);
 const MAX_SCAN_MS = parseInt(process.env.MAX_SCAN_MS || String(4 * 60_000), 10);
@@ -1123,6 +1126,89 @@ export async function scanOnce(preset: Preset = 'BALANCED') {
   try { await pruneCandidateFeatures(); } catch (e) { console.warn('[candidate_features] prune failed:', e); }
   currentScan = null;
 
+  return outs;
+}
+
+/**
+ * 15-minute timeframe scan
+ * Uses 15m candles as primary (instead of 5m) and 1h as confirmation (instead of 15m).
+ * Same quality gates, wider stops, longer hold times — independent signal source.
+ */
+export async function scan15mOnce(preset: Preset = 'BALANCED'): Promise<any[]> {
+  if (!SCAN_15M_ENABLED) return [];
+
+  const t0 = Date.now();
+  const thresholds = thresholdsForPreset(preset);
+  const now = Date.now();
+  console.log(`[scan-15m] start preset=${preset}`);
+
+  // Get BTC market data on 1h timeframe for regime
+  let market: MarketInfo | null = lastBtcMarket;
+
+  // Get symbols (reuse same universe)
+  let symbols: string[];
+  try {
+    symbols = (await topUSDTByQuoteVolume(TOP_N))
+      .filter(s => !isStableVsStable(s) && !LEVERAGED_SUFFIXES.test(s));
+  } catch (e) {
+    console.error('[scan-15m] symbol fetch failed:', e);
+    return [];
+  }
+
+  const outs: any[] = [];
+  let processed = 0;
+
+  for (const sym of symbols) {
+    if (Date.now() - t0 > MAX_SCAN_MS) break;
+    processed++;
+
+    try {
+      // Fetch 15m candles (primary) and 1h candles (confirmation)
+      let d15 = await klines(sym, '15m', 300);
+      d15 = sliceToLastClosed(d15, 15 * 60_000, now);
+      if (d15.length < 210) continue;
+
+      const last15 = d15[d15.length - 1];
+      if (!last15 || !Number.isFinite(last15.close) || last15.close < MIN_PRICE_USDT) continue;
+
+      let d1h = await klines(sym, '1h', 260);
+      d1h = sliceToLastClosed(d1h, 60 * 60_000, now);
+      if (d1h.length < 210) continue;
+
+      // analyzeSymbolDetailed treats first arg as "5m" and second as "15m"
+      // We pass 15m as primary and 1h as confirmation — same logic, higher timeframe
+      const res = analyzeSymbolDetailed(sym, d15, d1h, thresholds, market ?? undefined);
+
+      const sig = res?.signal ?? null;
+      if (!sig) continue;
+
+      const candleCloseMs = getCandleCloseMs(last15, 15 * 60_000);
+      const withTime = {
+        ...sig,
+        time: candleCloseMs,
+        preset,
+        strategyVersion: 'v1.1.0-15m',
+      };
+
+      // Confluence score filter
+      if (MIN_CONFLUENCE_SCORE > 0 && (withTime.confluenceScore ?? 0) < MIN_CONFLUENCE_SCORE) continue;
+
+      // Gate check
+      const gateResult = await checkSignalGate(withTime);
+      recordGateResult(gateResult);
+
+      if (gateResult.allowed) {
+        outs.push(withTime);
+        console.log(`[scan-15m] SIGNAL: ${sym} ${withTime.category} @ ${withTime.price} (15m timeframe)`);
+      }
+
+      await sleep(SYMBOL_DELAY_MS);
+    } catch (e) {
+      continue;
+    }
+  }
+
+  console.log(`[scan-15m] done processed=${processed} signals=${outs.length} dt=${Date.now() - t0}ms`);
   return outs;
 }
 
