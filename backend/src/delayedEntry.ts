@@ -532,31 +532,42 @@ async function executeDelayedEntry(
   );
   
   // Create extended outcome with the CONFIRMED entry price and recalculated TP/SL
-  await d.prepare(`
-    INSERT INTO extended_outcomes (
-      signal_id, symbol, direction, signal_time, started_at, entry_price,
-      stop_price, tp1_price, tp2_price, status, ext24_risk_usd_snapshot, mode
-    )
-    SELECT
-      s.id, s.symbol, ?, s.time, ?, ?, ?, ?, ?, 'PENDING', 15, 'EXECUTED'
-    FROM signals s
-    WHERE s.id = ?
-    ON CONFLICT(signal_id, mode) DO UPDATE SET
-      started_at = excluded.started_at,
-      entry_price = excluded.entry_price,
-      stop_price = excluded.stop_price,
-      tp1_price = excluded.tp1_price,
-      tp2_price = excluded.tp2_price,
-      status = 'PENDING'
-  `).run(
-    record.direction,
-    Date.now(),
-    entryPrice,
-    recalculated.stop,
-    recalculated.tp1,
-    recalculated.tp2,
-    record.signalId
-  );
+  // Includes required NOT NULL columns: category, expires_at
+  const startedAt = Date.now();
+  const expiresAt = startedAt + 24 * 60 * 60 * 1000; // 24 hours from entry
+  try {
+    await d.prepare(`
+      INSERT INTO extended_outcomes (
+        signal_id, symbol, category, direction, signal_time, started_at, expires_at, entry_price,
+        stop_price, tp1_price, tp2_price, status, ext24_risk_usd_snapshot, mode
+      )
+      SELECT
+        s.id, s.symbol, s.category, ?, s.time, ?, ?, ?, ?, ?, ?, 'PENDING', 15, 'EXECUTED'
+      FROM signals s
+      WHERE s.id = ?
+      ON CONFLICT(signal_id, mode) DO UPDATE SET
+        started_at = excluded.started_at,
+        expires_at = excluded.expires_at,
+        entry_price = excluded.entry_price,
+        stop_price = excluded.stop_price,
+        tp1_price = excluded.tp1_price,
+        tp2_price = excluded.tp2_price,
+        status = 'PENDING'
+    `).run(
+      record.direction,
+      startedAt,
+      expiresAt,
+      entryPrice,
+      recalculated.stop,
+      recalculated.tp1,
+      recalculated.tp2,
+      record.signalId
+    );
+    console.log(`[delayed-entry] Extended outcome created for signal ${record.signalId}`);
+  } catch (insertErr) {
+    console.error(`[delayed-entry] CRITICAL: Failed to create extended outcome for signal ${record.signalId}:`, insertErr);
+    throw insertErr;
+  }
   
   console.log(`[delayed-entry] Executed entry for signal ${record.signalId} at ${entryPrice.toFixed(4)}`);
   if (recalculated.tp1) {
